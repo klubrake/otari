@@ -146,8 +146,9 @@ one per run of items. An inline menu does not close the panel by itself: the
 caller closes it when an action is done. `MenuSubmenu` moves a run that would
 double the menu's length (one item per saved view) one level down.
 
-An item holds text, a leading glyph and a trailing detail, never a second
-control: a button inside a `menuitem` is a nested interactive element no
+An item holds text, a leading glyph, a trailing detail and, where its name
+alone does not say what it is, a one-line `description` under the label
+("Imported usage, such as Claude Code"); never a second control: a button inside a `menuitem` is a nested interactive element no
 assistive technology reads well. Where a row seems to need one, the action is
 an item of its own or a submenu.
 

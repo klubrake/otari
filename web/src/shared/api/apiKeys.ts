@@ -1,5 +1,4 @@
 import {
-  keepPreviousData,
   useMutation,
   useQueries,
   useQuery,
@@ -61,35 +60,6 @@ export function useKeys(workspaceId?: string, enabled = true) {
     queryFn: () => fetchAllKeys(scope.base, workspaceId),
     enabled: scope.isReady && enabled,
     staleTime: 60_000,
-  })
-}
-
-/**
- * The keys matching a search term, for a picker.
- *
- * The term goes to the server, which matches the name, either half of the
- * fingerprint and the id, so what comes back is the matches out of every key the
- * caller may list rather than out of a page already fetched. Bounded because a
- * picker shows a handful of rows. Debounce the term before it gets here
- * (`useDebounced`), or every keystroke is a request and the answers race.
- */
-export function useKeySearch(
-  search: string,
-  workspaceId: string | undefined,
-  limit: number,
-) {
-  const scope = useKeysScope()
-  return useQuery({
-    queryKey: [KEYS, scope.base, "search", workspaceId ?? null, search, limit],
-    queryFn: () => {
-      const params = new URLSearchParams({ limit: String(limit) })
-      if (workspaceId) params.set("workspace_id", workspaceId)
-      if (search) params.set("search", search)
-      return apiFetch<ApiKey[]>(`${scope.base}?${params}`)
-    },
-    enabled: scope.isReady,
-    staleTime: 60_000,
-    placeholderData: keepPreviousData,
   })
 }
 

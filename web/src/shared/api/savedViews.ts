@@ -3,7 +3,7 @@ import type { CreateSavedViewRequest, SavedView, SavedViews } from "@/client"
 import { apiFetch } from "@/shared/api/client"
 import { SAVED_VIEWS } from "@/shared/api/queryKeys"
 
-type SavedViewPage = CreateSavedViewRequest["page"]
+export type SavedViewPage = CreateSavedViewRequest["page"]
 
 const base = (workspaceId: string) =>
   `/workspaces/${encodeURIComponent(workspaceId)}/saved-views`

@@ -2,9 +2,8 @@ import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ComponentProps } from "react"
 import { describe, expect, it, vi } from "vitest"
-
+import { BUILT_IN_VIEWS } from "@/features/activity/activityQuery"
 import { savedView } from "@/tests/activity"
-import { BUILT_IN_VIEWS } from "./activityQuery"
 import { SavedViewsMenu } from "./SavedViewsMenu"
 
 function renderMenu(
@@ -17,6 +16,7 @@ function renderMenu(
   }
   render(
     <SavedViewsMenu
+      builtIns={BUILT_IN_VIEWS}
       views={[
         savedView({ id: "mine", name: "Slow calls" }),
         savedView({

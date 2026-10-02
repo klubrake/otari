@@ -9,7 +9,6 @@ import {
   formatWindowLabel,
   HOUR_S,
   isoAgo,
-  rangeFromBuckets,
   USAGE_PRESETS,
 } from "./timeRange"
 
@@ -54,35 +53,6 @@ describe("bucketForWindow / bucketDurationMs", () => {
     expect(bucketDurationMs("5min")).toBe(5 * 60 * 1000)
     expect(bucketDurationMs("hour")).toBe(HOUR_S * 1000)
     expect(bucketDurationMs("day")).toBe(DAY_S * 1000)
-  })
-})
-
-describe("rangeFromBuckets", () => {
-  const starts = [
-    "2026-07-01T00:00:00Z",
-    "2026-07-02T00:00:00Z",
-    "2026-07-03T00:00:00Z",
-    "2026-07-04T00:00:00Z",
-  ]
-
-  it("spans from the first picked bucket to the exclusive end of the last", () => {
-    const r = rangeFromBuckets(starts, 1, 2, "day")
-    expect(r).toEqual({
-      startIso: "2026-07-02T00:00:00.000Z",
-      endIso: "2026-07-04T00:00:00.000Z",
-    })
-  })
-
-  it("is order-independent and clamps to the series bounds", () => {
-    const r = rangeFromBuckets(starts, 9, -3, "day")
-    expect(r).toEqual({
-      startIso: "2026-07-01T00:00:00.000Z",
-      endIso: "2026-07-05T00:00:00.000Z",
-    })
-  })
-
-  it("returns null for an empty series", () => {
-    expect(rangeFromBuckets([], 0, 0, "day")).toBeNull()
   })
 })
 

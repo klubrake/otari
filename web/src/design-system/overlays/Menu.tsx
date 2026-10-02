@@ -92,7 +92,8 @@ export function MenuButton({
 }
 
 /**
- * One row of a menu: its label, an optional leading glyph, and a trailing
+ * One row of a menu: its label, an optional leading glyph, a line under the
+ * label saying what the row is when its name alone does not, and a trailing
  * detail (a count, an owner, a note on what pressing it did).
  *
  * In a menu that selects, the leading lane is the check, reserved on every
@@ -105,12 +106,15 @@ export function MenuItem({
   children,
   icon: Icon,
   trailing,
+  description,
   textValue,
 }: {
   id: string
   children: ReactNode
   icon?: IconType
   trailing?: ReactNode
+  /** A caption under the label, read with it. */
+  description?: string
   textValue?: string
 }) {
   return (
@@ -132,7 +136,12 @@ export function MenuItem({
               {isSelected ? <FiCheck aria-hidden className="size-3.5" /> : null}
             </span>
           )}
-          <span className="min-w-0 flex-1">{children}</span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            {children}
+            {description ? (
+              <span className="text-caption text-subtle">{description}</span>
+            ) : null}
+          </span>
           {trailing}
         </>
       )}

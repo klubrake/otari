@@ -39,8 +39,10 @@ export interface RangePreset {
 // long-range presets (90d, a year) in place of the old rolling "All", so the
 // page still reaches the full span the server will serve without an unbounded,
 // clock-rolling window whose total silently changes day to day.
+//
+// No hour-long preset: an aggregate chart of one hour is a single bar, and the
+// Activity page answers that question request by request.
 export const USAGE_PRESETS: RangePreset[] = [
-  { key: "1h", label: "Last hour", seconds: HOUR_S, bucket: "hour" },
   { key: "24h", label: "24h", seconds: DAY_S, bucket: "hour" },
   { key: "7d", label: "7d", seconds: 7 * DAY_S, bucket: "day" },
   { key: "30d", label: "30d", seconds: 30 * DAY_S, bucket: "day" },
@@ -103,27 +105,6 @@ export function bucketForWindow(
   const start = new Date(startIso).getTime()
   const end = endIso ? new Date(endIso).getTime() : now
   return end - start <= DAY_S * 1000 ? "hour" : "day"
-}
-
-// The absolute window covered by buckets [i..j] of a timeline series (order of
-// i/j does not matter). Start is the first bucket's start; end is the exclusive
-// upper bound (last bucket's start plus one bucket), so the whole last bucket is
-// included. Indices are clamped to the series bounds.
-export function rangeFromBuckets(
-  starts: string[],
-  i: number,
-  j: number,
-  bucket: UsageBucket,
-): { startIso: string; endIso: string } | null {
-  if (starts.length === 0) return null
-  const lo = Math.max(0, Math.min(i, j))
-  const hi = Math.min(starts.length - 1, Math.max(i, j))
-  const startMs = new Date(starts[lo]).getTime()
-  const endMs = new Date(starts[hi]).getTime() + bucketDurationMs(bucket)
-  return {
-    startIso: new Date(startMs).toISOString(),
-    endIso: new Date(endMs).toISOString(),
-  }
 }
 
 // ---------- effective-window caption ----------

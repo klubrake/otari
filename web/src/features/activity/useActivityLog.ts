@@ -292,7 +292,11 @@ export function useActivityLog({
   }
   const names = keyNames(rows, groupBy === "api_key" ? groupRows : [])
   const apiKeyName = (id: string) => names.get(id) ?? shortId(id)
-  const chips = activityChips(url, { member: memberName, apiKey: apiKeyName })
+  const chips = activityChips(url, {
+    member: memberName,
+    apiKey: apiKeyName,
+    workspace: () => viewer.workspaceName || "another workspace",
+  })
 
   const navList = isGrouping
     ? openGroups.flatMap((row) => previewRows.get(row.key ?? "") ?? [])

@@ -8,7 +8,7 @@ import {
 } from "@/shared/helpers/format"
 
 /** "Sep" for a calendar month, "since Sep 22" for any other period, "" before one starts. */
-function describeBudgetPeriod(spend: WorkspaceSpend): string {
+export function describeBudgetPeriod(spend: WorkspaceSpend): string {
   if (!spend.period_start) return ""
   const start = new Date(spend.period_start)
   const end = spend.period_end ? new Date(spend.period_end) : undefined

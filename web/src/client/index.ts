@@ -119,6 +119,7 @@ export type UsageCount = Schemas["UsageCount"]
 export type UsageTotals = Schemas["UsageTotals"]
 export type UsageSummary = Schemas["UsageSummary"]
 export type UsageGroupRow = Schemas["UsageGroupRow"]
+export type UsageSessionRow = Schemas["UsageSessionRow"]
 export type UsageSeriesPoint = Schemas["UsageSeriesPoint"]
 export type UsageGroupedSeries = Schemas["UsageGroupedSeries"]
 export type UsageGroupedSeriesPoint = Schemas["UsageGroupedSeriesPoint"]
@@ -189,6 +190,8 @@ type SummaryQuery = NonNullable<
 >
 export type UsageBucket = NonNullable<SummaryQuery["bucket"]>
 export type SummaryDimension = NonNullable<SummaryQuery["dimensions"]>[number]
+export type UsageChannel = NonNullable<SummaryQuery["channel"]>[number]
+export type UsageRankBy = NonNullable<SummaryQuery["rank_by"]>
 type SeriesQuery = NonNullable<
   operations["usage-usage_series"]["parameters"]["query"]
 >

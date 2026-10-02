@@ -5,6 +5,8 @@
 // and justified on purpose: a type that could come from the spec and does not is
 // a type that will drift from the API without anyone noticing.
 
+import type { UsageChannel } from "./index"
+
 // ---------------------------------------------------------------------------
 // Routing policy bodies.
 //
@@ -156,6 +158,9 @@ export interface UsageFilters {
   exclude_policy_name?: string[]
   // true: only requests a routing policy served; false: only direct ones.
   routed?: boolean
+  // How requests reached the log, as the server's channel breakdown names it.
+  channel?: UsageChannel[]
+  exclude_channel?: UsageChannel[]
   // Rows with no key, no billed user, or no session.
   is_null?: ("api_key_id" | "user_id" | "source_label")[]
   tokens_gt?: number

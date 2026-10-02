@@ -2,6 +2,7 @@ import { useState } from "react"
 import { TextButton } from "@/design-system/actions/TextButton"
 import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import type { ManualRates } from "@/features/models/SetPriceDialog"
+import { SavedViewsMenu } from "@/features/savedViews/SavedViewsMenu"
 import { useSetPricing } from "@/shared/api/pricing"
 import { useDeleteUsage, useSetUsagePrice } from "@/shared/api/usage"
 import { useUrlState } from "@/shared/helpers/urlState"
@@ -9,8 +10,11 @@ import { useIsPhone } from "@/shared/hooks/useIsPhone"
 import { ActivityDesk } from "./ActivityDesk"
 import { type ActivityDialog, ActivityDialogs } from "./ActivityDialogs"
 import { ActivityPhone } from "./ActivityPhone"
-import { ACTIVITY_URL_DEFAULTS, type ColumnKey } from "./activityQuery"
-import { SavedViewsMenu } from "./SavedViewsMenu"
+import {
+  ACTIVITY_URL_DEFAULTS,
+  BUILT_IN_VIEWS,
+  type ColumnKey,
+} from "./activityQuery"
 import { useActivityActions } from "./useActivityActions"
 import { useActivityLog } from "./useActivityLog"
 import { useActivityViewer } from "./useActivityViewer"
@@ -28,7 +32,7 @@ import { useActivityViews } from "./useActivityViews"
  */
 export function ActivityPage() {
   const url = useUrlState(ACTIVITY_URL_DEFAULTS)
-  const viewer = useActivityViewer()
+  const viewer = useActivityViewer(url.get("workspace"))
   const isPhone = useIsPhone()
   const [isLive, setIsLive] = useState(true)
   const [openMenu, setOpenMenu] = useState<ColumnKey>()
@@ -61,6 +65,7 @@ export function ActivityPage() {
   })
   const viewsMenu = (isCompact: boolean) => (
     <SavedViewsMenu
+      builtIns={BUILT_IN_VIEWS}
       isCompact={isCompact}
       views={views.views}
       current={views.current}

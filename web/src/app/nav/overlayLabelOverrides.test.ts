@@ -51,7 +51,6 @@ describe("a build that replaces the label-override module", () => {
       "Access",
     ])
     expect(ORG_NAV_SECTIONS.map((section) => section.label)).toEqual([
-      "Observe",
       "People & access",
       "Cost & billing",
       "Gateway",

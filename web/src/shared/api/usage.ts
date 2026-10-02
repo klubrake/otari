@@ -19,7 +19,10 @@ import type {
   UsageFilters,
   UsageGroupBy,
   UsageGroupedSeries,
+  UsageGroupRow,
   UsageMutationSelection,
+  UsageRankBy,
+  UsageSessionRow,
   UsageSetPriceRequest,
   UsageSetPriceResult,
   UsageSortKey,
@@ -81,6 +84,8 @@ function usageParams(filters: UsageFilters): URLSearchParams {
   appendAll("policy_name", filters.policy_name)
   appendAll("exclude_policy_name", filters.exclude_policy_name)
   if (filters.routed !== undefined) params.set("routed", String(filters.routed))
+  appendAll("channel", filters.channel)
+  appendAll("exclude_channel", filters.exclude_channel)
   appendAll("is_null", filters.is_null)
   if (filters.tokens_gt !== undefined) {
     params.set("tokens_gt", String(filters.tokens_gt))
@@ -131,7 +136,7 @@ function usageParams(filters: UsageFilters): URLSearchParams {
 // a different one: `/usage` reads every tenant on the deployment, and a page
 // titled with the organization would silently overstate it. A pinned base needs
 // no context answer to be known, so it is ready on first paint.
-export type UsageScope = "caller" | "organization"
+type UsageScope = "caller" | "organization"
 
 export function useUsageScope(scope: UsageScope = "caller"): {
   base: string
@@ -708,33 +713,95 @@ export function useActivityGroups(
   })
 }
 
-// A per-group time series for the stacked analytics chart (top groups by spend
-// plus an "other" fold). Only fetched while a group-by dimension is active, so
-// the ungrouped view costs nothing extra. Caching mirrors useUsageSummary.
+// ---------- the Usage page's breakdowns ----------
+
+/**
+ * One breakdown row, billed = `cost - imported_cost`. A session row also
+ * carries its span, and what most of its rows came from when the summary asked
+ * for `session_details`.
+ */
+export type UsageBreakdownRow = UsageGroupRow &
+  Partial<
+    Pick<UsageSessionRow, "first_at" | "last_at" | "source" | "api_key_name">
+  >
+
+// The Usage page's one summary: the totals and series, the breakdown on screen
+// with its per-group p95 (and a session's origin, for the session breakdown),
+// ranked by the metric on screen, and the tools the page lists under it. No
+// other dimension, since each one is a GROUP BY over the window.
+export function useUsageBreakdown(
+  filters: UsageFilters,
+  bucket: UsageBucket,
+  dimension: SummaryDimension,
+  rankBy: UsageRankBy,
+  { enabled = true, usageScope = "caller" as UsageScope } = {},
+) {
+  const scope = useUsageScope(usageScope)
+  return useQuery({
+    queryKey: [
+      USAGE,
+      "summary",
+      "breakdown",
+      scope.base,
+      filters,
+      bucket,
+      rankBy,
+      dimension,
+    ],
+    queryFn: async () => {
+      const params = usageParams(filters)
+      params.set("bucket", bucket)
+      for (const one of new Set<SummaryDimension>([dimension, "tool"])) {
+        params.append("dimensions", one)
+      }
+      params.set("p95_by", dimension)
+      params.set("rank_by", rankBy)
+      if (dimension === "source_label") params.set("session_details", "true")
+      const summary = await apiFetch<UsageSummary>(
+        `${scope.base}/summary?${params.toString()}`,
+      )
+      return { dimension, summary }
+    },
+    enabled: enabled && scope.isReady,
+    // The previous result stands in while the next loads, tagged with the
+    // breakdown it answers: its totals hold, and its rows are listed only
+    // under that breakdown, never read as another's.
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+  })
+}
+
+// A per-group time series for a stacked chart: the top groups, ranked by
+// `rankBy`, plus an "other" fold. Caching mirrors useUsageSummary.
 export function useUsageGroupedSeries(
   filters: UsageFilters,
   bucket: UsageBucket,
-  groupBy: UsageGroupBy | null,
+  groupBy: UsageGroupBy,
+  rankBy: UsageRankBy,
   enabled = true,
   usageScope: UsageScope = "caller",
 ) {
   const scope = useUsageScope(usageScope)
   return useQuery({
-    queryKey: [USAGE, "series", scope.base, filters, bucket, groupBy],
+    // The grouping ends the key, which is what the placeholder compares.
+    queryKey: [USAGE, "series", scope.base, filters, bucket, rankBy, groupBy],
     queryFn: () => {
       const params = usageParams(filters)
       params.set("bucket", bucket)
-      params.set("group_by", groupBy as string)
+      params.set("group_by", groupBy)
+      params.set("rank_by", rankBy)
       return apiFetch<UsageGroupedSeries>(
         `${scope.base}/series?${params.toString()}`,
       )
     },
-    enabled: enabled && groupBy !== null && scope.isReady,
-    placeholderData: keepPreviousData,
+    enabled: enabled && scope.isReady,
+    // Same guard as the breakdown's: one grouping's series never stands in for
+    // another's.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey.at(-1) === groupBy ? previous : undefined,
     staleTime: 30_000,
     // A 404 is version skew (a gateway older than this dashboard, e.g. not yet
-    // restarted onto the build that ships it); retrying cannot fix that, and
-    // the page falls back to the ungrouped view with a notice instead.
+    // restarted onto the build that ships it); retrying cannot fix that.
     retry: (failureCount, error) =>
       !(error instanceof ApiError && error.status === 404) && failureCount < 3,
   })

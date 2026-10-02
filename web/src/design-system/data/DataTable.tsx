@@ -84,6 +84,11 @@ export interface DataTableProps<Row> {
   onSortChange?: (descriptor: SortDescriptor) => void
   /** Fired when a row body is activated (click / Enter), for detail drill-in. */
   onRowAction?: (key: string) => void
+  /**
+   * Rows `onRowAction` has nothing to open for (a total, a fold of the rest):
+   * they take no pointer cursor and their activation is never reported.
+   */
+  isRowInert?: (row: Row) => boolean
   rowClassName?: (row: Row) => string | undefined
   /** Enables draggable column resize handles. */
   isResizable?: boolean
@@ -153,6 +158,7 @@ export function DataTable<Row extends object>({
   onSortChange,
   onRowAction,
   rowClassName,
+  isRowInert,
   isResizable = false,
   detailKey = null,
   renderDetail,
@@ -293,6 +299,10 @@ export function DataTable<Row extends object>({
   const fireRowAction = useCallback(
     (key: string) => {
       if (!onRowAction) return
+      if (isRowInert) {
+        const row = rows.find((one) => getRowKey(one) === key)
+        if (row && isRowInert(row)) return
+      }
       if (renderDetail && key !== detailKey) {
         clearOpening()
         const target = rootRef.current?.querySelector(
@@ -310,7 +320,15 @@ export function DataTable<Row extends object>({
       }
       onRowAction(key)
     },
-    [onRowAction, renderDetail, detailKey, clearOpening],
+    [
+      onRowAction,
+      isRowInert,
+      rows,
+      getRowKey,
+      renderDetail,
+      detailKey,
+      clearOpening,
+    ],
   )
 
   // The row key for an event on an ordinary data cell, or null when the event
@@ -373,7 +391,10 @@ export function DataTable<Row extends object>({
       // `globals.css` cannot reach it: nothing in the markup tells a row that
       // opens something from one that is inert.
       const className =
-        [hasRowAction ? "cursor-pointer" : null, rowClassName?.(row)]
+        [
+          hasRowAction && !isRowInert?.(row) ? "cursor-pointer" : null,
+          rowClassName?.(row),
+        ]
           .filter(Boolean)
           .join(" ") || undefined
       return (
@@ -396,7 +417,7 @@ export function DataTable<Row extends object>({
         </Table.Row>
       )
     },
-    [getRowKey, rowClassName, showSelection, columns, hasRowAction],
+    [getRowKey, rowClassName, isRowInert, showSelection, columns, hasRowAction],
   )
 
   return (

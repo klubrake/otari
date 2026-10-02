@@ -252,6 +252,20 @@ describe("ActivityPage", () => {
   })
 
   describe("reading what it asks for", () => {
+    it("reads the workspace a link names in place of the sidebar's, and returns to it", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockApi({ rows: [entry()], viewer: "manager" })
+      renderPage(<ActivityPage />, "/activity?workspace=ws-2")
+      await rowOf("gpt-4o")
+      await waitFor(() =>
+        expect(lastList(calls).get("workspace_id")).toBe("ws-2"),
+      )
+      await user.click(screen.getByRole("button", { name: /Remove Workspace/ }))
+      await waitFor(() =>
+        expect(lastList(calls).get("workspace_id")).toBe(WORKSPACE_ID),
+      )
+    })
+
     it("says a grouped log with nothing in it is empty, not loading", async () => {
       mockApi({ rows: [], groups: [] })
       renderPage(<ActivityPage />, "/activity?group=model")

@@ -29,6 +29,19 @@ export function useWorkspaces(enabled = true) {
   })
 }
 
+// One workspace by id, for naming a workspace a link points at without reading
+// every workspace to find it. Under the workspaces key, so a rename or a delete
+// there refreshes it.
+export function useWorkspace(workspaceId: string) {
+  return useQuery({
+    queryKey: [WORKSPACES, workspaceId],
+    queryFn: () =>
+      apiFetch<Workspace>(`/workspaces/${encodeURIComponent(workspaceId)}`),
+    enabled: workspaceId !== "",
+    staleTime: 60_000,
+  })
+}
+
 // One workspace's roster. Nested under the workspaces key so deleting a
 // workspace drops its roster with it.
 export function useWorkspaceMembers(workspaceId: string | null) {

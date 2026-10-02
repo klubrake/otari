@@ -1,0 +1,170 @@
+import { describe, expect, it } from "vitest"
+
+import type { UsageGroupedSeries } from "@/client"
+import { breakdownRow } from "@/tests/usage"
+import { axisScale, foldSeries, niceCeiling, sortRows } from "./usageModel"
+
+const DAY = "2026-09-30T00:00:00Z"
+
+function grouped(
+  groups: { key: string | null; is_other?: boolean; cost: number }[],
+): UsageGroupedSeries {
+  return {
+    start_date: "2026-09-01T00:00:00Z",
+    end_date: "2026-10-01T00:00:00Z",
+    bucket: "day",
+    group_by: "model",
+    groups: groups.map((group) =>
+      breakdownRow({ key: group.key, is_other: group.is_other ?? false }),
+    ),
+    points: groups.map((group) => ({
+      bucket_start: DAY,
+      key: group.key,
+      is_other: group.is_other ?? false,
+      cost: group.cost,
+      imported_cost: 0,
+      tokens: 0,
+      requests: 0,
+    })),
+  }
+}
+
+const label = (group: { key: string | null }) => group.key ?? "none"
+
+describe("foldSeries", () => {
+  it("stacks the server's first four groups in its order and folds the rest into Other", () => {
+    const folded = foldSeries(
+      grouped([
+        // Not the largest first: the server ranked these, and its order stands.
+        { key: "a", cost: 1 },
+        { key: "b", cost: 50 },
+        { key: "c", cost: 3 },
+        { key: "d", cost: 4 },
+        { key: "e", cost: 5 },
+        { key: null, is_other: true, cost: 6 },
+      ]),
+      "cost",
+      true,
+      label,
+    )
+    expect(folded.series.map((series) => series.label)).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+      "Other",
+    ])
+    const [point] = folded.points
+    expect(point.values.other).toBe(11)
+    expect(Object.values(point.values).reduce((sum, v) => sum + v, 0)).toBe(69)
+  })
+
+  it("colors the fold, and a row past the stack, as Other, never as a group", () => {
+    const folded = foldSeries(
+      grouped([
+        { key: "a", cost: 1 },
+        { key: null, is_other: true, cost: 2 },
+      ]),
+      "cost",
+      true,
+      label,
+    )
+    const other = folded.series.find((series) => series.key === "other")
+    expect(folded.colorOf({ key: null, is_other: true })).toBe(other?.color)
+    expect(folded.colorOf({ key: "zzz", is_other: false })).toBe(other?.color)
+    expect(folded.colorOf({ key: "a", is_other: false })).not.toBe(other?.color)
+  })
+
+  it("draws nothing for an Other with nothing in it", () => {
+    const folded = foldSeries(
+      grouped([
+        { key: "a", cost: 1 },
+        { key: null, is_other: true, cost: 0 },
+      ]),
+      "cost",
+      true,
+      label,
+    )
+    expect(folded.series.map((series) => series.label)).toEqual(["a"])
+  })
+})
+
+describe("sortRows", () => {
+  const rows = [
+    breakdownRow({ key: null, cost: 900, requests: 1 }),
+    breakdownRow({ key: "small", cost: 1, requests: 30 }),
+    breakdownRow({ key: "other", is_other: true, cost: 999, requests: 99 }),
+    breakdownRow({ key: "big", cost: 50, requests: 10 }),
+  ]
+  const keys = (sorted: { key: string | null }[]) => sorted.map((r) => r.key)
+
+  it("ranks by the metric, with the no-value row and the fold always last", () => {
+    expect(
+      keys(
+        sortRows(rows, { key: "value", order: "desc" }, "cost", true, label),
+      ),
+    ).toEqual(["big", "small", null, "other"])
+  })
+
+  it("reverses a column without moving the rows that explain the rest", () => {
+    expect(
+      keys(
+        sortRows(rows, { key: "requests", order: "asc" }, "cost", true, label),
+      ),
+    ).toEqual(["big", "small", null, "other"])
+    expect(
+      keys(
+        sortRows(rows, { key: "requests", order: "desc" }, "cost", true, label),
+      ),
+    ).toEqual(["small", "big", null, "other"])
+  })
+
+  it("sorts names alphabetically", () => {
+    expect(
+      keys(sortRows(rows, { key: "name", order: "asc" }, "cost", true, label)),
+    ).toEqual(["big", "small", null, "other"])
+  })
+})
+
+describe("niceCeiling", () => {
+  it("rounds up to four steps of 1, 2 or 5 times a power of ten", () => {
+    expect(niceCeiling(1185)).toBe(2000)
+    expect(niceCeiling(0.03)).toBe(0.04)
+    expect(niceCeiling(0.18)).toBe(0.2)
+  })
+
+  it("never steps below the minimum, so counts climb in whole steps", () => {
+    expect(niceCeiling(1, 1)).toBe(4)
+    expect(niceCeiling(9, 1)).toBe(20)
+  })
+
+  it("gives an empty chart an axis", () => {
+    expect(niceCeiling(0)).toBe(1)
+    expect(niceCeiling(0, 1)).toBe(4)
+  })
+})
+
+describe("axisScale", () => {
+  const ticks = (max: number, metric: "cost" | "tokens" | "requests") => {
+    const axis = axisScale(max, metric)
+    return [1, 2, 3, 4].map((n) => axis.format((axis.top * n) / 4))
+  }
+
+  it("prints cents where the steps are cents", () => {
+    expect(ticks(0.03, "cost")).toEqual(["$0.01", "$0.02", "$0.03", "$0.04"])
+    expect(ticks(0.18, "cost")).toEqual(["$0.05", "$0.10", "$0.15", "$0.20"])
+  })
+
+  it("prints whole dollars where the steps are dollars", () => {
+    expect(ticks(1185, "cost")).toEqual(["$500", "$1K", "$1.5K", "$2K"])
+  })
+
+  it("gives an empty chart a readable axis", () => {
+    expect(ticks(0, "cost")).toEqual(["$0.25", "$0.50", "$0.75", "$1.00"])
+    expect(ticks(0, "requests")).toEqual(["1", "2", "3", "4"])
+  })
+
+  it("counts one request in whole requests", () => {
+    expect(ticks(1, "requests")).toEqual(["1", "2", "3", "4"])
+  })
+})

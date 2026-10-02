@@ -1,1821 +1,611 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { useLocation } from "@tanstack/react-router"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import type { ReactElement } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { UsageSummary } from "@/client"
 import { UsagePage } from "@/features/usage/UsagePage"
-import { API_ROOT } from "@/shared/api/client"
-import { SelectedWorkspaceProvider } from "@/shared/hooks/SelectedWorkspace"
-import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import {
-  apiKey,
-  bootstrap,
-  organizationContext,
-  organizationMember,
-  seriesPoint,
-  usageTotals,
-} from "@/tests/fixtures"
-import { withRouter } from "@/tests/router"
-import { pickOption, selectTrigger } from "@/tests/select"
+  breakdownRow,
+  breakdownSummary,
+  lastBreakdown,
+  mockUsageApi,
+  OWN_USER_ID,
+  renderUsage,
+  UrlProbe,
+  usageReads,
+  WORKSPACE_ID,
+} from "@/tests/usage"
 
-function summary(overrides: Partial<UsageSummary> = {}): UsageSummary {
-  return {
-    start_date: "2026-06-21T00:00:00Z",
-    end_date: "2026-07-21T00:00:00Z",
-    bucket: "day",
-    totals: usageTotals({
-      cost: 1240.5,
-      prompt_tokens: 8_000_000,
-      completion_tokens: 4_400_000,
-      total_tokens: 12_400_000,
-      // The tokens tile reads the billed total, not total_tokens.
-      billed_input_tokens: 8_000_000,
-      billed_output_tokens: 4_400_000,
-      request_count: 84_000,
-      error_count: 1_764,
-      avg_latency_ms: 820,
-    }),
-    by_model: [
-      {
-        key: "gpt-5.6",
-        cost: 820,
-        tokens: 8_000_000,
-        requests: 42_000,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-      {
-        key: "claude-sonnet-5",
-        cost: 310,
-        tokens: 3_000_000,
-        requests: 28_000,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-      {
-        key: null,
-        cost: 110.5,
-        tokens: 1_400_000,
-        requests: 14_000,
-        is_other: true,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-    ],
-    by_user: [
-      {
-        key: "alice",
-        label: "Alice",
-        cost: 900.5,
-        tokens: 8_000_000,
-        requests: 50_000,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-      {
-        key: "bob",
-        label: "Bob",
-        cost: 340,
-        tokens: 4_400_000,
-        requests: 34_000,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-    ],
-    // `label` is the server-resolved key name, which names an in-window key
-    // even for a viewer who may not list keys.
-    by_api_key: [
-      {
-        key: "key-1",
-        label: "ci-bot",
-        cost: 500,
-        tokens: 5_000_000,
-        requests: 30_000,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-    ],
-    by_source: [
-      {
-        key: "gateway",
-        cost: 1_000,
-        tokens: 9_000_000,
-        requests: 60_100,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-      {
-        key: "claude_code",
-        cost: 240.5,
-        tokens: 3_400_000,
-        requests: 23_900,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-    ],
-    by_source_label: [
-      {
-        key: "project:otari",
-        cost: 700,
-        tokens: 6_000_000,
-        requests: 30_100,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-      {
-        key: "project:docs",
-        cost: 200,
-        tokens: 2_000_000,
-        requests: 9_200,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-      // Gateway traffic carries no session label: a real group with a null key,
-      // not the synthesized fold.
-      {
-        key: null,
-        cost: 340.5,
-        tokens: 4_400_000,
-        requests: 44_700,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-    ],
-    by_endpoint: [
-      {
-        key: "/v1/chat/completions",
-        cost: 900,
-        tokens: 8_000_000,
-        requests: 50_100,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-      {
-        key: "/v1/messages",
-        cost: 340.5,
-        tokens: 4_400_000,
-        requests: 33_900,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-    ],
-    by_provider: [
-      {
-        key: "openai",
-        cost: 880,
-        tokens: 7_000_000,
-        requests: 45_100,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-      {
-        key: "anthropic",
-        cost: 360.5,
-        tokens: 5_400_000,
-        requests: 38_900,
-        is_other: false,
-        imported_cost: 0,
-        error_count: 0,
-        cache_read_tokens: 0,
-      },
-    ],
-    by_policy: [],
-    by_workspace: [],
-    by_channel: [],
-    by_tool: [],
-    errors_by_status_code: [],
-    series: [
-      seriesPoint({
-        bucket_start: "2026-07-19T00:00:00Z",
-        cost: 400,
-        tokens: 4_000_000,
-        requests: 28_000,
-      }),
-      seriesPoint({
-        bucket_start: "2026-07-20T00:00:00Z",
-        cost: 840.5,
-        tokens: 8_400_000,
-        requests: 56_000,
-      }),
-    ],
-    ...overrides,
-  }
-}
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  })
-}
-
-// `extra` adds a path the default stub does not answer; the scope cases need
-// /v1/organizations/me, which is where the workspace switcher's memberships come
-// from and therefore where a selection has to come from too.
-function mockApi(
-  body: UsageSummary | null,
-  extra: Record<string, unknown> = {},
-  // The previous window. Without one, that query gets the current window's body
-  // back, every delta is exactly zero, and a test cannot see a direction or a
-  // polarity color.
-  previousBody?: UsageSummary,
-) {
-  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    const url = String(input)
-    for (const [path, answer] of Object.entries(extra)) {
-      // Matched at a path boundary rather than anywhere in the URL. /api/v1/usage
-      // and /api/v1/organizations/me are both prefixes of routes this page reads
-      // (/api/v1/organizations/me/usage/summary is the tenant's own), so a bare
-      // `includes` would answer a summary request with an organization context.
-      if (url === path || url.endsWith(path) || url.includes(`${path}?`)) {
-        return jsonResponse(answer)
-      }
-    }
-    // The shell reads this before it paints, and the usage hooks wait for it: it
-    // is what tells them whether this caller reads the deployment-wide routes or
-    // the organization-scoped ones (otari#837). After `extra`, so a test that
-    // supplies its own context still wins, and on an exact match so it cannot
-    // shadow /v1/organizations/me/usage.
-    // The roster the breakdowns name people from. Answered by default and
-    // empty, which is the deployment nobody has invited anyone to: the rows
-    // then read the alias the summary already carries.
-    if (url.includes(`${API_ROOT}/organizations/me/members`)) {
-      return jsonResponse({ data: [], total: 0 })
-    }
-    if (url.endsWith(`${API_ROOT}/organizations/me`)) {
-      return jsonResponse(organizationContext())
-    }
-    if (url.includes("/usage/summary")) {
-      // The previous-period query is the only one on this page passing
-      // NO_BREAKDOWNS, which goes on the wire as the server's `none` sentinel,
-      // so that is what tells the two windows apart here.
-      if (previousBody && url.includes("dimensions=none")) {
-        return jsonResponse(previousBody)
-      }
-      return jsonResponse(body ?? summary())
-    }
-    if (url.includes("/usage/series")) {
-      return jsonResponse({
-        start_date: "2026-06-21T00:00:00Z",
-        end_date: "2026-07-21T00:00:00Z",
-        bucket: "day",
-        group_by: "model",
-        groups: [
-          {
-            key: "gpt-5.6",
-            cost: 820,
-            tokens: 8_000_000,
-            requests: 42_000,
-            is_other: false,
-          },
-          {
-            key: null,
-            cost: 420.5,
-            tokens: 4_400_000,
-            requests: 42_000,
-            is_other: true,
-          },
-        ],
-        points: [
-          {
-            bucket_start: "2026-07-19T00:00:00Z",
-            key: "gpt-5.6",
-            is_other: false,
-            cost: 400,
-            tokens: 4_000_000,
-            requests: 28_000,
-          },
-          {
-            bucket_start: "2026-07-20T00:00:00Z",
-            key: null,
-            is_other: true,
-            cost: 420.5,
-            tokens: 4_400_000,
-            requests: 42_000,
-          },
-        ],
-      })
-    }
-    if (url.includes(`${API_ROOT}/users`)) {
-      return jsonResponse([
-        { user_id: "alice", alias: "Alice" },
-        { user_id: "bob", alias: "Bob" },
-      ])
-    }
-    if (url.includes(`${API_ROOT}/keys`)) {
-      return jsonResponse([
-        {
-          id: "key-1",
-          key_name: "ci-bot",
-          user_id: "alice",
-          allowed_models: null,
-        },
-      ])
-    }
-    return jsonResponse([])
-  })
-}
-
-// Surfaces the current location so a drill-down navigation can be asserted.
-function LocationProbe() {
-  const loc = useLocation()
-  // A status role with an accessible name so tests query the probe by role
-  // rather than a test id.
-  return (
-    <div
-      role="status"
-      aria-label="Current location"
-    >{`${loc.pathname}${loc.searchStr}`}</div>
+function page(route?: string) {
+  return renderUsage(
+    <>
+      <UsagePage />
+      <UrlProbe />
+    </>,
+    route,
   )
 }
 
-function renderPage(
-  ui: ReactElement,
-  options: { scoped?: boolean; url?: string } = {},
-) {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  })
-  // Most cases here are about the charts and read no workspace, so the provider
-  // is opt-in: outside it `useSelectedWorkspace` answers with nothing, which is
-  // the same shape as a caller in no workspace and keeps those requests
-  // unscoped either way. `scoped` is for the case that is *about* the scope.
-  const body = options.scoped ? (
-    <SelectedWorkspaceProvider>{ui}</SelectedWorkspaceProvider>
-  ) : (
-    ui
-  )
-  // The breakdowns and the chart legend ask the organization roster what to call
-  // each person, and that read is gated on the `organizations` surface, so the
-  // page needs the deployment context the shell always gives it.
-  return render(
-    <DeploymentProvider value={bootstrap()}>
-      <QueryClientProvider client={client}>{body}</QueryClientProvider>
-    </DeploymentProvider>,
-    {
-      wrapper: withRouter({
-        url: options.url ?? "/usage",
-        routes: [{ path: "/activity", element: <LocationProbe /> }],
-      }),
-    },
-  )
+/** The chart's readout of the bar under the pointer or the keyboard's cursor. */
+async function readout() {
+  const total = await screen.findByText("Total")
+  const box = total.closest("div")
+  if (!box) throw new Error("no chart readout")
+  return box
+}
+const pageUrl = () => screen.getByRole("status", { name: "Page URL" })
+const table = () => screen.findByRole("grid", { name: /^Usage by/ })
+// Found on the screen rather than inside a grid held from earlier: a new
+// breakdown, or the scope the roster settles on, puts a new grid in its place.
+async function rowNamed(name: string | RegExp) {
+  const cell = await screen.findByRole("rowheader", { name })
+  const row = cell.closest('[role="row"]')
+  if (!(row instanceof HTMLElement)) throw new Error(`no row for ${name}`)
+  return row
 }
 
 describe("UsagePage", () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
-  it("scopes the workspace view to the switcher's selection", async () => {
-    const fetchMock = mockApi(summary(), {
-      [`${API_ROOT}/organizations/me`]: organizationContext({
-        workspace_memberships: [
-          {
-            workspace_id: "ws-1",
-            name: "Platform team",
-            role: "owner",
-          },
-        ],
-      }),
+  describe("the three numbers", () => {
+    it("splits the total at API prices into billed and subscription", async () => {
+      mockUsageApi({ viewer: "member" })
+      page()
+      expect(await screen.findByText("$1,215.07")).toBeInTheDocument()
+      expect(screen.getByText("$106.67")).toBeInTheDocument()
+      expect(
+        screen.getByText("billed · counts toward limits"),
+      ).toBeInTheDocument()
+      expect(screen.getByText("$1,108.40")).toBeInTheDocument()
+      expect(screen.getByText("8 failed (0.1%)")).toBeInTheDocument()
+      expect(screen.getByText("94% from cache")).toBeInTheDocument()
     })
-    renderPage(<UsagePage />, { scoped: true })
-    await screen.findByText("$1,240.50")
 
-    expect(
-      fetchMock.mock.calls.some(
-        ([url]) =>
-          String(url).includes(`${API_ROOT}/usage/summary`) &&
-          String(url).includes("workspace_id=ws-1"),
-      ),
-    ).toBe(true)
-    // The workspace rail takes its scope from the switcher and offers no
-    // workspace picker, so the roster this page never shows is not fetched.
-    expect(
-      fetchMock.mock.calls.some(([url]) =>
-        String(url).includes(`${API_ROOT}/workspaces`),
-      ),
-    ).toBe(false)
-  })
-
-  it("asks for the whole organization on the organization page, whatever the switcher selects", async () => {
-    // The switcher holds a selection and the fixture's caller even operates the
-    // deployment; the organization page must let neither leak in. Narrowed by
-    // the switcher it would repeat the workspace page, and widened to
-    // /api/v1/usage it would title every tenant's traffic as this organization's.
-    const fetchMock = mockApi(summary(), {
-      [`${API_ROOT}/organizations/me`]: organizationContext({
-        workspace_memberships: [
-          {
-            workspace_id: "ws-1",
-            name: "Platform team",
-            role: "owner",
-          },
-        ],
-      }),
+    it("links the unpriced requests to Activity", async () => {
+      const user = userEvent.setup()
+      mockUsageApi()
+      page()
+      await user.click(await screen.findByRole("link", { name: "3 unpriced" }))
+      const location = await screen.findByRole("status", {
+        name: "Current location",
+      })
+      expect(location.textContent).toContain("priced=false")
+      expect(location.textContent).toContain("status=success")
     })
-    renderPage(<UsagePage scope="organization" />, { scoped: true })
-    await screen.findByText("$1,240.50")
 
-    const reads = fetchMock.mock.calls
-      .map(([url]) => String(url))
-      .filter((url) => url.includes("/usage/"))
-    expect(reads).not.toHaveLength(0)
-    for (const url of reads) {
-      expect(url).toContain(`${API_ROOT}/organizations/me/usage/`)
-      expect(url).not.toContain("workspace_id=")
-    }
-  })
-
-  it("narrows the organization page through its own workspace filter", async () => {
-    const user = userEvent.setup()
-    const fetchMock = mockApi(summary(), {
-      [`${API_ROOT}/workspaces`]: {
-        data: [
-          {
-            id: "ws-2",
-            name: "Research",
-            organization_id: "org-1",
-            created_at: "2026-08-01T00:00:00+00:00",
-            updated_at: "2026-08-01T00:00:00+00:00",
-          },
-        ],
-        count: 1,
-      },
-    })
-    renderPage(<UsagePage scope="organization" />)
-    await screen.findByText("$1,240.50")
-
-    // Through the disclosure a person uses. jsdom does not apply Tailwind's
-    // `.hidden`, so the select is reachable without this and the case would
-    // keep passing if the control became unreachable in a browser.
-    await user.click(screen.getByRole("button", { name: "Add filter" }))
-    await pickOption(user, "Workspace", "Research")
-
-    const summaryCalls = fetchMock.mock.calls
-      .map(([u]) => String(u))
-      .filter((u) => u.includes(`${API_ROOT}/organizations/me/usage/summary`))
-    expect(summaryCalls.some((u) => u.includes("workspace_id=ws-2"))).toBe(true)
-    // The narrowing is visible and revocable where every other filter is.
-    expect(
-      screen.getByRole("button", {
-        name: "Remove Workspace filter Research",
-      }),
-    ).toBeInTheDocument()
-  })
-
-  it("renders totals tiles with compact currency and error rate", async () => {
-    mockApi(summary())
-    renderPage(<UsagePage />)
-
-    // The total ($1,240.50) is unique to the tile: no single breakdown row equals it.
-    expect(await screen.findByText("$1,240.50")).toBeInTheDocument()
-    expect(screen.getByText("84,000")).toBeInTheDocument()
-    expect(screen.getByText("12.4M")).toBeInTheDocument()
-    // 1764 / 84000 = 2.1% errors.
-    expect(screen.getByText(/2\.1% errors/)).toBeInTheDocument()
-  })
-
-  it("filters usage by API key", async () => {
-    const user = userEvent.setup()
-    const fetchMock = mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-
-    await user.click(screen.getByPlaceholderText("All keys"))
-    await user.click(await screen.findByRole("option", { name: "ci-bot" }))
-
-    const summaryCalls = fetchMock.mock.calls
-      .map(([u]) => String(u))
-      .filter((u) => u.includes(`${API_ROOT}/usage/summary`))
-    expect(summaryCalls.some((u) => u.includes("api_key_id=key-1"))).toBe(true)
-  })
-
-  it("does not render the CSV export action", async () => {
-    mockApi(summary())
-    renderPage(<UsagePage />)
-
-    await screen.findByText("$1,240.50")
-    expect(
-      screen.queryByRole("button", { name: "Export CSV" }),
-    ).not.toBeInTheDocument()
-  })
-
-  it("puts share in the chart's own caption row, as an icon with no visible label", async () => {
-    mockApi(summary())
-    renderPage(<UsagePage />)
-
-    await screen.findByText("$1,240.50")
-    const share = screen.getByRole("button", {
-      name: "Share usage as an image",
-    })
-    // On the artifact it publishes, not among the page's global controls.
-    expect(share.closest("figure")).not.toBeNull()
-    expect(share.closest("figcaption")).not.toBeNull()
-    // Icon-only. The accessible name comes from aria-label, so there is no text.
-    expect(share).toHaveTextContent("")
-    expect(share.querySelector("svg")).not.toBeNull()
-  })
-
-  it("offers no share affordance when the range has no data to share", async () => {
-    mockApi(summary({ series: [] }))
-    renderPage(<UsagePage />)
-
-    await screen.findByText("No data in this range.")
-    expect(
-      screen.queryByRole("button", { name: "Share usage as an image" }),
-    ).not.toBeInTheDocument()
-  })
-
-  it("shares whatever the page is filtered to, with no separate share query", async () => {
-    const user = userEvent.setup()
-    const fetchMock = mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-
-    await user.click(
-      screen.getByRole("button", { name: "Share usage as an image" }),
-    )
-    // By role: a `Dialog` fills HeroUI's trigger slot with its own title and
-    // hides it, so the string is in the document twice.
-    await screen.findByRole("dialog", { name: "Share this view as an image" })
-
-    // The panel reads the page's own summary. If it ever grows a query of its
-    // own, opening it would add a /v1/usage/summary call with a different
-    // dimension set, and the card could then disagree with the page above it.
-    const shareCalls = fetchMock.mock.calls.filter((call) =>
-      String(call[0]).includes("provider_model"),
-    )
-    expect(shareCalls).toHaveLength(0)
-  })
-
-  it("re-queries with an hourly bucket when a sub-day preset is chosen from the timeline", async () => {
-    const user = userEvent.setup()
-    const fetchMock = mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-    fetchMock.mockClear()
-
-    await user.click(screen.getByRole("button", { name: "Last hour" }))
-
-    await vi.waitFor(() => {
-      const summaryCalls = fetchMock.mock.calls
-        .map(([u]) => String(u))
-        .filter((u) => u.includes(`${API_ROOT}/usage/summary`))
-      // The sub-day extent buckets hourly (both the context histogram and the tiles).
-      expect(summaryCalls.some((u) => u.includes("bucket=hour"))).toBe(true)
+    it("says growth as a multiple, a percentage, or the previous figure, never a red percentage off nothing", async () => {
+      mockUsageApi({
+        previous: breakdownSummary(
+          {},
+          { cost: 100, request_count: 8000, billed_input_tokens: 400_000_000 },
+        ),
+      })
+      page()
+      // $1,215 against $100 is past ten times: the previous figure itself.
+      expect(await screen.findByText("prev 30d $100.00")).toBeInTheDocument()
+      expect(screen.getByText("↑ 6% vs prev 30d")).toBeInTheDocument()
+      expect(screen.getByText("4.1× prev 30d")).toBeInTheDocument()
     })
   })
 
-  it("shows the cache story as a hit rate with read/write volumes", async () => {
-    const base = summary()
-    mockApi(
-      summary({
-        // The tile reads the meter-normalized series composition (the same
-        // numbers as its sparkline), not the raw totals columns.
-        series: base.series.map((p, i) => ({
-          ...p,
-          input_tokens: i === 0 ? 4_200_000 : 6_000_000,
-          cache_read_tokens: i === 0 ? 2_100_000 : 3_000_000,
-          cache_write_tokens: i === 0 ? 1_200_000 : 1_500_000,
-          output_tokens: 400_000,
-        })),
-      }),
-    )
-    renderPage(<UsagePage />)
-
-    // Await a value (loads after the query resolves), not the static label.
-    // 5.1M reads over 10.2M billed input tokens = a 50.0% hit rate.
-    expect(await screen.findByText("50.0%")).toBeInTheDocument()
-    expect(screen.getByText("Cache hit rate")).toBeInTheDocument()
-    expect(screen.getByText(/5\.1M read · 2\.7M written/)).toBeInTheDocument()
-  })
-
-  it("shows no hit rate when the window carries no input-token composition", async () => {
-    // The rate is series cache reads over series input tokens, so what makes it
-    // uncomputable is a window with no input composition, which is what an older
-    // gateway (vite dev against a stale build) returns.
-    //
-    // Cache reads are present on purpose: without them the tile reads "—" for
-    // want of a numerator and the denominator never matters, which is how this
-    // passed while naming a field it does not read.
-    const noComposition = [
-      seriesPoint({
-        bucket_start: "2026-07-19T00:00:00Z",
-        cache_read_tokens: 2_000_000,
-      }),
-      seriesPoint({
-        bucket_start: "2026-07-20T00:00:00Z",
-        cache_read_tokens: 3_100_000,
-      }),
-    ]
-    mockApi(summary({ series: noComposition }))
-    renderPage(<UsagePage />)
-
-    await screen.findByText("$1,240.50")
-    const tile = screen.getByText("Cache hit rate").closest("div")!
-    expect(within(tile).getByText("—")).toBeInTheDocument()
-  })
-
-  it("computes the hit rate once the window has input tokens to divide by", async () => {
-    // The other side of the branch above, so the em-dash case is pinned to the
-    // missing composition rather than to anything else about the fixture.
-    const withComposition = [
-      seriesPoint({
-        bucket_start: "2026-07-19T00:00:00Z",
-        input_tokens: 4_000_000,
-        cache_read_tokens: 2_000_000,
-      }),
-      seriesPoint({
-        bucket_start: "2026-07-20T00:00:00Z",
-        input_tokens: 6_000_000,
-        cache_read_tokens: 3_000_000,
-      }),
-    ]
-    mockApi(summary({ series: withComposition }))
-    renderPage(<UsagePage />)
-
-    await screen.findByText("$1,240.50")
-    const tile = screen.getByText("Cache hit rate").closest("div")!
-    expect(within(tile).getByText("50.0%")).toBeInTheDocument()
-  })
-
-  it("groups the chart by a dimension via the grouped series endpoint", async () => {
-    const user = userEvent.setup()
-    const fetchMock = mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-
-    await pickOption(user, "Group by", "By model")
-
-    // The stack's legend comes from the grouped response: the top group plus
-    // the reconciling fold, which always reads "Other".
-    expect(await screen.findByText("Other")).toBeInTheDocument()
-    const calls = fetchMock.mock.calls.map(([u]) => String(u))
-    expect(
-      calls.some(
-        (u) =>
-          u.includes(`${API_ROOT}/usage/series`) &&
-          u.includes("group_by=model"),
-      ),
-    ).toBe(true)
-  })
-
-  it("falls back to ungrouped with a notice when the gateway lacks grouped series", async () => {
-    // Version skew: the dashboard ships inside the gateway, but a not-yet
-    // restarted gateway (or vite dev against an older one) has no
-    // /v1/usage/series. That must degrade to the ungrouped chart plus a
-    // notice, not spin through retries into a bare "Not Found" banner.
-    const user = userEvent.setup()
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const url = String(input)
-      // The shell reads this before it paints, and the usage hooks wait for it:
-      // it is what tells them whether this caller reads the deployment-wide
-      // routes or the organization-scoped ones (otari#837). Answered first, and
-      // on an exact match, so it cannot shadow /v1/organizations/me/usage.
-      if (url.endsWith(`${API_ROOT}/organizations/me`)) {
-        return jsonResponse(organizationContext())
-      }
-      if (url.includes(`${API_ROOT}/usage/series`))
-        return jsonResponse({ detail: "Not Found" }, 404)
-      if (url.includes(`${API_ROOT}/usage/summary`))
-        return jsonResponse(summary())
-      return jsonResponse([])
+  describe("scope", () => {
+    it("tells a member they read their own usage, with no scope to pick", async () => {
+      const { calls } = mockUsageApi({ viewer: "member" })
+      page()
+      expect(await screen.findByText("Your usage")).toBeInTheDocument()
+      expect(screen.queryByRole("radiogroup", { name: "Scope" })).toBeNull()
+      await table()
+      // The server narrows a member's rows; the page asks for the workspace.
+      expect(lastBreakdown(calls).get("workspace_id")).toBe(WORKSPACE_ID)
+      expect(lastBreakdown(calls).getAll("user_id")).toEqual([])
     })
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
 
-    await pickOption(user, "Group by", "By model")
+    it("lets a manager narrow the workspace to their own usage", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockUsageApi({ viewer: "workspaceAdmin" })
+      page()
+      const scope = await screen.findByRole("radiogroup", { name: "Scope" })
+      expect(
+        within(scope).queryByRole("radio", { name: "Organization" }),
+      ).toBeNull()
+      await user.click(within(scope).getByRole("radio", { name: "You" }))
+      await waitFor(() =>
+        expect(lastBreakdown(calls).getAll("user_id")).toEqual([OWN_USER_ID]),
+      )
+      expect(pageUrl().textContent).toContain("scope=you")
+    })
 
-    expect(
-      await screen.findByText(/predates grouped series/),
-    ).toBeInTheDocument()
-    expect(screen.queryByText("Not Found")).not.toBeInTheDocument()
-    // The ungrouped single-series chart is still up (its caption renders).
-    expect(screen.getByText(/peak/)).toBeInTheDocument()
+    it("reads the organization across its workspaces, broken down by workspace", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockUsageApi({ viewer: "owner" })
+      page()
+      await user.click(
+        await screen.findByRole("radio", { name: "Organization" }),
+      )
+      await waitFor(() =>
+        expect(lastBreakdown(calls).getAll("dimensions")).toContain(
+          "workspace",
+        ),
+      )
+      const summaries = calls.filter((call) =>
+        call.url.includes("/organizations/me/usage/summary"),
+      )
+      expect(summaries.length).toBeGreaterThan(0)
+      expect(lastBreakdown(calls).get("workspace_id")).toBeNull()
+      expect(await rowNamed(/Research/)).toBeInTheDocument()
+    })
+
+    it("opens a workspace's requests in Activity with that workspace named", async () => {
+      const user = userEvent.setup()
+      mockUsageApi({ viewer: "owner" })
+      page("/usage?scope=organization")
+      await user.click(await rowNamed(/Research/))
+      const location = await screen.findByRole("status", {
+        name: "Current location",
+      })
+      expect(location.textContent).toContain("workspace=ws-2")
+    })
+
+    it("keeps a filter the scope cannot use in the URL, greyed, and does not send it", async () => {
+      const { calls } = mockUsageApi({ viewer: "workspaceAdmin" })
+      page("/usage?scope=you&user_id=u-jordan")
+      expect(await screen.findByText("not in this scope")).toBeInTheDocument()
+      await table()
+      expect(lastBreakdown(calls).getAll("user_id")).toEqual([OWN_USER_ID])
+      expect(pageUrl().textContent).toContain("user_id=u-jordan")
+    })
+
+    it("names a single workspace scope as the workspace's usage", async () => {
+      mockUsageApi({ viewer: "workspaceAdmin", hasOwnUserId: false })
+      page()
+      expect(await screen.findByText("Workspace usage")).toBeInTheDocument()
+      expect(screen.queryByText("Your usage")).toBeNull()
+      expect(screen.queryByRole("radiogroup", { name: "Scope" })).toBeNull()
+    })
   })
 
-  it("stacks the billed token composition on the Tokens metric", async () => {
-    const user = userEvent.setup()
-    const base = summary()
-    mockApi(
-      summary({
-        series: base.series.map((p) => ({
-          ...p,
-          input_tokens: 3_000_000,
-          cache_read_tokens: 2_000_000,
-          cache_write_tokens: 500_000,
-          output_tokens: 400_000,
-        })),
-      }),
-    )
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
+  describe("the breakdown", () => {
+    it("drives the summary, its p95 and the chart's series from one choice", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockUsageApi({ viewer: "workspaceAdmin" })
+      page()
+      // A manager's workspace view leads with Member.
+      await waitFor(() =>
+        expect(lastBreakdown(calls).get("p95_by")).toBe("user"),
+      )
+      await user.click(screen.getByRole("button", { name: "Model" }))
+      await waitFor(() =>
+        expect(lastBreakdown(calls).get("p95_by")).toBe("model"),
+      )
+      // Only the breakdown on screen and the tools under it: each dimension is
+      // a GROUP BY over the window.
+      expect(lastBreakdown(calls).getAll("dimensions")).toEqual([
+        "model",
+        "tool",
+      ])
+      expect(lastBreakdown(calls).get("session_details")).toBeNull()
+      expect(usageReads(calls, "series").at(-1)?.get("group_by")).toBe("model")
+      expect(pageUrl().textContent).toContain("by=model")
+    })
 
-    await user.click(screen.getByRole("button", { name: "Tokens" }))
+    it("offers the rest of the breakdowns under More", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockUsageApi({ viewer: "member" })
+      page()
+      await table()
+      await user.click(screen.getByRole("button", { name: "More breakdowns" }))
+      await user.click(
+        await screen.findByRole("menuitemradio", { name: "Policy" }),
+      )
+      await waitFor(() =>
+        expect(lastBreakdown(calls).get("p95_by")).toBe("policy"),
+      )
+      expect(
+        screen.getByRole("button", { name: "More breakdowns, Policy" }),
+      ).toBeInTheDocument()
+    })
 
-    // The four billed buckets are legended: the same encoding as the Activity
-    // page's per-row token bar.
-    expect(await screen.findByText("Fresh input")).toBeInTheDocument()
-    expect(screen.getByText("Cache read")).toBeInTheDocument()
-    expect(screen.getByText("Cache write")).toBeInTheDocument()
-    expect(screen.getByText("Output")).toBeInTheDocument()
-  })
+    it("shows every column, a cut-down provider path and the p95", async () => {
+      mockUsageApi({ viewer: "member" })
+      page()
+      const row = await rowNamed(/deepseek-v4-flash/)
+      expect(within(row).getByText("fireworks/")).toBeInTheDocument()
+      expect(within(row).getByText("1.85 s")).toBeInTheDocument()
+      expect(within(row).getByText("$28.61")).toBeInTheDocument()
+      const opus = await rowNamed("claude-opus-5-5")
+      expect(within(opus).getByText("$22.40")).toBeInTheDocument()
+      expect(within(opus).getByText("$1,101.35")).toBeInTheDocument()
+      expect(within(opus).getByText("98% cached")).toBeInTheDocument()
+    })
 
-  it("splits requests into succeeded and failed when the window has errors", async () => {
-    const user = userEvent.setup()
-    const base = summary()
-    mockApi(
-      summary({ series: base.series.map((p) => ({ ...p, errors: 100 })) }),
-    )
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
+    it("pins the rows with no value last, explained", async () => {
+      const { calls } = mockUsageApi({ viewer: "member" })
+      page("/usage?by=session")
+      await rowNamed(/No session/)
+      // A session's origin is asked for only where sessions are on screen.
+      expect(lastBreakdown(calls).get("session_details")).toBe("true")
+      const names = within(await table())
+        .getAllByRole("rowheader")
+        .map((cell) => cell.textContent)
+      expect(names.at(-1)).toContain("No session")
+      expect(names.at(-1)).toContain("Requests sent without a session ID")
+      expect(names[0]).toContain("4e498676")
+      expect(names[0]).toContain("Claude Code")
+    })
 
-    await user.click(screen.getByRole("button", { name: "Requests" }))
+    it("sorts by a header, reverses it, then returns to the share", async () => {
+      const user = userEvent.setup()
+      mockUsageApi({ viewer: "member" })
+      page()
+      const grid = await table()
+      const header = within(grid).getByRole("columnheader", {
+        name: /Requests/,
+      })
+      await user.click(header)
+      expect(pageUrl().textContent).toContain("sort=requests")
+      const first = () =>
+        within(grid).getAllByRole("rowheader")[0].textContent ?? ""
+      expect(first()).toContain("claude-opus-5-5")
+      await user.click(header)
+      expect(pageUrl().textContent).toContain("order=asc")
+      expect(first()).toContain("claude-haiku-4-5")
+      await user.click(header)
+      expect(pageUrl().textContent).not.toContain("sort=")
+    })
 
-    expect(await screen.findByText("Failed")).toBeInTheDocument()
-    expect(screen.getByText("Succeeded")).toBeInTheDocument()
-  })
+    it("defines the money columns and the p95 under the table, and a subscription figure on its cell", async () => {
+      const user = userEvent.setup()
+      mockUsageApi({ viewer: "member" })
+      page()
+      const opus = await rowNamed("claude-opus-5-5")
+      expect(
+        screen.getByText(
+          "Billed counts toward limits · Subscription is priced at API rates, not billed · p95 latency: 95% of requests were faster",
+        ),
+      ).toBeVisible()
+      expect(
+        screen.getByRole("columnheader", { name: /^p95 Latency/ }),
+      ).toBeInTheDocument()
+      // A tooltip opens on hover once the pointer is known to be in use, which
+      // a first press is what tells react-aria.
+      await user.click(screen.getByRole("heading", { name: "Usage", level: 1 }))
+      await user.hover(within(opus).getByText("$1,101.35"))
+      expect(await screen.findByRole("tooltip")).toHaveTextContent(
+        "$1,101.35 at API prices, covered by subscription",
+      )
+      // A header is one control: it sorts, and nothing inside it is a button.
+      const billed = within(await table()).getByRole("columnheader", {
+        name: /Billed/,
+      })
+      expect(within(billed).queryByRole("button")).toBeNull()
+      await user.click(billed)
+      expect(pageUrl().textContent).toContain("sort=billed")
+    })
 
-  it("queries the previous period with a bounded end_date for deltas", async () => {
-    const fetchMock = mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("gpt-5.6")
+    it("never shows the last breakdown's rows or series while the next one loads", async () => {
+      const user = userEvent.setup()
+      let releaseSummary = () => {}
+      let releaseSeries = () => {}
+      const summaryHeld = new Promise<void>((resolve) => {
+        releaseSummary = resolve
+      })
+      const seriesHeld = new Promise<void>((resolve) => {
+        releaseSeries = resolve
+      })
+      mockUsageApi({
+        viewer: "workspaceAdmin",
+        hold: (kind, params) => {
+          if (kind === "summary" && params.get("p95_by") === "model") {
+            return summaryHeld
+          }
+          if (kind === "series" && params.get("group_by") === "model") {
+            return seriesHeld
+          }
+          return undefined
+        },
+      })
+      page()
+      await rowNamed(/Jordan M\./)
+      const chart = await screen.findByRole("slider", {
+        name: /Filter by date/,
+      })
+      chart.focus()
+      await user.keyboard("{ArrowRight}")
+      // The keyboard's cursor reads its bar out as a pointer would.
+      expect(within(await readout()).getByText("Jordan M.")).toBeInTheDocument()
 
-    const summaryCalls = fetchMock.mock.calls
-      .map(([u]) => String(u))
-      .filter((u) => u.includes("/usage/summary"))
-    // The default 30d preset fires a current window (no end_date, "up to now")
-    // and a previous window whose end_date is pinned so it does not overlap.
-    expect(summaryCalls.some((u) => u.includes("end_date="))).toBe(true)
-    expect(summaryCalls.some((u) => !u.includes("end_date="))).toBe(true)
-  })
+      await user.click(screen.getByRole("button", { name: "Model" }))
+      expect(screen.queryAllByText("Jordan M.")).toHaveLength(0)
+      // Nor the last answer's model rows, which it never asked for, read as
+      // none; its totals are the window's, and hold.
+      expect(screen.queryByText(/No usage in this window/)).toBeNull()
+      expect(screen.getByText("$1,215.07")).toBeInTheDocument()
 
-  it("renders period-over-period change as a trend chip, not a glyph", async () => {
-    mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
+      releaseSummary()
+      await rowNamed("claude-opus-5-5")
+      screen.getByRole("slider", { name: /Filter by date/ }).focus()
+      await user.keyboard("{ArrowRight}")
+      // The members' series are not drawn under Model while its own load.
+      const swatches = (await readout()).querySelectorAll("[aria-hidden]")
+      expect(swatches).toHaveLength(0)
 
-    // The chip carries the caption the old plain-text hint carried, so the
-    // comparison still says what it is being compared against.
-    expect(screen.getAllByText(/vs prev/).length).toBeGreaterThan(0)
-    // And it announces a direction, which the glyph never did: "▲" is
-    // decoration a screen reader skips. TrendChip.test.tsx owns the direction
-    // and polarity mapping; this only asserts the tiles go through it.
-    // Anchored, and counted. Unanchored, `up` also matches the page's own
-    // description and the "No grouping" option, so the assertion would pass with
-    // the announcement deleted. The count is the four tiles that have a delta,
-    // less cache hit rate, which this fixture gives no input-token composition
-    // to divide by.
-    expect(
-      screen.getAllByText(/^(no change|up|down)(, (better|worse))?$/),
-    ).toHaveLength(3)
-    // The hand-rolled arrow glyphs are gone from the tiles.
-    expect(screen.queryByText(/[▲▼]/)).not.toBeInTheDocument()
-  })
+      releaseSeries()
+      await waitFor(async () =>
+        expect(
+          within(await readout()).getByText("claude-opus-5-5"),
+        ).toBeInTheDocument(),
+      )
+    })
 
-  it("reads a chip against the metric's own polarity, not the direction alone", async () => {
-    // Spend rose from 827.00 to 1,240.50, a 50% rise. On `down-is-good` that is
-    // the regression, so the chip is a danger chip and says so: direction plus
-    // judgment, because polarity puts good and bad in hue alone.
-    mockApi(
-      summary(),
-      {},
-      summary({
-        totals: usageTotals({
-          cost: 827,
-          request_count: 42_000,
-          billed_input_tokens: 4_000_000,
-          billed_output_tokens: 2_200_000,
+    it("asks the server to rank by the metric on screen", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockUsageApi({ viewer: "member" })
+      page()
+      await table()
+      const ranks = () => [
+        lastBreakdown(calls).get("rank_by"),
+        usageReads(calls, "series").at(-1)?.get("rank_by"),
+      ]
+      expect(ranks()).toEqual(["cost", "cost"])
+      await user.click(
+        screen.getByRole("checkbox", { name: "Include subscription" }),
+      )
+      await waitFor(() => expect(ranks()).toEqual(["billed", "billed"]))
+      await user.click(screen.getByRole("radio", { name: "Tokens" }))
+      await waitFor(() => expect(ranks()).toEqual(["tokens", "tokens"]))
+      // Subscription is a cost setting: it changes nothing off cost.
+      expect(
+        screen.queryByRole("checkbox", { name: "Include subscription" }),
+      ).toBeNull()
+      await user.click(screen.getByRole("radio", { name: "Requests" }))
+      await waitFor(() => expect(ranks()).toEqual(["requests", "requests"]))
+    })
+
+    it("cannot open a row with no value in Activity, which has no filter for it", async () => {
+      const user = userEvent.setup()
+      mockUsageApi({ viewer: "member" })
+      page("/usage?by=key")
+      const none = await rowNamed(/^No API key/)
+      const named = await rowNamed("research-app")
+      expect(none.querySelector("svg[aria-hidden]")).toBeNull()
+      expect(named.querySelector("svg[aria-hidden]")).not.toBeNull()
+      await user.click(none)
+      expect(
+        screen.queryByRole("status", { name: "Current location" }),
+      ).toBeNull()
+    })
+
+    it("leaves a channel out by its name", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockUsageApi({ viewer: "member" })
+      page("/usage?by=channel")
+      const row = await rowNamed(/^API/)
+      await user.click(
+        within(row).getByRole("button", { name: "Filter by API" }),
+      )
+      await user.click(
+        await screen.findByRole("menuitem", { name: "Exclude API" }),
+      )
+      await waitFor(() =>
+        expect(lastBreakdown(calls).getAll("exclude_channel")).toEqual(["api"]),
+      )
+      expect(pageUrl().textContent).toContain("exclude_channel=api")
+      expect(screen.getByText("Channel is not:")).toBeInTheDocument()
+    })
+
+    it("leaves a value out from its own cell", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockUsageApi({ viewer: "member" })
+      page()
+      const row = await rowNamed("claude-haiku-4-5")
+      await user.click(
+        within(row).getByRole("button", { name: "Filter by claude-haiku-4-5" }),
+      )
+      await user.click(
+        await screen.findByRole("menuitem", {
+          name: "Exclude claude-haiku-4-5",
         }),
-      }),
-    )
-    renderPage(<UsagePage />)
+      )
+      await waitFor(() =>
+        expect(lastBreakdown(calls).getAll("exclude_model")).toEqual([
+          "claude-haiku-4-5",
+        ]),
+      )
+      expect(screen.getByText("Model is not:")).toBeInTheDocument()
+      expect(screen.getByText("Also applied in Activity")).toBeInTheDocument()
+    })
 
-    expect(await screen.findByText("up, worse")).toBeInTheDocument()
-    expect(screen.getByText("+50.0% vs prev")).toBeInTheDocument()
-    // Requests doubled too, but volume carries no polarity, so it announces the
-    // direction and nothing more.
-    expect(screen.getAllByText("up").length).toBeGreaterThan(0)
+    it("opens a row's requests in Activity, with the window", async () => {
+      const user = userEvent.setup()
+      mockUsageApi({ viewer: "member" })
+      page()
+      await user.click(await rowNamed("claude-haiku-4-5"))
+      const location = await screen.findByRole("status", {
+        name: "Current location",
+      })
+      expect(location.textContent).toContain("model=claude-haiku-4-5")
+      expect(location.textContent).toContain("start_date=")
+    })
+
+    it("asks the server for a channel by its name, and carries it into Activity", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockUsageApi({ viewer: "member" })
+      page("/usage?channel=api")
+      await waitFor(() =>
+        expect(lastBreakdown(calls).getAll("channel")).toEqual(["api"]),
+      )
+      expect(lastBreakdown(calls).get("source")).toBeNull()
+      expect(screen.getByText("Channel:")).toBeInTheDocument()
+
+      await user.click(await rowNamed("claude-haiku-4-5"))
+      const location = await screen.findByRole("status", {
+        name: "Current location",
+      })
+      expect(location.textContent).toContain("channel=api")
+    })
+
+    it("leaves subscription usage out of the cost when asked", async () => {
+      const user = userEvent.setup()
+      mockUsageApi({ viewer: "member" })
+      page()
+      const share = async () =>
+        within(await rowNamed("claude-opus-5-5")).getByText(/^\d+%$/)
+          .textContent
+      // $1,123.75 of $1,165.78 with subscription; $22.40 of $64.43 billed.
+      expect(await share()).toBe("96%")
+      await user.click(
+        screen.getByRole("checkbox", { name: "Include subscription" }),
+      )
+      expect(pageUrl().textContent).toContain("subscription=exclude")
+      await waitFor(async () => expect(await share()).toBe("35%"))
+    })
   })
 
-  it("lists spend by model with a reconciling 'other' fold row", async () => {
-    mockApi(summary())
-    renderPage(<UsagePage />)
-
-    expect(await screen.findByText("gpt-5.6")).toBeInTheDocument()
-    expect(screen.getByText("claude-sonnet-5")).toBeInTheDocument()
-    // The null-key fold row renders as an "Other" summary, not a blank row.
-    expect(screen.getByText(/Other \(14,000 req\)/)).toBeInTheDocument()
+  describe("the chart", () => {
+    it("narrows the page to a stretch of the window from the keyboard", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockUsageApi({ viewer: "member" })
+      page()
+      const chart = await screen.findByRole("slider", {
+        name: /Filter by date/,
+      })
+      chart.focus()
+      await user.keyboard("{ArrowLeft}{Enter}")
+      await waitFor(() => expect(pageUrl().textContent).toContain("end_date="))
+      expect(screen.getByText("Date:")).toBeInTheDocument()
+      await waitFor(() =>
+        expect(lastBreakdown(calls).get("end_date")).not.toBeNull(),
+      )
+    })
   })
 
-  it("drills into the Activity log filtered on the clicked model", async () => {
+  describe("gateway-run tools", () => {
+    it("says a tool with no price has none, and lets an operator set one", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockUsageApi({ viewer: "operator" })
+      page()
+      expect(
+        await screen.findByText(/no per-call price set/),
+      ).toBeInTheDocument()
+      await user.click(screen.getByRole("button", { name: "Set" }))
+      await user.type(await screen.findByLabelText("USD per call"), "0.01")
+      await user.click(screen.getByRole("button", { name: "Set price" }))
+      await waitFor(() =>
+        expect(
+          calls.find(
+            (call) => call.method === "POST" && call.url.includes("/pricing"),
+          )?.body,
+        ).toBeDefined(),
+      )
+      const body = JSON.parse(
+        calls.find(
+          (call) => call.method === "POST" && call.url.includes("/pricing"),
+        )?.body ?? "{}",
+      )
+      expect(body).toEqual({
+        model_key: "otari:web_search",
+        input_price_per_million: 10_000,
+        output_price_per_million: 0,
+        unit: "requests",
+      })
+    })
+
+    it("offers no price to set to anyone but an operator", async () => {
+      mockUsageApi({ viewer: "member" })
+      page()
+      expect(
+        await screen.findByText(/no per-call price set/),
+      ).toBeInTheDocument()
+      expect(screen.queryByRole("button", { name: "Set" })).toBeNull()
+    })
+  })
+
+  describe("saved views", () => {
+    it("applies a built-in view", async () => {
+      const user = userEvent.setup()
+      mockUsageApi({ viewer: "member" })
+      page()
+      await table()
+      await user.click(
+        screen.getByRole("button", { name: /Saved views|Views/ }),
+      )
+      expect(
+        await screen.findByText("Imported usage, such as Claude Code"),
+      ).toBeInTheDocument()
+      await user.click(
+        await screen.findByRole("menuitemradio", { name: "Spend by API key" }),
+      )
+      await waitFor(() => expect(pageUrl().textContent).toContain("by=key"))
+      expect(await rowNamed("research-app")).toBeInTheDocument()
+      expect(await rowNamed(/^No API key/)).toBeInTheDocument()
+    })
+
+    it("saves the current view as a Usage view", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockUsageApi({ viewer: "member" })
+      page("/usage?by=key&metric=tokens")
+      await table()
+      await user.click(screen.getByRole("button", { name: /Saved views/ }))
+      await user.click(
+        await screen.findByRole("menuitem", { name: "Save current view…" }),
+      )
+      await user.type(screen.getByLabelText("View name"), "Key tokens")
+      await user.click(screen.getByRole("button", { name: "Save" }))
+      await waitFor(() => {
+        const write = calls.find(
+          (call) => call.url.includes("/saved-views") && call.method === "POST",
+        )
+        expect(JSON.parse(write?.body ?? "{}")).toMatchObject({
+          page: "usage",
+          name: "Key tokens",
+        })
+      })
+    })
+  })
+
+  it("says a gateway with no usage has none yet", async () => {
+    mockUsageApi({
+      viewer: "member",
+      summary: breakdownSummary(
+        { by_model: [], series: [], by_tool: [] },
+        { cost: 0, imported_cost: 0, request_count: 0, error_count: 0 },
+      ),
+    })
+    page()
+    expect(await screen.findByText(/No usage recorded yet/)).toBeInTheDocument()
+  })
+
+  it("explains an empty filtered table and clears back", async () => {
     const user = userEvent.setup()
-    mockApi(summary())
-    renderPage(<UsagePage />)
-
-    const row = (await screen.findByText("gpt-5.6")).closest("tr")!
-    await user.click(row)
-
-    const loc =
-      screen.getByRole("status", { name: "Current location" }).textContent ?? ""
-    expect(loc.startsWith("/activity")).toBe(true)
-    expect(loc).toContain("model=gpt-5.6")
-  })
-
-  it("keeps an active user filter when drilling into a model", async () => {
-    const user = userEvent.setup()
-    mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("gpt-5.6")
-
-    // Filter by a user, then drill into a model row. The user constraint must
-    // survive the navigation, not be dropped in favor of only the clicked model.
-    const userInput = screen.getByRole("combobox", { name: "User" })
-    await user.click(userInput)
-    await user.type(userInput, "alice")
-    await user.click(await screen.findByRole("option", { name: /alice/ }))
-
-    const row = (await screen.findByText("gpt-5.6")).closest("tr")!
-    await user.click(row)
-
-    const loc =
-      screen.getByRole("status", { name: "Current location" }).textContent ?? ""
-    expect(loc.startsWith("/activity")).toBe(true)
-    expect(loc).toContain("model=gpt-5.6")
-    expect(loc).toContain("user_id=alice")
-  })
-
-  it("keeps an active model filter when drilling into a user", async () => {
-    const user = userEvent.setup()
-    mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("gpt-5.6")
-
-    // Filter by a model, then drill into a user row (on the User breakdown
-    // tab). The model constraint must survive the navigation, not be dropped
-    // in favor of only the clicked user.
-    const modelInput = screen.getByRole("combobox", { name: "Model" })
-    await user.click(modelInput)
-    await user.type(modelInput, "gpt")
-    await user.click(await screen.findByRole("option", { name: /gpt-5.6/ }))
-    // The picker stays open on the remaining models (it takes several), so dismiss
-    // it before reaching the page behind the overlay.
-    await user.keyboard("{Escape}")
-
-    await user.click(screen.getByRole("button", { name: "User" }))
-    // The row reads as the name, not the billing id; the id is still what the
-    // drill-down filters on.
-    const row = (await screen.findByText("Alice")).closest("tr")!
-    await user.click(row)
-
-    const loc =
-      screen.getByRole("status", { name: "Current location" }).textContent ?? ""
-    expect(loc.startsWith("/activity")).toBe(true)
-    expect(loc).toContain("user_id=alice")
-    expect(loc).toContain("model=gpt-5.6")
-  })
-
-  it("names the person in the user breakdown instead of their billing id", async () => {
-    const user = userEvent.setup()
-    mockApi(
-      summary({
-        by_user: [
-          {
-            key: "81e24d08-7d1e-4287-a074-54aa57d9debc",
-            label: "Alice Example",
-            cost: 900.5,
-            tokens: 8_000_000,
-            requests: 50_000,
-            is_other: false,
-            imported_cost: 0,
-            error_count: 0,
-            cache_read_tokens: 0,
-          },
-        ],
-      }),
-    )
-    renderPage(<UsagePage />)
-    await screen.findByText("gpt-5.6")
-
-    await user.click(screen.getByRole("button", { name: "User" }))
-    const cell = await screen.findByText("Alice Example")
-    // The id is still there to hover, because two people can share a name.
-    expect(cell).toHaveAttribute(
-      "title",
-      "81e24d08-7d1e-4287-a074-54aa57d9debc",
-    )
+    mockUsageApi({
+      viewer: "member",
+      summary: breakdownSummary({ by_model: [] }),
+    })
+    page("/usage?exclude_model=claude-opus-5-5")
     expect(
-      screen.queryByText("81e24d08-7d1e-4287-a074-54aa57d9debc"),
-    ).not.toBeInTheDocument()
+      await screen.findByText(/Nothing matches these filters/),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Clear filters" }))
+    expect(pageUrl().textContent).not.toContain("exclude_model")
   })
 
-  it("prefers the organization roster's name to the alias the log carries", async () => {
-    const user = userEvent.setup()
-    mockApi(summary(), {
-      "/organizations/me/members": {
-        data: [
-          organizationMember({
-            attribution_user_id: "alice",
-            full_name: "Alice Example",
+  it("marks a row whose every dollar is subscription usage", async () => {
+    mockUsageApi({
+      viewer: "member",
+      summary: breakdownSummary({
+        by_model: [
+          breakdownRow({
+            key: "claude-opus-5-5",
+            cost: 10,
+            imported_cost: 10,
+            requests: 1,
           }),
         ],
-        total: 1,
-      },
+      }),
     })
-    renderPage(<UsagePage />)
-    await screen.findByText("gpt-5.6")
-
-    await user.click(screen.getByRole("button", { name: "User" }))
-    expect(await screen.findByText("Alice Example")).toBeInTheDocument()
-    // "Alice" is the alias the summary shipped; the roster outranks it.
-    expect(screen.queryByText("Alice")).not.toBeInTheDocument()
-  })
-
-  it("leaves a dimension that is already its own name alone", async () => {
-    mockApi(summary())
-    renderPage(<UsagePage />)
-
-    // A model carries no server label, so the cell is the key itself and gains
-    // no title to hover.
-    expect(await screen.findByText("gpt-5.6")).not.toHaveAttribute("title")
-  })
-
-  it("keeps an active API key filter when drilling into a model", async () => {
-    const user = userEvent.setup()
-    mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("gpt-5.6")
-
-    // Filter by an API key, then drill into a model row. The key constraint must
-    // survive the navigation alongside the clicked model.
-    await user.click(screen.getByPlaceholderText("All keys"))
-    await user.click(await screen.findByRole("option", { name: "ci-bot" }))
-
-    const row = (await screen.findByText("gpt-5.6")).closest("tr")!
-    await user.click(row)
-
-    const loc =
-      screen.getByRole("status", { name: "Current location" }).textContent ?? ""
-    expect(loc.startsWith("/activity")).toBe(true)
-    expect(loc).toContain("model=gpt-5.6")
-    expect(loc).toContain("api_key_id=key-1")
-  })
-
-  it("shows the session breakdown by default, labelling unlabelled gateway traffic", async () => {
-    mockApi(summary())
-    renderPage(<UsagePage />)
-
-    // Session is the default secondary dimension: it is what names the work
-    // behind a bill for agent traffic.
-    expect(await screen.findByText("project:otari")).toBeInTheDocument()
-    expect(screen.getByText("Spend by session")).toBeInTheDocument()
-    expect(screen.getByText("project:docs")).toBeInTheDocument()
-    // Gateway rows carry no label. That is a real group, not the "other" fold,
-    // so it must not read as unknown/missing data.
-    expect(screen.getByText("(no session)")).toBeInTheDocument()
-  })
-
-  it("marks the active dimension button as pressed", async () => {
-    // The picker's selected state cannot ride on the button variant alone: to
-    // assistive tech that is four identically-named buttons with no indication of
-    // which dimension the table below is showing.
-    const user = userEvent.setup()
-    mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("project:otari")
-
-    expect(screen.getByRole("button", { name: "Session" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    )
-    expect(screen.getByRole("button", { name: "Provider" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    )
-
-    await user.click(screen.getByRole("button", { name: "Provider" }))
-    expect(screen.getByRole("button", { name: "Provider" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    )
-    expect(screen.getByRole("button", { name: "Session" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    )
-  })
-
-  it("asks the summary endpoint only for the breakdowns the page renders", async () => {
-    // Each breakdown is its own GROUP BY over the window. The page renders model,
-    // user, and the four picker dimensions; the previous-period and timeline-context
-    // reads use only totals/series, so they must opt out of all of them.
-    const fetchMock = mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("project:otari")
-
-    const summaryCalls = fetchMock.mock.calls
-      .map(([u]) => String(u))
-      .filter((u) => u.includes(`${API_ROOT}/usage/summary`))
-    const main = summaryCalls.find(
-      (u) => u.includes("dimensions=model") && u.includes("dimensions=user"),
-    )
-    expect(main).toBeDefined()
-    expect(main).toContain("dimensions=source_label")
-    expect(main).toContain("dimensions=provider")
-    // No table breaks spend down by API key; the key picker reads it from here.
-    expect(main).toContain("dimensions=api_key")
-    expect(summaryCalls.some((u) => u.includes("dimensions=none"))).toBe(true)
-    // With no filter set the pickers read the page summary, so neither sends one
-    // of its own.
-    expect(summaryCalls).toHaveLength(2)
-  })
-
-  it("gives a picker its own summary only while its own filter is set", async () => {
-    const fetchMock = mockApi(summary())
-    const user = userEvent.setup()
-    renderPage(<UsagePage />)
-    await screen.findByText("gpt-5.6")
-
-    const modelInput = screen.getByRole("combobox", { name: "Model" })
-    await user.click(modelInput)
-    await user.type(modelInput, "claude")
-    await user.click(
-      await screen.findByRole("option", { name: /claude-sonnet-5/ }),
-    )
-
-    await waitFor(() => {
-      const modelOnly = fetchMock.mock.calls
-        .map(([u]) => String(u))
-        .filter((u) => u.includes("/usage/summary"))
-        .filter(
-          (u) =>
-            new URL(u, "http://x").searchParams.getAll("dimensions").join() ===
-            "model",
-        )
-      // The model picker drops its own filter, so it keeps offering the others.
-      expect(modelOnly).toHaveLength(1)
-      expect(modelOnly[0]).not.toContain("model=claude-sonnet-5")
-    })
-  })
-
-  it("keeps the user options and chip label while the picker's own summary loads", async () => {
-    // The first pick moves the entity picker onto a summary of its own. Until that
-    // lands it has to keep showing the page summary it just read from, or the chip
-    // falls back to the raw id and the picker offers nothing.
-    let holdEntity = false
-    const fetchMock = mockApi(summary())
-    const answer = fetchMock.getMockImplementation()!
-    fetchMock.mockImplementation(async (input, init) => {
-      const url = String(input)
-      const dims = new URL(url, "http://x").searchParams.getAll("dimensions")
-      if (holdEntity && dims.join() === "user,api_key") {
-        return new Promise<Response>(() => {})
-      }
-      return answer(input, init)
-    })
-    const user = userEvent.setup()
-    renderPage(<UsagePage />)
-    await screen.findByText("gpt-5.6")
-    holdEntity = true
-
-    const userInput = screen.getByRole("combobox", { name: "User" })
-    await user.click(userInput)
-    await user.type(userInput, "alice")
-    await user.click(await screen.findByRole("option", { name: /alice/ }))
-
-    expect(
-      screen.getByLabelText("Remove User filter Alice (alice)"),
-    ).toBeInTheDocument()
-    await user.click(userInput)
-    expect(
-      await screen.findByRole("option", { name: /Bob/ }),
-    ).toBeInTheDocument()
-  })
-
-  it("switches the secondary breakdown between session, endpoint, provider, and source", async () => {
-    const user = userEvent.setup()
-    mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("project:otari")
-
-    await user.click(screen.getByRole("button", { name: "Provider" }))
-    expect(screen.getByText("Spend by provider")).toBeInTheDocument()
-    expect(screen.getByText("anthropic")).toBeInTheDocument()
-    expect(screen.queryByText("project:otari")).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole("button", { name: "Endpoint" }))
-    expect(screen.getByText("/v1/chat/completions")).toBeInTheDocument()
-
-    // by_source is computed and shipped by the server; it now has a home in the UI.
-    await user.click(screen.getByRole("button", { name: "Source" }))
-    expect(screen.getByText("claude_code")).toBeInTheDocument()
-  })
-
-  it("drills into the Activity log scoped to the clicked session", async () => {
-    const user = userEvent.setup()
-    mockApi(summary())
-    renderPage(<UsagePage />)
-
-    const row = (await screen.findByText("project:otari")).closest("tr")!
-    await user.click(row)
-
-    const loc =
-      screen.getByRole("status", { name: "Current location" }).textContent ?? ""
-    expect(loc.startsWith("/activity")).toBe(true)
-    expect(loc).toContain("source_label=project%3Aotari")
-  })
-
-  it("drills into the Activity log scoped to the clicked provider", async () => {
-    const user = userEvent.setup()
-    mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("project:otari")
-
-    await user.click(screen.getByRole("button", { name: "Provider" }))
-    const row = screen.getByText("anthropic").closest("tr")!
-    await user.click(row)
-
-    const loc =
-      screen.getByRole("status", { name: "Current location" }).textContent ?? ""
-    expect(loc).toContain("provider=anthropic")
-  })
-
-  it("does not drill on the unlabelled-session row, which has no id to filter on", async () => {
-    const user = userEvent.setup()
-    mockApi(summary())
-    renderPage(<UsagePage />)
-
-    const row = (await screen.findByText("(no session)")).closest("tr")!
-    await user.click(row)
-
-    // Still on the Usage page: a null key cannot scope the request log.
-    expect(
-      screen.queryByRole("status", { name: "Current location" }),
-    ).not.toBeInTheDocument()
-  })
-
-  it("filters models by typeahead and commits the exact picked model", async () => {
-    const fetchMock = mockApi(summary())
-    const user = userEvent.setup()
-    renderPage(<UsagePage />)
-    await screen.findByText("gpt-5.6")
-
-    // The model box is a typeahead sourced from the in-window models, not a
-    // free-text exact-match input.
-    const modelInput = screen.getByRole("combobox", { name: "Model" })
-    await user.click(modelInput)
-    await user.type(modelInput, "claude")
-    await user.click(
-      await screen.findByRole("option", { name: /claude-sonnet-5/ }),
-    )
-
-    const pageSummaryCalls = fetchMock.mock.calls
-      .map(([u]) => String(u))
-      .filter(
-        (u) =>
-          u.includes("/usage/summary") && u.includes("dimensions=source_label"),
-      )
-    expect(pageSummaryCalls.at(-1)).toContain("model=claude-sonnet-5")
-  })
-
-  it("renders the trend with recharts and retires the hand-rolled SVG chart", async () => {
-    mockApi(summary())
-    const { container } = renderPage(<UsagePage />)
-    await screen.findByText("gpt-5.6")
-
-    // The trend is now a recharts chart (labeled "<metric> per <bucket>"; a
-    // group, not an image, since it owns drag selection), and a reusable
-    // sparkline rides the KPI tiles off the same bucketed series.
-    expect(
-      screen.getByRole("group", { name: "cost per day" }),
-    ).toBeInTheDocument()
-    expect(screen.getByRole("img", { name: /Spend trend/ })).toBeInTheDocument()
-    expect(container.querySelector(".recharts-surface")).not.toBeNull()
-
-    // The retired hand-rolled chart's fingerprints are gone: its "<metric> over
-    // time" label and its fixed 720x224 viewBox.
-    expect(
-      screen.queryByRole("img", { name: /over time/ }),
-    ).not.toBeInTheDocument()
-    // Presence selector plus a value check: jsdom does not match a camelCase
-    // SVG attribute by value, so `svg[viewBox="0 0 720 224"]` would pass here
-    // whether or not the retired chart was still rendered.
-    expect(
-      [...container.querySelectorAll("svg[viewBox]")].map((svg) =>
-        svg.getAttribute("viewBox"),
-      ),
-    ).not.toContain("0 0 720 224")
-  })
-
-  it("switches the chart metric via the segmented toggle", async () => {
-    const user = userEvent.setup()
-    mockApi(summary())
-    renderPage(<UsagePage />)
-
-    await screen.findByText("gpt-5.6")
-    // Default metric is Cost; the caption shows the peak in dollars.
-    expect(screen.getByText(/\$840\.50 peak/)).toBeInTheDocument()
-
-    await user.click(screen.getByRole("button", { name: "Requests" }))
-    expect(screen.getByText(/56,000 peak/)).toBeInTheDocument()
-  })
-
-  it("shows an onboarding empty state when the gateway has no usage", async () => {
-    mockApi(
-      summary({
-        totals: usageTotals(),
-        by_model: [],
-        by_user: [],
-        series: [],
-      }),
-    )
-    renderPage(<UsagePage />)
-
-    // The default 30d window is the baseline (not a user-applied filter), so an
-    // empty gateway reads as onboarding rather than "no rows match".
-    expect(await screen.findByText(/No usage yet/)).toBeInTheDocument()
-  })
-
-  it("no longer duplicates the Activity page's per-request table", async () => {
-    mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-
-    // The per-request table (and its bulk actions) lives on the Activity page;
-    // the breakdown rows drill there instead.
-    expect(screen.queryByText("Individual requests")).not.toBeInTheDocument()
-  })
-
-  it("hides the source dimension while only one source exists", async () => {
-    // A plain gateway: every row shares one source, so neither the breakdown
-    // tab nor the group-by option should surface provenance.
-    mockApi(
-      summary({
-        by_source: [
-          {
-            key: "gateway",
-            cost: 1240.5,
-            tokens: 12_400_000,
-            requests: 84_000,
-            is_other: false,
-            imported_cost: 0,
-            error_count: 0,
-            cache_read_tokens: 0,
-          },
-        ],
-      }),
-    )
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-
-    expect(
-      screen.queryByRole("button", { name: "Source" }),
-    ).not.toBeInTheDocument()
-    await userEvent.setup().click(selectTrigger("Group by"))
-    expect(
-      screen.queryByRole("option", { name: "By source" }),
-    ).not.toBeInTheDocument()
-  })
-
-  it("offers the source dimension once several sources exist", async () => {
-    mockApi(
-      summary({
-        by_source: [
-          {
-            key: "gateway",
-            cost: 900,
-            tokens: 9_000_000,
-            requests: 60_000,
-            is_other: false,
-            imported_cost: 0,
-            error_count: 0,
-            cache_read_tokens: 0,
-          },
-          {
-            key: "claude_code",
-            cost: 340.5,
-            tokens: 3_400_000,
-            requests: 24_000,
-            is_other: false,
-            imported_cost: 0,
-            error_count: 0,
-            cache_read_tokens: 0,
-          },
-        ],
-      }),
-    )
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-
-    expect(screen.getByRole("button", { name: "Source" })).toBeInTheDocument()
-    await userEvent.setup().click(selectTrigger("Group by"))
-    expect(
-      await screen.findByRole("option", { name: "By source" }),
-    ).toBeInTheDocument()
-  })
-
-  it("keeps the filter pickers behind an 'Add filter' toggle", async () => {
-    mockApi(summary())
-    const user = userEvent.setup()
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-
-    const toggle = screen.getByRole("button", { name: "Add filter" })
-    const region = document.getElementById(
-      toggle.getAttribute("aria-controls")!,
-    )!
-    // jsdom does not apply Tailwind's `.hidden`, so assert on the class the toggle
-    // flips (display:none collapsed, flex expanded) rather than computed visibility.
-    expect(toggle).toHaveAttribute("aria-expanded", "false")
-    expect(region.className).toContain("hidden")
-
-    await user.click(toggle)
-
-    expect(toggle).toHaveAttribute("aria-expanded", "true")
-    // classList, not className: `toContain` on the string is a substring match,
-    // so "flex" is satisfied by `flex-wrap` alone and "hidden" by
-    // `overflow-hidden`. Both are one edit away from being true here.
-    expect([...region.classList]).toContain("flex")
-    expect([...region.classList]).not.toContain("hidden")
-  })
-
-  it("surfaces an active filter as a removable chip", async () => {
-    mockApi(summary())
-    const user = userEvent.setup()
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-
-    // No entity filters yet, so no chips.
-    expect(
-      screen.queryByRole("button", { name: /Remove .* filter/ }),
-    ).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole("button", { name: "Add filter" }))
-    await user.click(screen.getByPlaceholderText("All keys"))
-    await user.click(await screen.findByRole("option", { name: "ci-bot" }))
-    // The picker stays open on the remaining keys; dismiss it to reach the chips.
-    await user.keyboard("{Escape}")
-
-    // The picked key shows as a chip whose remove control names the value: a
-    // dimension can hold several, so the label has to distinguish them.
-    expect(
-      await screen.findByRole("button", {
-        name: "Remove API key filter ci-bot",
-      }),
-    ).toBeInTheDocument()
-  })
-
-  it("filters the chart on several models at once", async () => {
-    const user = userEvent.setup()
-    const fetchMock = mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("gpt-5.6")
-
-    // A spend question is usually a comparison, so the picker accumulates values
-    // and sends them as repeated params (the endpoints match any of them).
-    const modelInput = screen.getByRole("combobox", { name: "Model" })
-    await user.click(modelInput)
-    await user.click(await screen.findByRole("option", { name: "gpt-5.6" }))
-    await user.click(
-      await screen.findByRole("option", { name: "claude-sonnet-5" }),
-    )
-
-    await vi.waitFor(() => {
-      const last = fetchMock.mock.calls
-        .map(([u]) => String(u))
-        .filter((u) => u.includes(`${API_ROOT}/usage/summary`))
-        .at(-1)
-      expect(last).toContain("model=gpt-5.6")
-      expect(last).toContain("model=claude-sonnet-5")
-    })
-
-    // Both picks carry their own chip, and removing one leaves the other applied.
-    await user.keyboard("{Escape}")
-    expect(
-      screen.getByRole("button", { name: "Remove Model filter gpt-5.6" }),
-    ).toBeInTheDocument()
-    await user.click(
-      screen.getByRole("button", {
-        name: "Remove Model filter claude-sonnet-5",
-      }),
-    )
-
-    expect(
-      screen.queryByRole("button", {
-        name: "Remove Model filter claude-sonnet-5",
-      }),
-    ).not.toBeInTheDocument()
-    expect(
-      screen.getByRole("button", { name: "Remove Model filter gpt-5.6" }),
-    ).toBeInTheDocument()
-  })
-
-  it("carries a whole multi-value filter into the request log", async () => {
-    const user = userEvent.setup()
-    mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("gpt-5.6")
-
-    // A two-user comparison travels as repeated params, so the log opens on exactly
-    // the traffic the chart was showing rather than on a wider or arbitrary slice.
-    const userInput = screen.getByRole("combobox", { name: "User" })
-    await user.click(userInput)
-    await user.click(await screen.findByRole("option", { name: /alice/ }))
-    await user.click(await screen.findByRole("option", { name: /bob/ }))
-    await user.keyboard("{Escape}")
-
-    const row = (await screen.findByText("gpt-5.6")).closest("tr")!
-    await user.click(row)
-
-    const loc =
-      screen.getByRole("status", { name: "Current location" }).textContent ?? ""
-    expect(loc).toContain("model=gpt-5.6")
-    expect(loc).toContain("user_id=alice")
-    expect(loc).toContain("user_id=bob")
-  })
-})
-
-// Every key the operator can list: one with traffic in the window (key-1, which
-// the summary's by_api_key carries), one named key with none, and one unnamed
-// key that reads by the visible part of its secret.
-const LISTED_KEYS = [
-  apiKey(),
-  apiKey({ id: "key-2", key_name: "nightly-batch" }),
-  apiKey({
-    id: "key-3",
-    key_name: null,
-    key_prefix: "gw-Zz9",
-    key_suffix: "Q1",
-  }),
-]
-
-// The page with the location beside it, so a test reads what the URL says
-// rather than inferring it from the requests.
-function renderWithLocation(url: string, scope?: "organization") {
-  return renderPage(
-    <>
-      <UsagePage scope={scope} />
-      <LocationProbe />
-    </>,
-    { url },
-  )
-}
-
-const currentLocation = () =>
-  screen.getByRole("status", { name: "Current location" }).textContent ?? ""
-
-describe("UsagePage filters in the URL", () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
-  it("applies the filters a link carries", async () => {
-    const fetchMock = mockApi(summary(), {
-      [`${API_ROOT}/keys`]: LISTED_KEYS,
-    })
-    renderWithLocation("/usage?api_key_id=key-1&model=gpt-5.6&model=o5")
-    await screen.findByText("$1,240.50")
-
-    const main = fetchMock.mock.calls
-      .map(([u]) => String(u))
-      .filter((u) => u.includes(`${API_ROOT}/usage/summary`))
-      .find((u) => u.includes("api_key_id=key-1"))
-    expect(main).toContain("model=gpt-5.6")
-    expect(main).toContain("model=o5")
-    expect(
-      screen.getByRole("button", { name: "Remove API key filter ci-bot" }),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole("button", { name: "Remove Model filter o5" }),
-    ).toBeInTheDocument()
-  })
-
-  it("writes a pick to the URL, so a reload keeps it", async () => {
-    mockApi(summary(), { [`${API_ROOT}/keys`]: LISTED_KEYS })
-    const user = userEvent.setup()
-    const first = renderWithLocation("/usage")
-    await screen.findByText("$1,240.50")
-
-    await user.click(screen.getByRole("button", { name: "Add filter" }))
-    await user.click(screen.getByPlaceholderText("All keys"))
-    await user.click(
-      await screen.findByRole("option", { name: "nightly-batch" }),
-    )
-    // The picker stays open on the remaining keys; dismiss it to reach the next.
-    await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("combobox", { name: "User" }))
-    await user.click(await screen.findByRole("option", { name: /alice/ }))
-    await user.keyboard("{Escape}")
-
-    await waitFor(() => {
-      expect(currentLocation()).toContain("api_key_id=key-2")
-      expect(currentLocation()).toContain("user_id=alice")
-    })
-    const saved = currentLocation()
-    first.unmount()
-
-    // A fresh router at the same address is what a reload is.
-    renderWithLocation(saved)
-    expect(
-      await screen.findByRole("button", {
-        name: "Remove API key filter nightly-batch",
-      }),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole("button", { name: "Remove User filter Alice (alice)" }),
-    ).toBeInTheDocument()
-  })
-
-  it("drops a removed value from the URL and clears every filter at once", async () => {
-    mockApi(summary(), { [`${API_ROOT}/keys`]: LISTED_KEYS })
-    const user = userEvent.setup()
-    renderWithLocation("/usage?api_key_id=key-1&api_key_id=key-2&model=gpt-5.6")
-    await screen.findByText("$1,240.50")
-
-    await user.click(
-      await screen.findByRole("button", {
-        name: "Remove API key filter nightly-batch",
-      }),
-    )
-    await waitFor(() => expect(currentLocation()).not.toContain("key-2"))
-    expect(currentLocation()).toContain("api_key_id=key-1")
-
-    await user.click(screen.getByRole("button", { name: "Clear all" }))
-    await waitFor(() => expect(currentLocation()).toBe("/usage"))
-  })
-
-  it("narrows the organization page to the workspace a link names", async () => {
-    const fetchMock = mockApi(summary())
-    renderWithLocation("/usage?workspace_id=ws-2", "organization")
-    await screen.findByText("$1,240.50")
-
-    expect(
-      fetchMock.mock.calls.some(
-        ([u]) =>
-          String(u).includes(`${API_ROOT}/organizations/me/usage/summary`) &&
-          String(u).includes("workspace_id=ws-2"),
-      ),
-    ).toBe(true)
-  })
-
-  it("leaves the workspace page on the switcher's scope whatever the URL says", async () => {
-    const fetchMock = mockApi(summary())
-    renderWithLocation("/usage?workspace_id=ws-2")
-    await screen.findByText("$1,240.50")
-
-    expect(
-      fetchMock.mock.calls.some(([u]) =>
-        String(u).includes("workspace_id=ws-2"),
-      ),
-    ).toBe(false)
-    expect(
-      screen.queryByRole("button", { name: /Remove Workspace filter/ }),
-    ).not.toBeInTheDocument()
-  })
-})
-
-describe("UsagePage API key picker", () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
-  it("offers the listed keys, the in-window ones first", async () => {
-    const fetchMock = mockApi(summary(), {
-      [`${API_ROOT}/keys`]: LISTED_KEYS,
-    })
-    const user = userEvent.setup()
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-
-    await user.click(screen.getByPlaceholderText("All keys"))
-    await screen.findByRole("option", { name: "nightly-batch" })
-    const listbox = screen.getByRole("listbox")
-    expect(
-      within(listbox)
-        .getAllByRole("option")
-        .map((option) => option.textContent),
-    ).toEqual(["ci-bot", "gw-Zz9…Q1", "nightly-batch"])
-
-    // A key with no traffic in the window is still a filter the page sends.
-    await user.click(screen.getByRole("option", { name: "nightly-batch" }))
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(
-          ([u]) =>
-            String(u).includes(`${API_ROOT}/usage/summary`) &&
-            String(u).includes("api_key_id=key-2"),
-        ),
-      ).toBe(true),
-    )
-  })
-
-  it("searches the server for what is typed, and offers its matches as they come", async () => {
-    const fetchMock = mockApi(summary())
-    const answer = fetchMock.getMockImplementation()!
-    // The server's matching, which the picker must not redo: `gw-Zz9` finds
-    // the key named "nightly-batch" by its fingerprint, not its name.
-    fetchMock.mockImplementation(async (input, init) => {
-      const url = new URL(String(input), "http://x")
-      if (url.pathname === `${API_ROOT}/keys`) {
-        const term = url.searchParams.get("search")
-        const rows = term
-          ? [apiKey({ id: "key-2", key_name: "nightly-batch" })]
-          : LISTED_KEYS.slice(0, 2)
-        return new Response(JSON.stringify(rows), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        })
-      }
-      return answer(input, init)
-    })
-    const user = userEvent.setup()
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-
-    const keyReads = () =>
-      fetchMock.mock.calls
-        .map(([u]) => new URL(String(u), "http://x"))
-        .filter((u) => u.pathname === `${API_ROOT}/keys`)
-    await waitFor(() => expect(keyReads().length).toBeGreaterThan(0))
-    // Bounded, and never the whole list.
-    expect(keyReads().every((u) => u.searchParams.get("limit") === "20")).toBe(
-      true,
-    )
-
-    await user.click(screen.getByPlaceholderText("All keys"))
-    await user.keyboard("gw-Zz9")
-    // The in-window key does not match the term, so only the server's match is left.
-    await waitFor(() =>
-      expect(
-        screen.getAllByRole("option").map((option) => option.textContent),
-      ).toEqual(["nightly-batch"]),
-    )
-    // Debounced: one read for the settled term rather than one per keystroke.
-    const searched = keyReads().filter((u) => u.searchParams.has("search"))
-    expect(searched.map((u) => u.searchParams.get("search"))).toEqual([
-      "gw-Zz9",
-    ])
-
-    await user.click(screen.getByRole("option", { name: "nightly-batch" }))
-    await user.keyboard("{Escape}")
-    // The chip keeps the name once the search has been cleared.
-    expect(
-      await screen.findByRole("button", {
-        name: "Remove API key filter nightly-batch",
-      }),
-    ).toBeInTheDocument()
-  })
-
-  it("names a key a link picked by looking it up by id", async () => {
-    const fetchMock = mockApi(summary(), {
-      [`${API_ROOT}/keys`]: [
-        apiKey({ id: "key-2", key_name: "nightly-batch" }),
-      ],
-    })
-    renderPage(<UsagePage />, { url: "/usage?api_key_id=key-2" })
-
-    expect(
-      await screen.findByRole("button", {
-        name: "Remove API key filter nightly-batch",
-      }),
-    ).toBeInTheDocument()
-    expect(
-      fetchMock.mock.calls.some(([u]) => {
-        const url = new URL(String(u), "http://x")
-        return (
-          url.pathname === `${API_ROOT}/keys` &&
-          url.searchParams.get("search") === "key-2"
-        )
-      }),
-    ).toBe(true)
-  })
-
-  it("keeps the in-window keys when the viewer may not list keys", async () => {
-    const fetchMock = mockApi(summary())
-    const answer = fetchMock.getMockImplementation()!
-    fetchMock.mockImplementation(async (input, init) => {
-      if (String(input).includes(`${API_ROOT}/keys?`)) {
-        return new Response(JSON.stringify({ detail: "Forbidden" }), {
-          status: 403,
-          headers: { "Content-Type": "application/json" },
-        })
-      }
-      return answer(input, init)
-    })
-    const user = userEvent.setup()
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-
-    await user.click(screen.getByPlaceholderText("All keys"))
-    expect(
-      await screen.findByRole("option", { name: "ci-bot" }),
-    ).toBeInTheDocument()
-    expect(screen.getAllByRole("option")).toHaveLength(1)
-  })
-})
-
-describe("UsagePage gateway-run tools", () => {
-  it("hides the tools card while the window has no gateway-run tool calls", async () => {
-    mockApi(summary())
-    renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
-
-    // A gateway that runs no tools should not be shown an empty table asking to be
-    // explained, which is why the card is conditional rather than always present.
-    expect(screen.queryByText("Gateway-run tools")).not.toBeInTheDocument()
-  })
-
-  it("shows calls, failures, and spend per tool", async () => {
-    mockApi(
-      summary({
-        by_tool: [
-          {
-            tool: "web_search",
-            calls: 249,
-            errors: 13,
-            requests: 105,
-            cost: 2.49,
-          },
-          {
-            tool: "web_fetch",
-            calls: 86,
-            errors: 7,
-            requests: 42,
-            cost: 0.43,
-          },
-          {
-            tool: "code_execution",
-            calls: 65,
-            errors: 6,
-            requests: 28,
-            cost: 0,
-          },
-        ],
-      }),
-    )
-    renderPage(<UsagePage />)
-
-    await screen.findByText("Gateway-run tools")
-    const row = screen.getByText("web search").closest("tr")!
-    // Calls count tool calls, not requests: one request can search several times.
-    expect(within(row).getByText("249")).toBeInTheDocument()
-    expect(within(row).getByText("13")).toBeInTheDocument()
-    expect(within(row).getByText("105")).toBeInTheDocument()
-    expect(within(row).getByText("$2.49")).toBeInTheDocument()
-
-    const fetchRow = screen.getByText("web fetch").closest("tr")!
-    expect(within(fetchRow).getByText("86")).toBeInTheDocument()
-    expect(within(fetchRow).getByText("7")).toBeInTheDocument()
-    expect(within(fetchRow).getByText("42")).toBeInTheDocument()
-    expect(within(fetchRow).getByText("$0.43")).toBeInTheDocument()
-  })
-
-  it("drills into the Activity log filtered on the clicked tool", async () => {
-    const user = userEvent.setup()
-    mockApi(
-      summary({
-        by_tool: [
-          { tool: "web_search", calls: 12, errors: 0, requests: 7, cost: 0.12 },
-        ],
-      }),
-    )
-    renderPage(<UsagePage />)
-
-    const row = (await screen.findByText("web search")).closest("tr")!
-    await user.click(row)
-
-    const loc =
-      screen.getByRole("status", { name: "Current location" }).textContent ?? ""
-    expect(loc.startsWith("/activity")).toBe(true)
-    expect(loc).toContain("tool=web_search")
+    page()
+    const row = await rowNamed(/claude-opus-5-5/)
+    expect(within(row).getByText("Subscription")).toBeInTheDocument()
   })
 })

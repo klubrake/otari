@@ -247,32 +247,10 @@ const BASE_NAV_SECTIONS = [
  * capability gate cannot express "declared but not served" without relaxing that
  * invariant. A surface gate says exactly this and needs no test change.
  */
+// No Observe section: the organization as a whole (otari-ai#1963) is a scope of
+// the Usage page, which the workspace rail reaches, and a link to the old
+// `/organization/usage` lands there.
 const ORGANIZATION_NAV_SECTIONS = [
-  {
-    // The workspace rail's "Observe" question asked one level up. One row for
-    // now, with a heading all the same: unlike the index's headingless section,
-    // this is a category (an organization Activity page would join it), and a
-    // bare "Usage" row above "People & access" would read as a stray.
-    id: "org-observe",
-    label: "Observe",
-    items: [
-      // The organization as a whole, which the workspace rail's Usage page
-      // cannot ask for: its scope is the sidebar's selected workspace, and the
-      // switcher offers only the caller's own memberships (otari-ai#1963).
-      // Gated on a surface only the hosted bootstrap reports, because on a
-      // standalone deployment the organization is the deployment and `/usage`
-      // already answers it whole. No `operatorOnly` and no role gate here: the
-      // organization rail already opens only to a caller who manages the
-      // organization, and the server scopes a member who lands here by URL to
-      // their own workspaces, the same rows `/usage` shows them.
-      {
-        to: "/organization/usage",
-        label: "Usage",
-        surface: "organization_usage",
-        icon: FiBarChart2,
-      },
-    ],
-  },
   {
     id: "org-people",
     label: "People & access",

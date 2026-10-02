@@ -17,12 +17,14 @@
 import type {
   UsageActivityGroup,
   UsageActivityGroupBy,
+  UsageChannel,
   UsageEntry,
   UsageFilters,
   UsageMutationSelection,
   UsageSortKey,
   UsageTotals,
 } from "@/client"
+import type { BuiltInView } from "@/features/savedViews/savedViews"
 import {
   NEWEST_FIRST,
   type UsageSort,
@@ -34,6 +36,7 @@ import {
   formatUsd,
 } from "@/shared/helpers/format"
 import type { UrlState } from "@/shared/helpers/urlState"
+import { describeChannel } from "@/shared/helpers/usageChannel"
 import {
   describeSource,
   describeTool,
@@ -48,6 +51,9 @@ export const ACTIVITY_URL_DEFAULTS = {
   end_date: "",
   // "you" narrows a manager's workspace view to their own requests.
   scope: "",
+  // A workspace other than the sidebar's, for a link from a page that spans
+  // several (Usage at Organization scope). Its chip returns to the sidebar's.
+  workspace: "",
   q: "",
   status: "",
   exclude_status: "",
@@ -61,6 +67,8 @@ export const ACTIVITY_URL_DEFAULTS = {
   policy_name: "",
   exclude_policy_name: "",
   routed: "",
+  channel: "",
+  exclude_channel: "",
   source: "",
   exclude_source: "",
   source_label: "",
@@ -513,6 +521,8 @@ export function toUsageFilters(
     policy_name: list("policy_name"),
     exclude_policy_name: list("exclude_policy_name"),
     routed: routed === "true" ? true : routed === "false" ? false : undefined,
+    channel: list("channel") as UsageChannel[] | undefined,
+    exclude_channel: list("exclude_channel") as UsageChannel[] | undefined,
     source: url.get("source") || undefined,
     exclude_source: list("exclude_source"),
     source_label: url.get("source_label") || undefined,
@@ -568,6 +578,7 @@ export interface ActivityChip {
 interface ChipNames {
   member: (userId: string) => string
   apiKey: (keyId: string) => string
+  workspace: (workspaceId: string) => string
 }
 
 /** Every applied filter as a removable chip, each clearing only itself. */
@@ -602,6 +613,7 @@ export function activityChips(
   }
   const status = (value: string) =>
     Object.hasOwn(STATUS_LABELS, value) ? STATUS_LABELS[value as Status] : value
+  single("workspace", "Workspace", names.workspace)
   values("status", "Status", status)
   values("exclude_status", "Status is not", status)
   values("user_id", "Member", names.member)
@@ -614,6 +626,8 @@ export function activityChips(
   single("routed", "Policy", (value) => (value === "false" ? "Direct" : "Any"))
   values("api_key_id", "Source", names.apiKey)
   values("exclude_api_key_id", "Source is not", names.apiKey)
+  values("channel", "Channel", describeChannel)
+  values("exclude_channel", "Channel is not", describeChannel)
   single("source", "Source", describeSource)
   values("exclude_source", "Source is not", describeSource)
   single("source_label", "Session")
@@ -664,9 +678,15 @@ const VIEW_KEYS = (
   Object.keys(ACTIVITY_URL_DEFAULTS) as ActivityUrlKey[]
 ).filter(
   (key) =>
-    !["start_date", "end_date", "scope", "request", "page", "size"].includes(
-      key,
-    ),
+    ![
+      "start_date",
+      "end_date",
+      "scope",
+      "workspace",
+      "request",
+      "page",
+      "size",
+    ].includes(key),
 )
 
 /** The current view as a canonical query string: keys in one order, defaults left out. */
@@ -690,11 +710,6 @@ export function viewPatch(query: string): Patch {
     patch[key] = values.length > 1 ? values : (values[0] ?? "")
   }
   return patch
-}
-
-export interface BuiltInView {
-  name: string
-  query: string
 }
 
 export const BUILT_IN_VIEWS: BuiltInView[] = [

@@ -302,6 +302,69 @@ export function formatUsdHeadline(value: number): string {
     : usdCompact.format(value)
 }
 
+const usdAxis = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  notation: "compact",
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 1,
+})
+const usdAxisCents = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+const usdAxisMills = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 3,
+  maximumFractionDigits: 3,
+})
+
+/**
+ * Dollars on a chart's axis, where a tick says a size rather than a sum, at
+ * the precision its steps need: "$200" and "$1.5K" for whole-dollar steps,
+ * "$0.05" for cents, "$0.005" below a cent.
+ */
+export function formatUsdAxis(value: number, step = 1): string {
+  if (step >= 1) return usdAxis.format(value)
+  return step >= 0.01 ? usdAxisCents.format(value) : usdAxisMills.format(value)
+}
+
+const multiple = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+})
+
+/** How many times one figure is another: "3.9×". */
+export function formatMultiple(ratio: number): string {
+  return `${multiple.format(ratio)}×`
+}
+
+const hours = new Intl.NumberFormat("en-US", {
+  style: "unit",
+  unit: "hour",
+  unitDisplay: "narrow",
+})
+const minutes = new Intl.NumberFormat("en-US", {
+  style: "unit",
+  unit: "minute",
+  unitDisplay: "narrow",
+})
+
+/** How long something lasted, to the minute: "6h 40m", "55m", "<1m". */
+export function formatDuration(ms: number): string {
+  const total = Math.floor(ms / 60_000)
+  if (total < 1) return `<${minutes.format(1)}`
+  const wholeHours = Math.floor(total / 60)
+  const rest = total % 60
+  if (wholeHours === 0) return minutes.format(rest)
+  return rest === 0
+    ? hours.format(wholeHours)
+    : `${hours.format(wholeHours)} ${minutes.format(rest)}`
+}
+
 // Compact token counts for aggregate tiles: 12.4M / 84.2k / 512.
 export function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
