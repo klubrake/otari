@@ -19,6 +19,9 @@ function row(
     tokens: 0,
     requests: 0,
     is_other: false,
+    imported_cost: 0,
+    error_count: 0,
+    cache_read_tokens: 0,
     ...overrides,
   }
 }

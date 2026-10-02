@@ -435,3 +435,17 @@ def test_the_default_view_saves_as_an_empty_query(client: TestClient, master_key
         headers=master_key_header,
     )
     assert saved.status_code == status.HTTP_201_CREATED, saved.text
+
+
+def test_each_page_keeps_its_own_views(client: TestClient, master_key_header: dict[str, str]) -> None:
+    """A view saved on Usage lists on Usage and not on Activity, and one name can be used on both."""
+    workspace_id = client.get(f"{API_ROOT}/workspaces", headers=master_key_header).json()["data"][0]["id"]
+    views = f"{API_ROOT}/workspaces/{workspace_id}/saved-views"
+    for page in ("usage", "activity"):
+        created = client.post(views, json={"page": page, "name": "Mine", "query": "by=key"}, headers=master_key_header)
+        assert created.status_code == status.HTTP_201_CREATED, created.text
+
+    usage = client.get(views, params={"page": "usage"}, headers=master_key_header).json()
+    activity = client.get(views, params={"page": "activity"}, headers=master_key_header).json()
+    assert [(view["page"], view["name"]) for view in usage["data"]] == [("usage", "Mine")]
+    assert [(view["page"], view["name"]) for view in activity["data"]] == [("activity", "Mine")]

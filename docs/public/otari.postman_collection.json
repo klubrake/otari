@@ -5659,6 +5659,18 @@
                   "value": ""
                 },
                 {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
                   "description": "Only rows where these columns are empty (no key, user or session).",
                   "disabled": true,
                   "key": "is_null",
@@ -5683,7 +5695,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage?sort=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage?sort=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -5887,6 +5899,18 @@
                   "value": ""
                 },
                 {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
                   "description": "Only rows where these columns are empty (no key, user or session).",
                   "disabled": true,
                   "key": "is_null",
@@ -5911,7 +5935,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/count?sort=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/count?sort=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -6115,6 +6139,18 @@
                   "value": ""
                 },
                 {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
                   "description": "Only rows where these columns are empty (no key, user or session).",
                   "disabled": true,
                   "key": "is_null",
@@ -6139,7 +6175,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/groups?group_by=api_key&search=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/groups?group_by=api_key&search=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -6163,7 +6199,7 @@
               ],
               "query": [
                 {
-                  "description": "Dimension to split the series by",
+                  "description": "Dimension to split the series by. 'channel' tells imported subscription usage, the dashboard's Playground and API calls apart; 'workspace' covers only the workspaces the caller may read.",
                   "disabled": false,
                   "key": "group_by",
                   "value": "model"
@@ -6172,6 +6208,12 @@
                   "description": "Time-series granularity: 'hour' or 'day'",
                   "disabled": true,
                   "key": "bucket",
+                  "value": ""
+                },
+                {
+                  "description": "What picks the groups that get a series of their own before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'.",
+                  "disabled": true,
+                  "key": "rank_by",
                   "value": ""
                 },
                 {
@@ -6325,6 +6367,18 @@
                   "value": ""
                 },
                 {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
                   "description": "Only rows where these columns are empty (no key, user or session).",
                   "disabled": true,
                   "key": "is_null",
@@ -6349,7 +6403,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/series?group_by=model&bucket=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/series?group_by=model&bucket=&rank_by=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -6391,6 +6445,24 @@
                   "value": ""
                 },
                 {
+                  "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null.",
+                  "disabled": true,
+                  "key": "p95_by",
+                  "value": ""
+                },
+                {
+                  "description": "Also name the provenance source and API key name most of each session's requests carry, on 'by_source_label' rows, when 'source_label' is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over the sessions listed.",
+                  "disabled": true,
+                  "key": "session_details",
+                  "value": ""
+                },
+                {
+                  "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. Ties fall back to the key.",
+                  "disabled": true,
+                  "key": "rank_by",
+                  "value": ""
+                },
+                {
                   "description": "Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds)",
                   "disabled": true,
                   "key": "start_date",
@@ -6541,6 +6613,18 @@
                   "value": ""
                 },
                 {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
                   "description": "Only rows where these columns are empty (no key, user or session).",
                   "disabled": true,
                   "key": "is_null",
@@ -6565,7 +6649,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/summary?bucket=&dimensions=&include_p95=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/organizations/me/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         }
@@ -8724,6 +8808,18 @@
                   "value": ""
                 },
                 {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
                   "description": "Only rows where these columns are empty (no key, user or session).",
                   "disabled": true,
                   "key": "is_null",
@@ -8748,7 +8844,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage?sort=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/usage?sort=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -8969,6 +9065,18 @@
                   "value": ""
                 },
                 {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
                   "description": "Only rows where these columns are empty (no key, user or session).",
                   "disabled": true,
                   "key": "is_null",
@@ -8993,7 +9101,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage/count?sort=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/usage/count?sort=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&request_group_id=&id=&request_id=&include_absorbed=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -9229,6 +9337,18 @@
                   "value": ""
                 },
                 {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
                   "description": "Only rows where these columns are empty (no key, user or session).",
                   "disabled": true,
                   "key": "is_null",
@@ -9253,7 +9373,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage/groups?group_by=api_key&search=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/usage/groups?group_by=api_key&search=&order=&skip=&limit=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -9295,7 +9415,7 @@
               ],
               "query": [
                 {
-                  "description": "Dimension to split the series by",
+                  "description": "Dimension to split the series by. 'channel' tells imported subscription usage, the dashboard's Playground and API calls apart; 'workspace' covers only the workspaces the caller may read.",
                   "disabled": false,
                   "key": "group_by",
                   "value": "model"
@@ -9304,6 +9424,12 @@
                   "description": "Time-series granularity: 'hour' or 'day'",
                   "disabled": true,
                   "key": "bucket",
+                  "value": ""
+                },
+                {
+                  "description": "What picks the groups that get a series of their own before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'.",
+                  "disabled": true,
+                  "key": "rank_by",
                   "value": ""
                 },
                 {
@@ -9457,6 +9583,18 @@
                   "value": ""
                 },
                 {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
                   "description": "Only rows where these columns are empty (no key, user or session).",
                   "disabled": true,
                   "key": "is_null",
@@ -9481,7 +9619,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage/series?group_by=model&bucket=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/usage/series?group_by=model&bucket=&rank_by=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         },
@@ -9522,7 +9660,7 @@
         {
           "name": "Usage Summary",
           "request": {
-            "description": "Aggregate spend, tokens, and request volume for the dashboard Usage page.\n\nRange-bounded (default last 30 days, hard-capped): unlike the raw ``/api/v1/usage``\nlist, every aggregate is scoped to a bounded window so it stays served by the\ntimestamp index. Returns grand totals, breakdowns by model / user / API key /\nsource / session (``source_label``) / endpoint / provider (top rows plus a\nreconciling ``other`` fold, billed token counts), the error taxonomy grouped\nby failure status code, and a UTC-bucketed time series carrying each bucket's\nerror count and billed token composition (input incl. cache, cache read/write,\noutput).\n\nEach breakdown is its own ``GROUP BY`` pass, so a caller that reads only the\ntotals or the series should narrow ``dimensions`` rather than pay for all eight\n(the dashboard's tiles, timeline context, and model typeahead all do). Omitting\nthe parameter keeps the full set.\n\n``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match\nany of them, so one chart can compare a handful of models, users, or keys.",
+            "description": "Aggregate spend, tokens, and request volume for the dashboard Usage page.\n\nRange-bounded (default last 30 days, hard-capped): unlike the raw ``/api/v1/usage``\nlist, every aggregate is scoped to a bounded window so it stays served by the\ntimestamp index. Returns grand totals, breakdowns by model / user / API key /\nsource / session (``source_label``) / endpoint / provider / routing policy /\nworkspace / channel (top rows plus a reconciling ``other`` fold; each row with its\nbilled tokens and cache reads, imported cost and failures, a session's with its span),\nthe error taxonomy grouped by failure status code, and a UTC-bucketed time series\ncarrying each bucket's error count, imported cost and billed token composition\n(input incl. cache, cache read/write, output).\n\nEach breakdown is its own ``GROUP BY`` pass, so a caller that reads only the\ntotals or the series should narrow ``dimensions`` rather than pay for every one\n(the dashboard's tiles, timeline context, and model typeahead all do). Omitting\nthe parameter keeps the full set. ``p95_by`` (latency per group in one breakdown)\nand ``session_details`` (each session's source and key name) cost one more pass each.\n\n``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match\nany of them, so one chart can compare a handful of models, users, or keys.",
             "header": [],
             "method": "GET",
             "url": {
@@ -9552,6 +9690,24 @@
                   "description": "Also compute 'totals.p95_latency_ms', which sorts the window's latencies.",
                   "disabled": true,
                   "key": "include_p95",
+                  "value": ""
+                },
+                {
+                  "description": "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null.",
+                  "disabled": true,
+                  "key": "p95_by",
+                  "value": ""
+                },
+                {
+                  "description": "Also name the provenance source and API key name most of each session's requests carry, on 'by_source_label' rows, when 'source_label' is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over the sessions listed.",
+                  "disabled": true,
+                  "key": "session_details",
+                  "value": ""
+                },
+                {
+                  "description": "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. Ties fall back to the key.",
+                  "disabled": true,
+                  "key": "rank_by",
                   "value": ""
                 },
                 {
@@ -9705,6 +9861,18 @@
                   "value": ""
                 },
                 {
+                  "description": "Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+                  "disabled": true,
+                  "key": "channel",
+                  "value": ""
+                },
+                {
+                  "description": "Leave out rows that came in these ways.",
+                  "disabled": true,
+                  "key": "exclude_channel",
+                  "value": ""
+                },
+                {
                   "description": "Only rows where these columns are empty (no key, user or session).",
                   "disabled": true,
                   "key": "is_null",
@@ -9729,7 +9897,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/usage/summary?bucket=&dimensions=&include_p95=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
+              "raw": "{{baseUrl}}/api/v1/usage/summary?bucket=&dimensions=&include_p95=&p95_by=&session_details=&rank_by=&start_date=&end_date=&user_id=&status=&status_code=&model=&endpoint=&provider=&source=&source_label=&api_key_id=&priced=&tool=&counts_toward_budget=&workspace_id=&q=&requested_model=&exclude_model=&exclude_user_id=&exclude_api_key_id=&exclude_source=&exclude_status=&policy_name=&exclude_policy_name=&routed=&channel=&exclude_channel=&is_null=&tokens_gt=&cost_gt=&latency_ms_gt="
             }
           }
         }
@@ -10973,7 +11141,7 @@
                   "description": "The dashboard page the views belong to.",
                   "disabled": false,
                   "key": "page",
-                  "value": ""
+                  "value": "activity"
                 },
                 {
                   "description": "",
@@ -10988,7 +11156,7 @@
                   "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/workspaces/:workspace_id/saved-views?page=&skip=&limit=",
+              "raw": "{{baseUrl}}/api/v1/workspaces/:workspace_id/saved-views?page=activity&skip=&limit=",
               "variable": [
                 {
                   "description": "path parameter",
@@ -11009,7 +11177,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"page\": \"string\",\n  \"name\": \"string\",\n  \"query\": \"string\"\n}"
+              "raw": "{\n  \"page\": \"activity\",\n  \"name\": \"string\",\n  \"query\": \"string\"\n}"
             },
             "description": "Save a view. Sharing it with the workspace needs someone who manages the workspace.",
             "header": [

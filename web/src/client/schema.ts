@@ -4840,16 +4840,18 @@ export interface paths {
          *     Range-bounded (default last 30 days, hard-capped): unlike the raw ``/api/v1/usage``
          *     list, every aggregate is scoped to a bounded window so it stays served by the
          *     timestamp index. Returns grand totals, breakdowns by model / user / API key /
-         *     source / session (``source_label``) / endpoint / provider (top rows plus a
-         *     reconciling ``other`` fold, billed token counts), the error taxonomy grouped
-         *     by failure status code, and a UTC-bucketed time series carrying each bucket's
-         *     error count and billed token composition (input incl. cache, cache read/write,
-         *     output).
+         *     source / session (``source_label``) / endpoint / provider / routing policy /
+         *     workspace / channel (top rows plus a reconciling ``other`` fold; each row with its
+         *     billed tokens and cache reads, imported cost and failures, a session's with its span),
+         *     the error taxonomy grouped by failure status code, and a UTC-bucketed time series
+         *     carrying each bucket's error count, imported cost and billed token composition
+         *     (input incl. cache, cache read/write, output).
          *
          *     Each breakdown is its own ``GROUP BY`` pass, so a caller that reads only the
-         *     totals or the series should narrow ``dimensions`` rather than pay for all eight
+         *     totals or the series should narrow ``dimensions`` rather than pay for every one
          *     (the dashboard's tiles, timeline context, and model typeahead all do). Omitting
-         *     the parameter keeps the full set.
+         *     the parameter keeps the full set. ``p95_by`` (latency per group in one breakdown)
+         *     and ``session_details`` (each session's source and key name) cost one more pass each.
          *
          *     ``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match
          *     any of them, so one chart can compare a handful of models, users, or keys.
@@ -12058,9 +12060,9 @@ export interface components {
             name: string;
             /**
              * Page
-             * @constant
+             * @enum {string}
              */
-            page: "activity";
+            page: "activity" | "usage";
             /** Query */
             query: string;
             /**
@@ -12092,9 +12094,9 @@ export interface components {
             owner_name: string | null;
             /**
              * Page
-             * @constant
+             * @enum {string}
              */
-            page: "activity";
+            page: "activity" | "usage";
             /** Query */
             query: string;
             /** Shared */
@@ -13182,6 +13184,8 @@ export interface components {
              * @default false
              */
             by_filter: boolean;
+            /** Channel */
+            channel?: ("imported" | "playground" | "api") | ("imported" | "playground" | "api")[] | null;
             /** Cost Gt */
             cost_gt?: number | null;
             /** End Date */
@@ -13190,6 +13194,8 @@ export interface components {
             endpoint?: string | null;
             /** Exclude Api Key Id */
             exclude_api_key_id?: string | string[] | null;
+            /** Exclude Channel */
+            exclude_channel?: ("imported" | "playground" | "api") | ("imported" | "playground" | "api")[] | null;
             /** Exclude Model */
             exclude_model?: string | string[] | null;
             /** Exclude Policy Name */
@@ -13373,8 +13379,23 @@ export interface components {
          *     mislabel deleted-user usage as the fold.
          */
         UsageGroupRow: {
+            /**
+             * Cache Read Tokens
+             * @default 0
+             */
+            cache_read_tokens: number;
             /** Cost */
             cost: number;
+            /**
+             * Error Count
+             * @default 0
+             */
+            error_count: number;
+            /**
+             * Imported Cost
+             * @default 0
+             */
+            imported_cost: number;
             /**
              * Is Other
              * @default false
@@ -13384,6 +13405,8 @@ export interface components {
             key: string | null;
             /** Label */
             label?: string | null;
+            /** P95 Latency Ms */
+            p95_latency_ms?: number | null;
             /** Requests */
             requests: number;
             /** Tokens */
@@ -13409,7 +13432,7 @@ export interface components {
              * Group By
              * @enum {string}
              */
-            group_by: "model" | "user_id" | "api_key_id" | "source";
+            group_by: "model" | "user_id" | "api_key_id" | "source" | "source_label" | "channel" | "provider" | "policy" | "workspace";
             /** Groups */
             groups: components["schemas"]["UsageGroupRow"][];
             /** Points */
@@ -13432,6 +13455,11 @@ export interface components {
             bucket_start: string;
             /** Cost */
             cost: number;
+            /**
+             * Imported Cost
+             * @default 0
+             */
+            imported_cost: number;
             /**
              * Is Other
              * @default false
@@ -13511,6 +13539,11 @@ export interface components {
              */
             errors: number;
             /**
+             * Imported Cost
+             * @default 0
+             */
+            imported_cost: number;
+            /**
              * Input Tokens
              * @default 0
              */
@@ -13522,6 +13555,57 @@ export interface components {
             output_tokens: number;
             /** Requests */
             requests: number;
+            /** Tokens */
+            tokens: number;
+        };
+        /**
+         * UsageSessionRow
+         * @description A ``by_source_label`` row: a session's breakdown figures, its span, and where it came from.
+         *
+         *     ``first_at`` and ``last_at`` are its first and last request, read in the same
+         *     grouped pass (null on the fold row). ``source`` and ``api_key_name`` are the
+         *     provenance source and API key name most of its requests carry, which cost one more
+         *     grouped pass and so are null unless ``session_details`` asked for them.
+         */
+        UsageSessionRow: {
+            /** Api Key Name */
+            api_key_name?: string | null;
+            /**
+             * Cache Read Tokens
+             * @default 0
+             */
+            cache_read_tokens: number;
+            /** Cost */
+            cost: number;
+            /**
+             * Error Count
+             * @default 0
+             */
+            error_count: number;
+            /** First At */
+            first_at?: string | null;
+            /**
+             * Imported Cost
+             * @default 0
+             */
+            imported_cost: number;
+            /**
+             * Is Other
+             * @default false
+             */
+            is_other: boolean;
+            /** Key */
+            key: string | null;
+            /** Label */
+            label?: string | null;
+            /** Last At */
+            last_at?: string | null;
+            /** P95 Latency Ms */
+            p95_latency_ms?: number | null;
+            /** Requests */
+            requests: number;
+            /** Source */
+            source?: string | null;
             /** Tokens */
             tokens: number;
         };
@@ -13545,6 +13629,8 @@ export interface components {
             cache_read_price_per_million?: number | null;
             /** Cache Write Price Per Million */
             cache_write_price_per_million?: number | null;
+            /** Channel */
+            channel?: ("imported" | "playground" | "api") | ("imported" | "playground" | "api")[] | null;
             /** Cost Gt */
             cost_gt?: number | null;
             /** End Date */
@@ -13553,6 +13639,8 @@ export interface components {
             endpoint?: string | null;
             /** Exclude Api Key Id */
             exclude_api_key_id?: string | string[] | null;
+            /** Exclude Channel */
+            exclude_channel?: ("imported" | "playground" | "api") | ("imported" | "playground" | "api")[] | null;
             /** Exclude Model */
             exclude_model?: string | string[] | null;
             /** Exclude Policy Name */
@@ -13652,16 +13740,26 @@ export interface components {
             bucket: "5min" | "hour" | "day";
             /** By Api Key */
             by_api_key: components["schemas"]["UsageGroupRow"][];
+            /**
+             * By Channel
+             * @default []
+             */
+            by_channel: components["schemas"]["UsageGroupRow"][];
             /** By Endpoint */
             by_endpoint: components["schemas"]["UsageGroupRow"][];
             /** By Model */
             by_model: components["schemas"]["UsageGroupRow"][];
+            /**
+             * By Policy
+             * @default []
+             */
+            by_policy: components["schemas"]["UsageGroupRow"][];
             /** By Provider */
             by_provider: components["schemas"]["UsageGroupRow"][];
             /** By Source */
             by_source: components["schemas"]["UsageGroupRow"][];
             /** By Source Label */
-            by_source_label: components["schemas"]["UsageGroupRow"][];
+            by_source_label: components["schemas"]["UsageSessionRow"][];
             /**
              * By Tool
              * @default []
@@ -13669,6 +13767,11 @@ export interface components {
             by_tool: components["schemas"]["UsageToolRow"][];
             /** By User */
             by_user: components["schemas"]["UsageGroupRow"][];
+            /**
+             * By Workspace
+             * @default []
+             */
+            by_workspace: components["schemas"]["UsageGroupRow"][];
             /** End Date */
             end_date: string;
             /** Errors By Status Code */
@@ -13713,6 +13816,11 @@ export interface components {
             absorbed_count: number;
             /** Avg Latency Ms */
             avg_latency_ms: number | null;
+            /**
+             * Billed Cache Read Tokens
+             * @default 0
+             */
+            billed_cache_read_tokens: number;
             /**
              * Billed Input Tokens
              * @default 0
@@ -19354,6 +19462,10 @@ export interface operations {
                 exclude_policy_name?: string[] | null;
                 /** @description true: only requests a routing policy served; false: only requests that named a model. */
                 routed?: boolean | null;
+                /** @description Only rows that came in this way: imported usage, the dashboard's Playground, or the API. */
+                channel?: ("imported" | "playground" | "api")[] | null;
+                /** @description Leave out rows that came in these ways. */
+                exclude_channel?: ("imported" | "playground" | "api")[] | null;
                 /** @description Only rows where these columns are empty (no key, user or session). */
                 is_null?: ("api_key_id" | "user_id" | "source_label")[] | null;
                 /** @description Only rows billed for more than this many tokens (input plus output). */
@@ -19452,6 +19564,10 @@ export interface operations {
                 exclude_policy_name?: string[] | null;
                 /** @description true: only requests a routing policy served; false: only requests that named a model. */
                 routed?: boolean | null;
+                /** @description Only rows that came in this way: imported usage, the dashboard's Playground, or the API. */
+                channel?: ("imported" | "playground" | "api")[] | null;
+                /** @description Leave out rows that came in these ways. */
+                exclude_channel?: ("imported" | "playground" | "api")[] | null;
                 /** @description Only rows where these columns are empty (no key, user or session). */
                 is_null?: ("api_key_id" | "user_id" | "source_label")[] | null;
                 /** @description Only rows billed for more than this many tokens (input plus output). */
@@ -19548,6 +19664,10 @@ export interface operations {
                 exclude_policy_name?: string[] | null;
                 /** @description true: only requests a routing policy served; false: only requests that named a model. */
                 routed?: boolean | null;
+                /** @description Only rows that came in this way: imported usage, the dashboard's Playground, or the API. */
+                channel?: ("imported" | "playground" | "api")[] | null;
+                /** @description Leave out rows that came in these ways. */
+                exclude_channel?: ("imported" | "playground" | "api")[] | null;
                 /** @description Only rows where these columns are empty (no key, user or session). */
                 is_null?: ("api_key_id" | "user_id" | "source_label")[] | null;
                 /** @description Only rows billed for more than this many tokens (input plus output). */
@@ -19586,10 +19706,12 @@ export interface operations {
     "organization-usage-organization_usage_series": {
         parameters: {
             query: {
-                /** @description Dimension to split the series by */
-                group_by: "model" | "user_id" | "api_key_id" | "source";
+                /** @description Dimension to split the series by. 'channel' tells imported subscription usage, the dashboard's Playground and API calls apart; 'workspace' covers only the workspaces the caller may read. */
+                group_by: "model" | "user_id" | "api_key_id" | "source" | "source_label" | "channel" | "provider" | "policy" | "workspace";
                 /** @description Time-series granularity: 'hour' or 'day' */
                 bucket?: "hour" | "day";
+                /** @description What picks the groups that get a series of their own before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. */
+                rank_by?: "cost" | "billed" | "tokens" | "requests";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -19640,6 +19762,10 @@ export interface operations {
                 exclude_policy_name?: string[] | null;
                 /** @description true: only requests a routing policy served; false: only requests that named a model. */
                 routed?: boolean | null;
+                /** @description Only rows that came in this way: imported usage, the dashboard's Playground, or the API. */
+                channel?: ("imported" | "playground" | "api")[] | null;
+                /** @description Leave out rows that came in these ways. */
+                exclude_channel?: ("imported" | "playground" | "api")[] | null;
                 /** @description Only rows where these columns are empty (no key, user or session). */
                 is_null?: ("api_key_id" | "user_id" | "source_label")[] | null;
                 /** @description Only rows billed for more than this many tokens (input plus output). */
@@ -19681,9 +19807,15 @@ export interface operations {
                 /** @description Time-series granularity: '5min', 'hour' or 'day'. '5min' needs an explicit window of at most 1000 buckets (about 83 hours); the default 30-day window is refused with a 422. */
                 bucket?: "5min" | "hour" | "day";
                 /** @description Which breakdowns to compute; repeatable (dimensions=model&dimensions=user). Each value names the 'by_<value>' response field it fills, except 'status_code', which fills the failure taxonomy in 'errors_by_status_code'. Omit for every breakdown (the default); pass 'none' for a totals-and-series-only response. Each dimension left out skips one GROUP BY scan, so a caller that reads only the tiles or the time series should say so. Fields that were not requested come back empty. */
-                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
+                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "policy" | "workspace" | "channel" | "status_code" | "tool" | "none")[] | null;
                 /** @description Also compute 'totals.p95_latency_ms', which sorts the window's latencies. */
                 include_p95?: boolean;
+                /** @description Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. */
+                p95_by?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "policy" | "workspace" | "channel") | null;
+                /** @description Also name the provenance source and API key name most of each session's requests carry, on 'by_source_label' rows, when 'source_label' is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over the sessions listed. */
+                session_details?: boolean;
+                /** @description What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. Ties fall back to the key. */
+                rank_by?: "cost" | "billed" | "tokens" | "requests";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -19734,6 +19866,10 @@ export interface operations {
                 exclude_policy_name?: string[] | null;
                 /** @description true: only requests a routing policy served; false: only requests that named a model. */
                 routed?: boolean | null;
+                /** @description Only rows that came in this way: imported usage, the dashboard's Playground, or the API. */
+                channel?: ("imported" | "playground" | "api")[] | null;
+                /** @description Leave out rows that came in these ways. */
+                exclude_channel?: ("imported" | "playground" | "api")[] | null;
                 /** @description Only rows where these columns are empty (no key, user or session). */
                 is_null?: ("api_key_id" | "user_id" | "source_label")[] | null;
                 /** @description Only rows billed for more than this many tokens (input plus output). */
@@ -21896,6 +22032,10 @@ export interface operations {
                 exclude_policy_name?: string[] | null;
                 /** @description true: only requests a routing policy served; false: only requests that named a model. */
                 routed?: boolean | null;
+                /** @description Only rows that came in this way: imported usage, the dashboard's Playground, or the API. */
+                channel?: ("imported" | "playground" | "api")[] | null;
+                /** @description Leave out rows that came in these ways. */
+                exclude_channel?: ("imported" | "playground" | "api")[] | null;
                 /** @description Only rows where these columns are empty (no key, user or session). */
                 is_null?: ("api_key_id" | "user_id" | "source_label")[] | null;
                 /** @description Only rows billed for more than this many tokens (input plus output). */
@@ -22027,6 +22167,10 @@ export interface operations {
                 exclude_policy_name?: string[] | null;
                 /** @description true: only requests a routing policy served; false: only requests that named a model. */
                 routed?: boolean | null;
+                /** @description Only rows that came in this way: imported usage, the dashboard's Playground, or the API. */
+                channel?: ("imported" | "playground" | "api")[] | null;
+                /** @description Leave out rows that came in these ways. */
+                exclude_channel?: ("imported" | "playground" | "api")[] | null;
                 /** @description Only rows where these columns are empty (no key, user or session). */
                 is_null?: ("api_key_id" | "user_id" | "source_label")[] | null;
                 /** @description Only rows billed for more than this many tokens (input plus output). */
@@ -22156,6 +22300,10 @@ export interface operations {
                 exclude_policy_name?: string[] | null;
                 /** @description true: only requests a routing policy served; false: only requests that named a model. */
                 routed?: boolean | null;
+                /** @description Only rows that came in this way: imported usage, the dashboard's Playground, or the API. */
+                channel?: ("imported" | "playground" | "api")[] | null;
+                /** @description Leave out rows that came in these ways. */
+                exclude_channel?: ("imported" | "playground" | "api")[] | null;
                 /** @description Only rows where these columns are empty (no key, user or session). */
                 is_null?: ("api_key_id" | "user_id" | "source_label")[] | null;
                 /** @description Only rows billed for more than this many tokens (input plus output). */
@@ -22214,10 +22362,12 @@ export interface operations {
     "usage-usage_series": {
         parameters: {
             query: {
-                /** @description Dimension to split the series by */
-                group_by: "model" | "user_id" | "api_key_id" | "source";
+                /** @description Dimension to split the series by. 'channel' tells imported subscription usage, the dashboard's Playground and API calls apart; 'workspace' covers only the workspaces the caller may read. */
+                group_by: "model" | "user_id" | "api_key_id" | "source" | "source_label" | "channel" | "provider" | "policy" | "workspace";
                 /** @description Time-series granularity: 'hour' or 'day' */
                 bucket?: "hour" | "day";
+                /** @description What picks the groups that get a series of their own before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. */
+                rank_by?: "cost" | "billed" | "tokens" | "requests";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -22268,6 +22418,10 @@ export interface operations {
                 exclude_policy_name?: string[] | null;
                 /** @description true: only requests a routing policy served; false: only requests that named a model. */
                 routed?: boolean | null;
+                /** @description Only rows that came in this way: imported usage, the dashboard's Playground, or the API. */
+                channel?: ("imported" | "playground" | "api")[] | null;
+                /** @description Leave out rows that came in these ways. */
+                exclude_channel?: ("imported" | "playground" | "api")[] | null;
                 /** @description Only rows where these columns are empty (no key, user or session). */
                 is_null?: ("api_key_id" | "user_id" | "source_label")[] | null;
                 /** @description Only rows billed for more than this many tokens (input plus output). */
@@ -22342,9 +22496,15 @@ export interface operations {
                 /** @description Time-series granularity: '5min', 'hour' or 'day'. '5min' needs an explicit window of at most 1000 buckets (about 83 hours); the default 30-day window is refused with a 422. */
                 bucket?: "5min" | "hour" | "day";
                 /** @description Which breakdowns to compute; repeatable (dimensions=model&dimensions=user). Each value names the 'by_<value>' response field it fills, except 'status_code', which fills the failure taxonomy in 'errors_by_status_code'. Omit for every breakdown (the default); pass 'none' for a totals-and-series-only response. Each dimension left out skips one GROUP BY scan, so a caller that reads only the tiles or the time series should say so. Fields that were not requested come back empty. */
-                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "status_code" | "tool" | "none")[] | null;
+                dimensions?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "policy" | "workspace" | "channel" | "status_code" | "tool" | "none")[] | null;
                 /** @description Also compute 'totals.p95_latency_ms', which sorts the window's latencies. */
                 include_p95?: boolean;
+                /** @description Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null. */
+                p95_by?: ("model" | "user" | "api_key" | "source" | "source_label" | "endpoint" | "provider" | "policy" | "workspace" | "channel") | null;
+                /** @description Also name the provenance source and API key name most of each session's requests carry, on 'by_source_label' rows, when 'source_label' is among 'dimensions' (or 'dimensions' is omitted). One more grouped pass over the sessions listed. */
+                session_details?: boolean;
+                /** @description What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. Ties fall back to the key. */
+                rank_by?: "cost" | "billed" | "tokens" | "requests";
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -22395,6 +22555,10 @@ export interface operations {
                 exclude_policy_name?: string[] | null;
                 /** @description true: only requests a routing policy served; false: only requests that named a model. */
                 routed?: boolean | null;
+                /** @description Only rows that came in this way: imported usage, the dashboard's Playground, or the API. */
+                channel?: ("imported" | "playground" | "api")[] | null;
+                /** @description Leave out rows that came in these ways. */
+                exclude_channel?: ("imported" | "playground" | "api")[] | null;
                 /** @description Only rows where these columns are empty (no key, user or session). */
                 is_null?: ("api_key_id" | "user_id" | "source_label")[] | null;
                 /** @description Only rows billed for more than this many tokens (input plus output). */
@@ -23703,7 +23867,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description The dashboard page the views belong to. */
-                page: "activity";
+                page: "activity" | "usage";
                 skip?: number;
                 limit?: number;
             };

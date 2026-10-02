@@ -39,6 +39,9 @@ function summary(): UsageSummary {
     by_endpoint: [],
     by_provider: [],
     by_tool: [],
+    by_policy: [],
+    by_workspace: [],
+    by_channel: [],
     errors_by_status_code: [],
     series: [],
   }

@@ -15,19 +15,40 @@ ActivityGroupOrder = Literal["recent", "requests"]
 # The grid the grouped series and the agent-telemetry series share with the telemetry
 # port; only the summary's own series also takes five minutes.
 Bucket = Literal["hour", "day"]
-SeriesGroupBy = Literal["model", "user_id", "api_key_id", "source"]
+SeriesGroupBy = Literal[
+    "model", "user_id", "api_key_id", "source", "source_label", "channel", "provider", "policy", "workspace"
+]
 
 # The columns a summary breakdown groups by. A dimension name is the ``by_<name>``
 # response field it fills, so a caller reads the selector and the payload with
 # one vocabulary.
-BreakdownDimension = Literal["model", "user", "api_key", "source", "source_label", "endpoint", "provider"]
+BreakdownDimension = Literal[
+    "model", "user", "api_key", "source", "source_label", "endpoint", "provider", "policy", "workspace", "channel"
+]
 
 # Every breakdown ``/summary`` can compute: the columns above, the failure taxonomy
 # (``status_code``), and the tool spend. The extra ``none`` is the explicit empty
 # selection (a repeated query param cannot express an empty list on the wire).
 SummaryDimension = Literal[
-    "model", "user", "api_key", "source", "source_label", "endpoint", "provider", "status_code", "tool", "none"
+    "model",
+    "user",
+    "api_key",
+    "source",
+    "source_label",
+    "endpoint",
+    "provider",
+    "policy",
+    "workspace",
+    "channel",
+    "status_code",
+    "tool",
+    "none",
 ]
+
+# What ranks a breakdown's groups, and so which make its top N before the fold: all
+# spend, billed spend (``cost - imported_cost``), billed tokens (input plus output) or
+# requests. Ties fall back to the key.
+UsageRankBy = Literal["cost", "billed", "tokens", "requests"]
 
 # Coarse display buckets for a failure's status code. A closed Literal rather than
 # a bare str so the set lands in the OpenAPI schema as an enum and a consumer can
@@ -110,6 +131,10 @@ class UsageTotals(BaseModel):
     # would have cost at API rates, never charged to a budget, so a caller shows
     # it apart from the gateway's own spend (``cost - imported_cost``).
     imported_cost: float = 0.0
+    # Billed cache-read tokens, the meter ``billed_input_tokens`` includes, so a cache
+    # share is ``billed_cache_read_tokens / billed_input_tokens``; unlike the raw
+    # ``cache_read_tokens`` above, it is what each breakdown row's cache figure sums to.
+    billed_cache_read_tokens: int = 0
 
 
 class UsageGroupRow(BaseModel):
@@ -122,16 +147,43 @@ class UsageGroupRow(BaseModel):
     """
 
     key: str | None
-    # Display name for an opaque key (a user's alias, an API key's name), resolved
-    # in the same GROUP BY. Only ever set for the ``user`` and ``api_key``
-    # dimensions, and null there too when the entity has no label or is gone; a
-    # client falls back to ``key``. Its purpose is to let a client build a user or
-    # key filter from this breakdown alone, rather than reading both whole tables.
+    # Display name for an opaque key (a user's alias, an API key's name, a
+    # workspace's name), resolved in the same GROUP BY. Only ever set for the
+    # ``user``, ``api_key`` and ``workspace`` dimensions, and null there too when the
+    # entity has no label or is gone; a client falls back to ``key``. Its purpose is
+    # to let a client build a filter from this breakdown alone, rather than reading
+    # whole tables.
     label: str | None = None
     cost: float
     tokens: int
     requests: int
     is_other: bool = False
+    # The part of ``cost`` from imported usage, as on the totals, so the group's own
+    # spend is ``cost - imported_cost``.
+    imported_cost: float = 0.0
+    # Failed requests, which ``requests`` includes.
+    error_count: int = 0
+    # Billed cache-read tokens, part of ``tokens``.
+    cache_read_tokens: int = 0
+    # Nearest-rank 95th-percentile latency over the group's requests, absorbed attempts
+    # left out as the totals' is. Null unless ``p95_by`` named this breakdown, on the
+    # fold row, and for a group none of whose requests recorded a latency.
+    p95_latency_ms: int | None = None
+
+
+class UsageSessionRow(UsageGroupRow):
+    """A ``by_source_label`` row: a session's breakdown figures, its span, and where it came from.
+
+    ``first_at`` and ``last_at`` are its first and last request, read in the same
+    grouped pass (null on the fold row). ``source`` and ``api_key_name`` are the
+    provenance source and API key name most of its requests carry, which cost one more
+    grouped pass and so are null unless ``session_details`` asked for them.
+    """
+
+    first_at: datetime | None = None
+    last_at: datetime | None = None
+    source: str | None = None
+    api_key_name: str | None = None
 
 
 class UsageErrorCodeRow(BaseModel):
@@ -167,6 +219,9 @@ class UsageSeriesPoint(BaseModel):
     tokens: int
     requests: int
     errors: int = 0
+    # The part of ``cost`` from imported usage, so a chart can leave subscription
+    # usage out of the bucket.
+    imported_cost: float = 0.0
     input_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
@@ -210,12 +265,17 @@ class UsageSummary(BaseModel):
     # sessions routinely account for most of a workload's tokens, so this is the
     # dimension that turns "spend went up" into "this task went wrong". Gateway
     # rows carry no label, so they group under a single null key.
-    by_source_label: list[UsageGroupRow]
+    by_source_label: list[UsageSessionRow]
     # API surface (/api/v1/chat/completions vs /api/v1/messages vs /api/v1/responses) and
     # upstream provider: the two splits a gateway operator needs and that no
     # other endpoint reports.
     by_endpoint: list[UsageGroupRow]
     by_provider: list[UsageGroupRow]
+    # Routing policy (``key`` None for requests that named a model), workspace (``label``
+    # its name; only the caller's own scope), and channel (see ``core.usage_source.UsageChannel``).
+    by_policy: list[UsageGroupRow] = []
+    by_workspace: list[UsageGroupRow] = []
+    by_channel: list[UsageGroupRow] = []
     # Gateway-run tool spend. Empty when the window has none, and MCP tools are
     # excluded by design (their names are unbounded, see ``GATEWAY_TOOL_NAMES``).
     by_tool: list[UsageToolRow] = []
@@ -244,6 +304,8 @@ class UsageGroupedSeriesPoint(BaseModel):
     cost: float
     tokens: int
     requests: int
+    # The part of ``cost`` from imported usage.
+    imported_cost: float = 0.0
 
 
 class UsageGroupedSeries(BaseModel):

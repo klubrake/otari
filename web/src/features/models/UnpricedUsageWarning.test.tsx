@@ -20,7 +20,16 @@ import {
 import { withRouter } from "@/tests/router"
 
 function modelRow(key: string, requests: number): UsageGroupRow {
-  return { key, cost: 0, tokens: 0, requests, is_other: false }
+  return {
+    key,
+    cost: 0,
+    tokens: 0,
+    requests,
+    is_other: false,
+    imported_cost: 0,
+    error_count: 0,
+    cache_read_tokens: 0,
+  }
 }
 
 function summary(requests: number, byModel: UsageGroupRow[]): UsageSummary {
@@ -37,6 +46,9 @@ function summary(requests: number, byModel: UsageGroupRow[]): UsageSummary {
     by_endpoint: [],
     by_provider: [],
     by_tool: [],
+    by_policy: [],
+    by_workspace: [],
+    by_channel: [],
     errors_by_status_code: [],
     series: [],
   }

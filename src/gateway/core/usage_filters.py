@@ -16,9 +16,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement, and_, case, func, or_, select
 
 from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
-from gateway.core.usage_source import not_served_here
+from gateway.core.usage_source import UsageChannel, key_secret, not_served_here, usage_channel
 from gateway.models.api_keys import APIKey
 from gateway.models.money import MAX_USD_LIMIT
+from gateway.models.tenancy import Workspace
 from gateway.models.usage import UsageLog
 from gateway.models.users import User
 
@@ -243,6 +244,10 @@ MAX_COST_THRESHOLD = MAX_USD_LIMIT
 MAX_NULLABLE_FIELDS = len(get_args(NullableUsageField))
 
 
+# Every channel there is, the most a channel filter can name.
+MAX_CHANNELS = len(get_args(UsageChannel))
+
+
 class UsageRefinements(BaseModel):
     """Filters that narrow the usage rows past the entity filters every endpoint takes.
 
@@ -266,6 +271,8 @@ class UsageRefinements(BaseModel):
     # True: only requests a routing policy served; False: only requests that named
     # a model or an alias directly.
     routed: bool | None = None
+    channel: UsageChannel | Annotated[list[UsageChannel], Field(max_length=MAX_CHANNELS)] | None = None
+    exclude_channel: UsageChannel | Annotated[list[UsageChannel], Field(max_length=MAX_CHANNELS)] | None = None
     is_null: NullableUsageField | Annotated[list[NullableUsageField], Field(max_length=MAX_NULLABLE_FIELDS)] | None = (
         None
     )
@@ -305,6 +312,12 @@ def refinement_conditions(refine: UsageRefinements) -> list[ColumnElement[bool]]
         conditions.append(_excluding(UsageLog.policy_name, refine.exclude_policy_name, nullable=True))
     if refine.routed is not None:
         conditions.append(UsageLog.policy_name.is_not(None) if refine.routed else UsageLog.policy_name.is_(None))
+    if refine.channel or refine.exclude_channel:
+        channel = usage_channel(UsageLog.source, UsageLog.endpoint, key_secret(UsageLog.api_key_id))
+        if refine.channel:
+            conditions.append(channel.in_(_as_list(refine.channel)))
+        if refine.exclude_channel:
+            conditions.append(channel.not_in(_as_list(refine.exclude_channel)))
     conditions.extend(_NULLABLE[field].is_(None) for field in _as_list(refine.is_null or []))
     if refine.tokens_gt is not None:
         conditions.append(billed_tokens() > refine.tokens_gt)
@@ -410,6 +423,7 @@ class LabelJoin(NamedTuple):
 
 USER_LABEL = LabelJoin(entity=User, on=User.user_id == UsageLog.user_id, label=User.alias)
 API_KEY_LABEL = LabelJoin(entity=APIKey, on=APIKey.id == UsageLog.api_key_id, label=APIKey.key_name)
+WORKSPACE_LABEL = LabelJoin(entity=Workspace, on=Workspace.id == UsageLog.workspace_id, label=Workspace.name)
 
 
 # The aggregate reads are range-bounded, unlike the raw list. Absent a start_date

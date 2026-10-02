@@ -31,6 +31,11 @@ from gateway.api.routes._usage_common import (
     GROUP_SEARCH_DESC,
     INCLUDE_P95_DESC,
     ORDER_DESC,
+    P95_BY_DESC,
+    RANK_BY_DESC,
+    SERIES_GROUP_BY_DESC,
+    SERIES_RANK_BY_DESC,
+    SESSION_DETAILS_DESC,
     SORT_DESC,
     SUMMARY_BUCKET_DESC,
     UsageCountFilters,
@@ -57,11 +62,13 @@ from gateway.models.usage import UsageLog
 from gateway.schemas.usage import (
     ActivityGroupBy,
     ActivityGroupOrder,
+    BreakdownDimension,
     Bucket,
     SeriesGroupBy,
     SummaryDimension,
     UsageActivityGroups,
     UsageGroupedSeries,
+    UsageRankBy,
     UsageSummary,
 )
 from gateway.services.external_usage_service import (
@@ -446,22 +453,27 @@ async def usage_summary(
     bucket: UsageBucketGrain = Query(default="day", description=SUMMARY_BUCKET_DESC),
     dimensions: list[SummaryDimension] | None = Query(default=None, description=DIMENSIONS_DESC),
     include_p95: Annotated[bool, Query(description=INCLUDE_P95_DESC)] = False,
+    p95_by: Annotated[BreakdownDimension | None, Query(description=P95_BY_DESC)] = None,
+    session_details: Annotated[bool, Query(description=SESSION_DETAILS_DESC)] = False,
+    rank_by: Annotated[UsageRankBy, Query(description=RANK_BY_DESC)] = "cost",
 ) -> UsageSummary:
     """Aggregate spend, tokens, and request volume for the dashboard Usage page.
 
     Range-bounded (default last 30 days, hard-capped): unlike the raw ``/api/v1/usage``
     list, every aggregate is scoped to a bounded window so it stays served by the
     timestamp index. Returns grand totals, breakdowns by model / user / API key /
-    source / session (``source_label``) / endpoint / provider (top rows plus a
-    reconciling ``other`` fold, billed token counts), the error taxonomy grouped
-    by failure status code, and a UTC-bucketed time series carrying each bucket's
-    error count and billed token composition (input incl. cache, cache read/write,
-    output).
+    source / session (``source_label``) / endpoint / provider / routing policy /
+    workspace / channel (top rows plus a reconciling ``other`` fold; each row with its
+    billed tokens and cache reads, imported cost and failures, a session's with its span),
+    the error taxonomy grouped by failure status code, and a UTC-bucketed time series
+    carrying each bucket's error count, imported cost and billed token composition
+    (input incl. cache, cache read/write, output).
 
     Each breakdown is its own ``GROUP BY`` pass, so a caller that reads only the
-    totals or the series should narrow ``dimensions`` rather than pay for all eight
+    totals or the series should narrow ``dimensions`` rather than pay for every one
     (the dashboard's tiles, timeline context, and model typeahead all do). Omitting
-    the parameter keeps the full set.
+    the parameter keeps the full set. ``p95_by`` (latency per group in one breakdown)
+    and ``session_details`` (each session's source and key name) cost one more pass each.
 
     ``model``, ``user_id``, and ``api_key_id`` are repeatable: several values match
     any of them, so one chart can compare a handful of models, users, or keys.
@@ -475,6 +487,9 @@ async def usage_summary(
         bucket=bucket,
         dimensions=dimensions,
         include_p95=include_p95,
+        p95_by=p95_by,
+        session_details=session_details,
+        rank_by=rank_by,
     )
 
 
@@ -482,8 +497,9 @@ async def usage_summary(
 async def usage_series(
     reads: UsageReadServiceDep,
     filters: Annotated[UsageReadFilters, Depends()],
-    group_by: SeriesGroupBy = Query(description="Dimension to split the series by"),
+    group_by: SeriesGroupBy = Query(description=SERIES_GROUP_BY_DESC),
     bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
+    rank_by: Annotated[UsageRankBy, Query(description=SERIES_RANK_BY_DESC)] = "cost",
 ) -> UsageGroupedSeries:
     """Time series split by one dimension, for the dashboard's stacked charts.
 
@@ -505,6 +521,7 @@ async def usage_series(
         status=filters.status,
         bucket=bucket,
         group_by=group_by,
+        rank_by=rank_by,
     )
 
 

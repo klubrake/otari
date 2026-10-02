@@ -107,6 +107,7 @@ export function usageTotals(overrides: Partial<UsageTotals> = {}): UsageTotals {
     p95_latency_ms: null,
     absorbed_count: 0,
     imported_cost: 0,
+    billed_cache_read_tokens: 0,
     ...overrides,
   }
 }
@@ -119,6 +120,7 @@ export function seriesPoint(
     tokens: 0,
     requests: 0,
     errors: 0,
+    imported_cost: 0,
     input_tokens: 0,
     output_tokens: 0,
     cache_read_tokens: 0,

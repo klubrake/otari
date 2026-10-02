@@ -185,3 +185,45 @@ def test_a_page_with_no_groups_names_no_models() -> None:
             return await UsageReadRepository(uow)._group_models(UsageLog.api_key_id, [], [], None)
 
     assert _run(body) == {}
+
+
+def test_a_groups_p95_on_sqlite_is_the_nearest_rank_value_postgresql_returns() -> None:
+    async def body(db: AsyncSession) -> dict[str | None, int]:
+        db.add_all(
+            [*(_log(model="steady", latency_ms=ms) for ms in range(100, 2100, 100))]
+            + [
+                _log(model="steady", latency_ms=90_000, status="absorbed"),
+                _log(model="once", latency_ms=700),
+                _log(model="unmeasured"),
+            ]
+        )
+        await db.commit()
+        uow = UnitOfWork(db)
+        async with uow:
+            return await UsageSummaryRepository(uow).group_p95_latency_ms("model", ["steady", "once", "unmeasured"], [])
+
+    assert _run(body) == {"steady": 1900, "once": 700}
+
+
+def test_the_channel_breakdown_on_sqlite_tells_the_three_channels_apart() -> None:
+    from gateway.core.usage_source import PLAYGROUND_USAGE_ENDPOINT
+    from gateway.models.api_keys import APIKey
+
+    async def body(db: AsyncSession) -> dict[str | None, int]:
+        db.add(APIKey(id="k-forward", key_hash="h", key_name="forward", workspace_id=WORKSPACE, internal_secret="s"))
+        db.add_all(
+            [
+                _log(source="claude_code"),
+                _log(source="gateway", endpoint=PLAYGROUND_USAGE_ENDPOINT),
+                _log(source="gateway", api_key_id="k-forward"),
+                _log(source="gateway"),
+                _log(source="gateway"),
+            ]
+        )
+        await db.commit()
+        uow = UnitOfWork(db)
+        async with uow:
+            rows = await UsageSummaryRepository(uow).breakdown("channel", [], limit=None)
+        return {row.key: row.requests for row in rows}
+
+    assert _run(body) == {"imported": 1, "playground": 2, "api": 2}

@@ -16,6 +16,7 @@ from fastapi import Depends, HTTPException, Query
 from gateway.core.series import MAX_SERIES_POINTS, grid_start
 from gateway.core.sql import BUCKET_SECONDS, MAX_FILTER_VALUES, UsageBucketGrain, match_any
 from gateway.core.usage_filters import (
+    MAX_CHANNELS,
     MAX_COST_THRESHOLD,
     MAX_INT32,
     MAX_NULLABLE_FIELDS,
@@ -29,6 +30,7 @@ from gateway.core.usage_filters import (
     refinement_conditions,
     resolve_window,
 )
+from gateway.core.usage_source import UsageChannel
 from gateway.models.usage import UsageLog
 from gateway.services.usage import GATEWAY_TOOL_NAMES
 
@@ -141,6 +143,28 @@ INCLUDE_ABSORBED_DESC = (
     "filter takes precedence."
 )
 INCLUDE_P95_DESC = "Also compute 'totals.p95_latency_ms', which sorts the window's latencies."
+P95_BY_DESC = (
+    "Also compute each group's 'p95_latency_ms' in this one breakdown, when it is among 'dimensions' (or "
+    "'dimensions' is omitted). One more grouped pass over that breakdown's groups; the fold row's stays null."
+)
+RANK_BY_DESC = (
+    "What ranks each breakdown's groups, and so which make the top N before the 'other' fold: 'cost' "
+    "(all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or "
+    "'requests'. Ties fall back to the key."
+)
+SERIES_RANK_BY_DESC = (
+    "What picks the groups that get a series of their own before the 'other' fold: 'cost' (all spend, "
+    "the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'."
+)
+SESSION_DETAILS_DESC = (
+    "Also name the provenance source and API key name most of each session's requests carry, on "
+    "'by_source_label' rows, when 'source_label' is among 'dimensions' (or 'dimensions' is omitted). "
+    "One more grouped pass over the sessions listed."
+)
+SERIES_GROUP_BY_DESC = (
+    "Dimension to split the series by. 'channel' tells imported subscription usage, the dashboard's Playground "
+    "and API calls apart; 'workspace' covers only the workspaces the caller may read."
+)
 GROUP_BY_DESC = (
     "Collapse the log to one row per API key, session (source_label), model, billed user, routing policy, "
     "or alias: the name the caller sent (requested_model) where it named neither the model that served "
@@ -211,6 +235,17 @@ def usage_refinements(
         bool | None,
         Query(description="true: only requests a routing policy served; false: only requests that named a model."),
     ] = None,
+    channel: Annotated[
+        list[UsageChannel] | None,
+        Query(
+            max_length=MAX_CHANNELS,
+            description="Only rows that came in this way: imported usage, the dashboard's Playground, or the API.",
+        ),
+    ] = None,
+    exclude_channel: Annotated[
+        list[UsageChannel] | None,
+        Query(max_length=MAX_CHANNELS, description="Leave out rows that came in these ways."),
+    ] = None,
     is_null: Annotated[
         list[NullableUsageField] | None,
         Query(
@@ -250,6 +285,8 @@ def usage_refinements(
         policy_name=policy_name,
         exclude_policy_name=exclude_policy_name,
         routed=routed,
+        channel=channel,
+        exclude_channel=exclude_channel,
         is_null=is_null,
         tokens_gt=tokens_gt,
         cost_gt=cost_gt,

@@ -30,9 +30,9 @@ the route that writes it and the service that filters on it need the name, and a
 service may not import the API layer (`scripts/check_architecture.py`).
 """
 
-from typing import Any, cast
+from typing import Any, Literal, cast
 
-from sqlalchemy import ColumnElement, and_, select
+from sqlalchemy import ColumnElement, case, or_, select
 
 from gateway.models.api_keys import APIKey
 
@@ -98,10 +98,49 @@ def integration_traffic(endpoint: Any, api_key_id: Any) -> ColumnElement[bool]:
     spells differently, and half of this one silently counts the Playground as
     an integration.
     """
-    return and_(
-        endpoint != PLAYGROUND_USAGE_ENDPOINT,
-        # A row with no key at all (the standalone Playground writes one, and so
-        # does any session-authorized request) matches nothing here and is left to
-        # the endpoint half above, which is the half that knows about it.
-        ~select(APIKey.id).where(APIKey.id == api_key_id, APIKey.internal_secret.is_not(None)).exists(),
+    # A row with no key at all (the standalone Playground writes one, and so does any
+    # session-authorized request) reads a NULL secret here and is left to the endpoint
+    # half, which is the half that knows about it.
+    return ~playground_traffic(endpoint, key_secret(api_key_id))
+
+
+def key_secret(api_key_id: Any) -> Any:
+    """The ``internal_secret`` of a row's API key, as a scalar subquery, for testing one row at a time.
+
+    Over an alias of its own, so a query that already joins ``api_keys`` (to name a
+    row's key) does not correlate the lookup away.
+    """
+    key = APIKey.__table__.alias("secret_key")
+    return select(key.c.internal_secret).where(key.c.id == api_key_id).correlate_except(key).scalar_subquery()
+
+
+def playground_traffic(endpoint: Any, key_secret: Any) -> ColumnElement[bool]:
+    """Match rows the dashboard's own Playground made, under either of its two shapes.
+
+    ``key_secret`` is the ``internal_secret`` of the row's API key, however the
+    caller reaches it: a join where the query groups over many rows, a scalar
+    subquery where it tests one. See :func:`integration_traffic` for why the
+    credential is half of the rule.
+    """
+    return or_(endpoint == PLAYGROUND_USAGE_ENDPOINT, key_secret.is_not(None))
+
+
+# The way a request reached the usage log: usage imported through the external-events
+# ingest (rows this deployment did not serve), a message typed in the dashboard's
+# Playground, or a call to the API from somebody's own code.
+UsageChannel = Literal["imported", "playground", "api"]
+
+
+def usage_channel(source: Any, endpoint: Any, secret: Any) -> ColumnElement[str]:
+    """Which :data:`UsageChannel` a row came in by, the one rule the breakdown and the filter share.
+
+    ``secret`` is the row's key ``internal_secret``, reached as :func:`playground_traffic` says.
+    """
+    imported: UsageChannel = "imported"
+    playground: UsageChannel = "playground"
+    api: UsageChannel = "api"
+    return case(
+        (not_served_here(source), imported),
+        (playground_traffic(endpoint, secret), playground),
+        else_=api,
     )
