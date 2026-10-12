@@ -219,6 +219,8 @@ class UsageSummary(BaseModel):
     # Gateway-run tool spend. Empty when the window has none, and MCP tools are
     # excluded by design (their names are unbounded, see ``GATEWAY_TOOL_NAMES``).
     by_tool: list[UsageToolRow] = []
+    # Spend by the values of the tag ``group_by_tag`` named; empty when it named none.
+    by_tag: list[UsageGroupRow] = []
     # Failures only, so the taxonomy is not swamped by the successes that carry
     # no status code. Counts sum to ``totals.error_count``, unless a window
     # somehow held more than the breakdown cap's distinct codes, in which case

@@ -132,6 +132,7 @@ class UsageReadService:
         bucket: UsageBucketGrain,
         dimensions: list[SummaryDimension] | None,
         include_p95: bool = False,
+        group_by_tag: str | None = None,
     ) -> UsageSummary:
         """Totals, the breakdowns asked for and a zero-filled series, over an already-resolved window.
 
@@ -159,6 +160,16 @@ class UsageReadService:
                 else []
             )
             by_tool = await self._tool_breakdown(conditions) if TOOL_DIMENSION in requested else []
+            by_tag = (
+                with_fold(
+                    await self._summaries.tag_breakdown(
+                        group_by_tag, conditions, limit=BREAKDOWN_TOP_N, status_filter=status
+                    ),
+                    totals,
+                )
+                if group_by_tag
+                else []
+            )
             if include_p95:
                 totals = totals.model_copy(update={"p95_latency_ms": await self._reads.p95_latency_ms(conditions)})
             populated = await self._summaries.series(conditions, status_filter=status, bucket=bucket)
@@ -175,6 +186,7 @@ class UsageReadService:
             by_endpoint=breakdowns.get("endpoint", []),
             by_provider=breakdowns.get("provider", []),
             by_tool=by_tool,
+            by_tag=by_tag,
             errors_by_status_code=errors_by_status_code,
             # Zero-filled so the chart is time-linear (GROUP BY drops gaps).
             series=dense_series(start, end, bucket, populated, empty_usage_point),

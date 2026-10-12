@@ -67,6 +67,7 @@ from gateway.api.routes._usage_common import (
     ORDER_DESC,
     SORT_DESC,
     SUMMARY_BUCKET_DESC,
+    GroupByTag,
     UsageListFilters,
     UsageReadFilters,
     summary_window,
@@ -95,6 +96,7 @@ from gateway.services.tenancy.authorization import (
     resolve_visible_workspace_scope,
     resolve_workspace_in_organization,
 )
+from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 
 router = APIRouter(
     prefix="/organizations/me/usage",
@@ -127,7 +129,7 @@ async def _scope_condition(
     suspended or a role changed between two requests, and the cheaper answer is
     the one that goes stale in the unsafe direction.
     """
-    organizations = OrganizationService(db, membership_listener=None)
+    organizations = OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener())
 
     if workspace_id is not None:
         # Only the organization is resolved on this branch. The full scope would
@@ -236,6 +238,7 @@ async def organization_usage_summary(
     bucket: UsageBucketGrain = Query(default="day", description=SUMMARY_BUCKET_DESC),
     dimensions: list[SummaryDimension] | None = Query(default=None, description=DIMENSIONS_DESC),
     include_p95: Annotated[bool, Query(description=INCLUDE_P95_DESC)] = False,
+    group_by_tag: GroupByTag = None,
 ) -> UsageSummary:
     """Aggregate spend, tokens and request volume for the caller's organization.
 
@@ -255,6 +258,7 @@ async def organization_usage_summary(
         bucket=bucket,
         dimensions=dimensions,
         include_p95=include_p95,
+        group_by_tag=group_by_tag,
     )
 
 
