@@ -23,13 +23,15 @@ test.describe("dashboard core flows", () => {
     await login(page)
     await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible()
     await expect(page.getByText("Get started with Otari")).toBeVisible()
+    // The month's tiles are there under it, reading an empty gateway.
+    await expect(page.getByText("Total at API prices")).toBeVisible()
   })
 
   test("add a provider from onboarding, and it appears in the table", async ({
     page,
   }) => {
     await login(page)
-    await page.getByRole("button", { name: "Add your first provider" }).click()
+    await page.getByRole("link", { name: "Add your first provider" }).click()
     await expect(page.getByText("Welcome to Otari")).toBeVisible()
 
     await page.getByRole("button", { name: "Add your first provider" }).click()

@@ -146,11 +146,42 @@ manages every key in the organization and chooses each key's owner, while a
 member sees the same page scoped to their own keys, always billed to themselves
 and never budget-exempt.
 
-Overview splits the same way. Everyone lands on their own spend, traffic and
-recent requests. An organization owner or admin also gets a budget-health
-figure, read from the spend ceilings holding their organization, while a
-deployment operator gets provider health and the deployment's own budgets
-instead.
+Overview splits the same way. It reads one calendar month in UTC, this one
+unless the month menu picks one of the eleven before it (any other range is
+Usage's), and one scope: a member sees their own usage, while someone who
+manages the workspace switches between the Workspace, You and, if they manage
+the organization, the whole Organization. A line at the top names what needs
+acting on now, as the gateway judges it for your role (a provider down, a key or
+budget near its limit or on pace to pass it, a key about to expire), each
+linking where it is fixed. Three numbers follow: the total at API prices, split
+into billed and subscription and set against the same days of the month before
+(a past month against the whole month before); the workspace budget, or across
+the organization the tightest spend ceiling, with its pace; and requests, with
+how many failed. Under them, the month's running
+total of billed spend against the budget, projected to the month's end at its
+pace so far (the Budget tile's pace, and the gateway's crossing date, once the
+month is a day or a tenth in, whichever is longer), then the month's latest
+failures, each opening in Activity.
+Beside them sit the limits that apply in the scope: your keys, the workspace's
+keys, or the organization's workspaces against their ceilings. A deployment
+operator also sees whether each provider answers. The scope and month live in
+the URL.
+
+A member sees no workspace spend by day, so their chart is their own running
+total alone, with no budget line or projection: their share cannot show how
+close the workspace is to its budget. The Budget tile still gives them the
+workspace budget's figures for the month running. A month that has ended is
+drawn against today's budget and today's limits, since past ones are not stored,
+so it carries no verdict: no crossing date, no severity, and limits named
+("Limit today") rather than measured against the month.
+
+Before anything has been sent, Overview opens with a getting-started strip. A
+deployment operator sees it on a gateway with no providers and no usage, with a
+link to add the first provider. Anyone else sees it while the model catalog is
+empty and their account has made no requests: an organization owner or admin is
+linked to add a provider key, and a member, who cannot add one, is told to ask
+an owner or admin. Once a model is available the strip goes and the setup guide
+takes over.
 
 ## Playground
 

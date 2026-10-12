@@ -1,29 +1,49 @@
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { OverviewSummary } from "@/client"
 import { apiFetch } from "@/shared/api/client"
 import { OVERVIEW } from "@/shared/api/queryKeys"
 
+export type OverviewScope = OverviewSummary["scope"]
+
 /**
- * The overview's counts and budget strips, in one read.
+ * The overview's server-judged parts in one read: the counts, the budget
+ * strips, what needs attention and the limits beside them, for one scope and
+ * one calendar month.
  *
- * The page used to download keys, users, members, budgets and ceilings to
- * compute three integers and one worst-case row per strip (otari#1425). The
- * server does that scan now; what stays here is the wording.
- *
- * `budgets` and `ceilings` are null where the caller may not see them, which is
- * not the same as a strip with nothing in it: deployment budgets are the
- * operator's and ceilings are an organization owner's or admin's.
+ * `budgets` and `ceilings` are null where the caller may not see them, which
+ * is not the same as nothing in them. `scope` in the answer is the scope the
+ * server read, which falls back to `you` where the one asked for is not the
+ * caller's to read.
  */
-export function useOverviewSummary(workspaceId?: string, enabled = true) {
+export function useOverviewSummary({
+  workspaceId,
+  month,
+  scope,
+}: {
+  workspaceId?: string
+  month: string
+  scope: OverviewScope
+}) {
   return useQuery({
-    queryKey: [OVERVIEW, workspaceId ?? null],
-    queryFn: () =>
-      apiFetch<OverviewSummary>(
-        workspaceId
-          ? `/overview?workspace_id=${encodeURIComponent(workspaceId)}`
-          : "/overview",
-      ),
+    queryKey: [OVERVIEW, workspaceId ?? null, month, scope],
+    queryFn: () => {
+      const params = new URLSearchParams({ month, scope })
+      if (workspaceId) params.set("workspace_id", workspaceId)
+      return apiFetch<OverviewSummary>(`/overview?${params}`)
+    },
     staleTime: 60_000,
-    enabled,
+    // The last answer stays up while another scope or month loads, so the
+    // attention line, the rail and the budget do not drop out and back.
+    placeholderData: (previous) => previous,
   })
+}
+
+/**
+ * Ask for every overview answer again. For a reading that changed underneath
+ * it without a write here, such as the provider check the attention list reads
+ * from the gateway's cache.
+ */
+export function useRefreshOverview() {
+  const queryClient = useQueryClient()
+  return () => queryClient.invalidateQueries({ queryKey: [OVERVIEW] })
 }

@@ -88,7 +88,7 @@ export function scopesFor(viewer: {
 
 /** The scope the URL names, if the reader may have it, else their default. */
 export function readScope(
-  url: UsageUrl,
+  url: { get: (key: "scope") => string },
   scopes: readonly UsageScopeKey[],
 ): UsageScopeKey {
   const asked = url.get("scope")

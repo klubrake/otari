@@ -1181,10 +1181,6 @@ describe("content text wears a type role", () => {
       "the blocked-from-every-model state banner",
     ],
     [
-      "features/overview/OverviewPage.tsx",
-      "an error-count figure and a chart's figcaption",
-    ],
-    [
       "design-system/metrics/KpiCell.tsx",
       "the KPI cell's severity and delta line",
     ],

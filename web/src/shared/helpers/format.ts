@@ -167,6 +167,8 @@ const UTC_CLOCK_SECONDS = utc({
   hourCycle: "h23",
 })
 const UTC_MONTH = utc({ month: "short" })
+const UTC_MONTH_NAME = utc({ month: "long" })
+const UTC_MONTH_YEAR = utc({ month: "long", year: "numeric" })
 const UTC_DAY = utc({ month: "short", day: "numeric" })
 const UTC_DATE = utc({ year: "numeric", month: "2-digit", day: "2-digit" })
 const UTC_WEEKDAY_HOUR = utc({
@@ -199,6 +201,18 @@ export function formatUtcTime(
 export function formatUtcMonth(value: string | number): string {
   const date = readUtc(value)
   return date ? UTC_MONTH.format(date) : String(value)
+}
+
+/** "September". */
+export function formatUtcMonthName(value: string | number): string {
+  const date = readUtc(value)
+  return date ? UTC_MONTH_NAME.format(date) : String(value)
+}
+
+/** "September 2026". */
+export function formatUtcMonthYear(value: string | number): string {
+  const date = readUtc(value)
+  return date ? UTC_MONTH_YEAR.format(date) : String(value)
 }
 
 /** "Sep 27". */
@@ -298,6 +312,13 @@ const usdWhole = new Intl.NumberFormat("en-US", {
 // difference between $4.10 and $4.99 is a quarter of the number.
 export function formatUsdHeadline(value: number): string {
   return Math.abs(value) >= 100
+    ? usdWhole.format(value)
+    : usdCompact.format(value)
+}
+
+/** A limit as it was set: "$1,000" or "$25", with cents only where it has them. */
+export function formatUsdLimit(value: number): string {
+  return Number.isInteger(value)
     ? usdWhole.format(value)
     : usdCompact.format(value)
 }

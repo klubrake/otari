@@ -54,8 +54,13 @@ test.describe("a phone opens the drawer with a swipe", () => {
     await swipe(cdp, { x: 120, y: 700 }, { x: 180, y: 300 })
     await expect(toggle(page)).toHaveAttribute("aria-expanded", "false")
 
+    // Back to the top, so the swipe starts on the page's intro rather than on
+    // whatever the scroll brought under the finger: the Overview's chart is a
+    // slider that keeps sideways touches for reading a day.
+    await page.locator("#main-content").evaluate((main) => main.scrollTo(0, 0))
+
     // Away from the screen edge, which Safari keeps for its own Back gesture.
-    await swipe(cdp, { x: 60, y: 500 }, { x: 300, y: 520 })
+    await swipe(cdp, { x: 60, y: 140 }, { x: 300, y: 160 })
     await expect(toggle(page)).toHaveAttribute("aria-expanded", "true")
 
     await swipe(cdp, { x: 320, y: 500 }, { x: 60, y: 490 })
