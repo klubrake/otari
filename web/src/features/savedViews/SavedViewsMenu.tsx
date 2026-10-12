@@ -22,7 +22,7 @@ import {
   MenuSubmenu,
 } from "@/design-system/overlays/Menu"
 import { Popover } from "@/design-system/overlays/Popover"
-import { BUILT_IN_VIEWS, type BuiltInView } from "./activityQuery"
+import type { BuiltInView } from "./savedViews"
 
 // A built-in view is known by its name, a saved one by its id: a saved view
 // may share a built-in's name.
@@ -42,6 +42,7 @@ const savedKey = (view: SavedView) => `saved:${view.id}`
  * the views and the actions are menus within it.
  */
 export function SavedViewsMenu({
+  builtIns,
   views,
   current,
   matching,
@@ -56,6 +57,8 @@ export function SavedViewsMenu({
   onClose,
   isCompact = false,
 }: {
+  /** The page's own views, offered before any is saved. */
+  builtIns: readonly BuiltInView[]
   views: SavedView[]
   current: string | undefined
   /** The view the page matches, checked by identity: a saved view may share a built-in's name. */
@@ -87,7 +90,7 @@ export function SavedViewsMenu({
     ...shared.filter((view) => view.is_mine || canShare),
   ]
   const byKey = new Map<string, SavedView | BuiltInView>([
-    ...BUILT_IN_VIEWS.map((view) => [builtInKey(view), view] as const),
+    ...builtIns.map((view) => [builtInKey(view), view] as const),
     ...views.map((view) => [savedKey(view), view] as const),
   ])
   const matchingKey = [...byKey].find(([, view]) => view === matching)?.[0]
@@ -172,8 +175,12 @@ export function SavedViewsMenu({
           onAction={apply}
         >
           <MenuSection title="Built in">
-            {BUILT_IN_VIEWS.map((view) => (
-              <MenuItem key={view.name} id={builtInKey(view)}>
+            {builtIns.map((view) => (
+              <MenuItem
+                key={view.name}
+                id={builtInKey(view)}
+                description={view.description}
+              >
                 {view.name}
               </MenuItem>
             ))}

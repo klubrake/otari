@@ -91,7 +91,6 @@ The workspace view contains day-to-day gateway operations:
 
 The organization view contains tenant-wide administration:
 
-- Organization-wide usage, in hosted mode
 - Workspaces and organization members
 - Email domains, for joining colleagues automatically
 - Spend and budgets
@@ -209,14 +208,26 @@ model or member. Everything about a view lives in its URL, so a link reproduces
 it, and a view can be saved by name; someone who manages the workspace can share
 one with it.
 
-Filter Usage by user, model or API key under Add filter; the organization page
-adds a workspace filter. Each filter takes several values, and every key you can
-see is offered, including one with no traffic in the window. The filters live in
-the URL under the same names Activity reads (`user_id`, `model`, `api_key_id`,
-and `workspace_id` on the organization page), so a filtered view survives a
-reload, can be linked, and carries into Activity when you drill into a row. A
-key's actions menu on the API keys page has View usage, which opens Usage
-filtered to that key.
+Usage answers where usage is going over time. Pick whose usage (You, the
+Workspace if you manage it, or the whole Organization if you manage that) and a
+window from a day to a year. Three numbers lead: the total at API prices, split
+into what was billed and counts toward limits and what a subscription covered,
+which is tracked but billed nothing; requests, with how many failed; and tokens,
+with how much came from cache. Each compares with the window before it. One
+choice of breakdown (model, API key, session, channel, provider, policy, member
+at Workspace scope, workspace at Organization scope) drives both the stacked
+chart and the table under it, and the table sorts by any column, its 95th
+percentile latency included. The gateway does the sorting, so on a breakdown
+with more groups than the table lists, the rows kept are the top of that
+column rather than of the share. A row's cell narrows the page to its value or
+leaves it out, dragging across the chart narrows it to a stretch of dates, and
+clicking a row opens its requests in Activity with the same filters and window;
+from Organization scope Activity opens on that row's workspace. The
+organization's usage is that Organization scope rather than a page of the
+organization view. Everything lives
+in the URL under the names Activity reads (`model`, `api_key_id`, `user_id` and
+the rest), and a view can be saved by name, as on Activity. A key's actions menu
+on the API keys page has View usage, which opens Usage filtered to that key.
 
 A routed request is one row, served by whichever attempt succeeded; its earlier
 failed attempts are counted on it and listed under it on request. Opening a row

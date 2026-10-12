@@ -125,7 +125,7 @@ export const Empty: Story = {
  * `columns` is the number of cells the caller passes, not a layout preference.
  * The four stories above pass `columns={4}` for that reason: left at the
  * default 5, a strip of four cells lays a fifth track and ends the row on a
- * blank column. Five is the default because that is what Usage opens with.
+ * blank column. Five is the default because that is what Overview opens with.
  */
 export const FiveColumns: Story = {
   render: () => (
@@ -146,5 +146,37 @@ export const FiveColumns: Story = {
  */
 export const Wrapped: Story = {
   ...FiveColumns,
+  globals: { viewport: { value: "mobile2", isRotated: false } },
+}
+
+/**
+ * Three cells, which stack on a phone with a rule between each and sit on one
+ * row from `sm`. A `subline` can be a node, a link to the rows it counts, and a
+ * `graphic` can be taller than a sparkline: the row takes the tallest one's
+ * height, so the three cells still share their baselines.
+ */
+export const ThreeColumns: Story = {
+  render: () => (
+    <KpiStrip isEmpty={false} columns={3}>
+      <KpiCell
+        label="Total at API prices"
+        value="$1,215.07"
+        subline={<a href="#unpriced">3 unpriced</a>}
+        graphic={
+          <span className="flex w-full flex-col gap-1.5 text-caption">
+            <Meter fraction={0.09} ariaLabel="Billed share" />
+            <span>$106.67 billed · counts toward limits</span>
+            <span>$1,108.40 subscription · not billed</span>
+          </span>
+        }
+      />
+      <KpiCell label="Requests" value="8,452" subline="8 failed" />
+      <KpiCell label="Tokens" value="1.86B" subline="98% from cache" />
+    </KpiStrip>
+  ),
+}
+
+export const ThreeColumnsStacked: Story = {
+  ...ThreeColumns,
   globals: { viewport: { value: "mobile2", isRotated: false } },
 }

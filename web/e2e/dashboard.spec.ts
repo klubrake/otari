@@ -454,8 +454,7 @@ test.describe("dashboard core flows", () => {
     await login(page)
     await nav(page).getByRole("link", { name: "Usage" }).click()
 
-    // The affordance lives in the chart's own caption row and only exists when the
-    // range has data to share.
+    // The affordance sits in the page header, beside the saved views.
     const share = page.getByRole("button", { name: "Share usage as an image" })
     await expect(share).toBeVisible()
     await share.click()

@@ -45,6 +45,19 @@ describe("ActivityPage", () => {
       expect(lastList(calls).get("source")).toBe("gateway")
     })
 
+    it("narrows to the channel a Usage drill-down names, by the server's own rule", async () => {
+      const user = userEvent.setup()
+      const { calls } = mockApi({ rows: [entry()] })
+      renderPage(<ActivityPage />, "/activity?channel=playground")
+
+      await rowOf("gpt-4o")
+      expect(lastList(calls).getAll("channel")).toEqual(["playground"])
+      await user.click(
+        screen.getByRole("button", { name: "Remove Channel Playground" }),
+      )
+      await waitFor(() => expect(lastList(calls).getAll("channel")).toEqual([]))
+    })
+
     it("sends two picked statuses as the one left out", async () => {
       const { calls } = mockApi({ rows: [entry()] })
       renderPage(<ActivityPage />, "/activity?status=error&status=absorbed")

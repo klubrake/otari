@@ -7,6 +7,7 @@ import { SettingRow } from "@/design-system/layout/SettingRow"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { useTestService } from "@/shared/api/tools"
 import { commitOnEnter, useAutosave } from "@/shared/hooks/useAutosave"
+import { parsePerCall, perCallToStored, storedToPerCall } from "./toolPrice"
 
 // Every field fills `SettingRow`'s lane rather than picking a width of its own,
 // which is what keeps the column's edges straight whether a row holds a URL, a
@@ -479,12 +480,6 @@ export function ToolSettingRow({
   )
 }
 
-// The stored column is `input_price_per_million`, and `flat_request_cost` reads
-// it as USD per *million* calls, so a cent a search is stored as 10000. Right
-// for the wire, hostile at a keyboard: this row speaks dollars per call and
-// does the conversion itself.
-const PER_MILLION = 1_000_000
-
 /** Per-call price for a tool Otari runs itself, in the same row grammar. */
 export function ToolPriceRow({
   pricingKey,
@@ -500,16 +495,15 @@ export function ToolPriceRow({
   /** Set when the current rate could not be read, so nothing may overwrite it. */
   loadError?: string
 }) {
-  const committed = configured === null ? "" : String(configured / PER_MILLION)
+  const committed =
+    configured === null ? "" : String(storedToPerCall(configured))
   const [draft, setDraft] = useDraft(committed)
   const save = useAutosave()
   const errorId = useId()
 
   const trimmed = draft.trim()
-  // Digits with an optional decimal part, spelled out rather than left to
-  // `Number`, which reads "1e3" as 1000 and "0x10" as 16. The other numeric
-  // rows refuse those; this one is money, so it admits a decimal point.
-  const parsed = /^\d+(\.\d+)?$/.test(trimmed) ? Number(trimmed) : Number.NaN
+  // Money, so unlike the other numeric rows it admits a decimal point.
+  const parsed = parsePerCall(trimmed) ?? Number.NaN
   const invalid =
     trimmed !== "" && !(Number.isFinite(parsed) && parsed >= 0)
       ? "An amount in dollars, such as 0.01."
@@ -547,9 +541,7 @@ export function ToolPriceRow({
                 setDraft(committed)
                 return
               }
-              // Rounded, because the wire value is per million: 0.07 * 1e6 is
-              // 70000.00000000001 in binary floating point.
-              void save.run(() => commit(Math.round(parsed * PER_MILLION)))
+              void save.run(() => commit(perCallToStored(parsed)))
             }}
             className={`otari-machine-field min-w-0 flex-1 text-right tabular-nums ${INPUT_CLASS}`}
           />

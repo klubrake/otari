@@ -7,8 +7,10 @@ import {
   deltaFraction,
   formatCompact,
   formatCost,
+  formatDuration,
   formatFileSize,
   formatLatency,
+  formatMultiple,
   formatNumber,
   formatPct,
   formatRate,
@@ -19,6 +21,7 @@ import {
   formatTokens,
   formatUnitRate,
   formatUsd,
+  formatUsdAxis,
   formatUsdHeadline,
   formatUtcDateTime,
   formatUtcDay,
@@ -63,6 +66,28 @@ describe("formatScore", () => {
     expect(formatScore(0.97)).toBe("0.97")
     expect(formatScore(0.123456)).toBe("0.123")
     expect(formatScore(87)).toBe("87")
+  })
+})
+
+describe("usage chart and tile figures", () => {
+  it("sizes axis dollars compactly", () => {
+    expect(formatUsdAxis(200)).toBe("$200")
+    expect(formatUsdAxis(1500)).toBe("$1.5K")
+    expect(formatUsdAxis(0)).toBe("$0")
+    expect(formatUsdAxis(0.0001, 0.0001)).toBe("$0.0001")
+    expect(formatUsdAxis(0.0003, 0.0001)).toBe("$0.0003")
+  })
+
+  it("says a multiple with one decimal", () => {
+    expect(formatMultiple(3.94)).toBe("3.9×")
+    expect(formatMultiple(2)).toBe("2.0×")
+  })
+
+  it("says a duration to the minute", () => {
+    expect(formatDuration(30_000)).toBe("<1m")
+    expect(formatDuration(55 * 60_000)).toBe("55m")
+    expect(formatDuration(2 * 3_600_000)).toBe("2h")
+    expect(formatDuration(6 * 3_600_000 + 40 * 60_000)).toBe("6h 40m")
   })
 })
 

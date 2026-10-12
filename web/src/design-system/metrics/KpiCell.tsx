@@ -18,7 +18,7 @@ export function KpiCell({
    * whether the number is missing or zero, and the empty state is simply the
    * case where every cell has something to say.
    */
-  subline?: string
+  subline?: ReactNode
   delta?: ReactNode
   graphic?: ReactNode
 }) {
@@ -50,24 +50,22 @@ export function KpiCell({
       <span className="text-mono-figure font-normal text-foreground">
         {value}
       </span>
-      {/* One line, always present, so no cell is shorter than its neighbors.
-          A severity, a subline and a delta all share it where a cell has more
-          than one: dropping any of them to make room would lose information the
-          strip is there to carry, and a cell with a spare line would break the
-          shared baseline the subgrid buys. */}
-      {/* Most-judged to least, left to right: a severity, then the comparison,
-          then the raw fact. It never wraps: a second line here made one cell
-          taller than its siblings and silently undid the shared baseline the
-          subgrid buys. The severity and the delta hold their width; the subline
-          is the only thing that gives, and it truncates, because its facts also
-          live in the breakdown tables while a delta lives nowhere else. */}
+      {/* One line, always present, so no cell is shorter than its neighbors,
+          and never wrapped, which would undo the subgrid's shared baseline.
+          Most-judged to least: a severity, then the comparison, then the raw
+          fact. The severity and the delta hold their width; the subline is the
+          only thing that gives, and it truncates, because its facts also live
+          in the breakdown tables while a delta lives nowhere else. */}
       <span className="flex min-h-[1.125rem] items-center gap-2 text-xs text-nowrap text-muted">
         {severity ? <SeverityMark severity={severity} /> : null}
         {severity && delta ? <Separator /> : null}
         {delta}
         {(severity || delta) && subline ? <Separator /> : null}
         {subline ? (
-          <span className="min-w-0 truncate" title={subline}>
+          <span
+            className="min-w-0 truncate"
+            title={typeof subline === "string" ? subline : undefined}
+          >
             {subline}
           </span>
         ) : null}
@@ -75,8 +73,11 @@ export function KpiCell({
       {/* Reserved rather than conditional: an absent sparkline must not make one
           cell shorter than the four beside it. Dropped in the empty state by
           the caller passing none to any cell, which shortens the whole strip. */}
+      {/* At least the sparkline's height, and as tall as a graphic that says
+          more (a split with its legend): the subgrid gives every cell in the
+          row the tallest one's height, so the baselines still line up. */}
       {graphic ? (
-        <span className="flex h-10 items-center">{graphic}</span>
+        <span className="flex min-h-10 items-center">{graphic}</span>
       ) : null}
     </div>
   )

@@ -55,7 +55,6 @@ describe("nav registry", () => {
     // The second rail, reached from the sidebar footer. Its own registry, so
     // its order is asserted separately from the workspace one's.
     expect(ORG_NAV_SECTIONS.map((section) => section.id)).toEqual([
-      "org-observe",
       "org-people",
       "org-money",
       "org-gateway",
@@ -79,7 +78,6 @@ describe("nav registry", () => {
       "Tools",
       "API keys",
       "Members",
-      "Usage",
       "Workspaces",
       "Members & roles",
       "Email domains",
@@ -325,31 +323,20 @@ describe("nav registry", () => {
     }
   })
 
-  it("gates every declared-but-unserved destination on a surface", () => {
-    // The organization rail draws one row this gateway does not offer and still
-    // declares. It is declared so the rail matches on a deployment that does
-    // serve it, and gated on a surface `STANDALONE_SURFACES` does not report so
-    // the row is absent here. Pinned as the whole set, because the failure mode
-    // is silent in both directions: a missing gate ships a link to a page that
-    // cannot work, and a gate on a surface the bootstrap *does* report hides a
-    // page that can. A typo in a surface name is silent the same way, since
-    // `NavItemBase.surface` is a bare string.
+  it("gates every row on a surface the deployment reports, and points none at a redirect", () => {
+    // A row gated on a surface `STANDALONE_SURFACES` does not report is a row
+    // this gateway hides, and the failure mode is silent in both directions: a
+    // missing gate ships a link to a page that cannot work, and a gate on a
+    // surface the bootstrap never reports hides a page that can. A typo in a
+    // surface name is silent the same way, since `NavItemBase.surface` is a
+    // bare string.
     //
-    // Usage is editorial, with the API mounted either way, about a question
-    // that only exists once tenants do (otari-ai#1963): standalone's
-    // organization is the deployment, so `/usage` already answers it whole.
-    //
-    // Provider keys is not a second: `organization_providers` is published by
-    // both topologies, because the page behind it is where an organization's
-    // models are offered, priced and switched, which is a tenant's question on
-    // either. Its row therefore renders here beside the process-global one,
-    // which is why the two carry different labels.
-    const unserved = new Map([["/organization/usage", "organization_usage"]])
-    for (const [to, surface] of unserved) {
-      expect(navItemForPath(to)?.surface).toBe(surface)
-    }
-    // And none of those surface names is one a standalone gateway reports, or the
-    // gate would be decoration.
+    // The organization as a whole is a scope of the Usage page, not a row:
+    // `/organization/usage` only redirects there, and a sidebar entry never
+    // points at a redirect (web/AGENTS.md).
+    expect(NAV_ITEMS.some((item) => item.to === "/organization/usage")).toBe(
+      false,
+    )
     const standalone = [
       "admin",
       "budgets",
@@ -358,6 +345,7 @@ describe("nav registry", () => {
       "organization_guardrails",
       "organization_providers",
       "organizations",
+      "playground",
       "pricing",
       "providers",
       "routing",
@@ -367,8 +355,8 @@ describe("nav registry", () => {
       "users",
       "workspaces",
     ]
-    for (const surface of unserved.values()) {
-      expect(standalone).not.toContain(surface)
+    for (const item of NAV_ITEMS) {
+      if (item.surface !== undefined) expect(standalone).toContain(item.surface)
     }
     // The row that moved, asserted from the other side: a standalone gateway
     // reports this one, so its gate is what lets the row render rather than what

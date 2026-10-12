@@ -102,7 +102,7 @@ describe("UsagePage scope", () => {
   it("reads the organization-scoped routes for a tenant who does not operate the deployment", async () => {
     const fetchMock = mockApi(false)
     renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
+    await screen.findAllByText("$1,240.50")
 
     const reads = usageReads(fetchMock)
     expect(reads).not.toHaveLength(0)
@@ -117,7 +117,7 @@ describe("UsagePage scope", () => {
   it("reads the deployment-wide routes for an operator, so the case above is not vacuous", async () => {
     const fetchMock = mockApi(true)
     renderPage(<UsagePage />)
-    await screen.findByText("$1,240.50")
+    await screen.findAllByText("$1,240.50")
 
     const reads = usageReads(fetchMock)
     expect(reads).not.toHaveLength(0)

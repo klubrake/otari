@@ -96,14 +96,19 @@ export const SingleChoice: Story = {
   render: () => <GroupByStory />,
 }
 
-/** Inline, in sections, with a trailing detail on a row. */
+/** Inline, in sections, with a trailing detail on a row and a caption under another. */
 export const InlineSections: Story = {
   render: () => (
     <div className="w-[18.75rem] border border-control-border bg-surface">
       <Menu label="Saved views" selectionMode="single" selectedKeys={["all"]}>
         <MenuSection title="Built in">
           <MenuItem id="all">All requests</MenuItem>
-          <MenuItem id="failures">Failures this week</MenuItem>
+          <MenuItem
+            id="failures"
+            description="Failed requests from the last seven days"
+          >
+            Failures this week
+          </MenuItem>
         </MenuSection>
         <MenuSection title="Shared in this workspace">
           <MenuItem

@@ -287,6 +287,7 @@ describe("activityChips", () => {
   const names = {
     member: (id: string) => `Name of ${id}`,
     apiKey: (id: string) => `Key ${id}`,
+    workspace: (id: string) => `Workspace ${id}`,
   }
 
   it("names each filter, with who and which key in words", () => {

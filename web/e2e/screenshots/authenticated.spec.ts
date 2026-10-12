@@ -246,9 +246,10 @@ test.describe("organization rail", () => {
     })
     await login(page)
     await gotoRoute(page, "/organization/usage")
+    // A link to the old organization page lands on Usage with that scope picked.
     await expect(
-      page.getByRole("heading", { name: /organization usage/i }).first(),
-    ).toBeVisible()
+      page.getByRole("radio", { name: "Organization" }),
+    ).toBeChecked()
     await captureScreenshot(page, "organization-usage")
   })
 })

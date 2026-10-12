@@ -257,7 +257,7 @@ export function tableRows(page: Page, ariaLabel: string): Locator {
 
 // ---------- stat tiles ----------
 
-// A StatCard renders its label and its value as sibling spans with no
+// A tile renders its label and its value as sibling spans with no
 // programmatic association between them, so the value is reached through the
 // label. Scoped to `within` where a bare label would also match a table column
 // header of the same name (Usage has both a "Requests" tile and a "Requests"
