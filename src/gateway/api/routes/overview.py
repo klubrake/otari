@@ -11,13 +11,14 @@ it from the list routes meant reading four whole tables to compute them
 """
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from gateway.api.deps import CurrentIdentity, OverviewServiceDep, verify_master_key
-from gateway.schemas.overview import AllocationHealthResponse, OverviewSummaryResponse, WorstAllocationResponse
-from gateway.services.overview import AllocationHealth, OverviewSummary
+from gateway.schemas.overview import OverviewScope, OverviewSummaryResponse
+from gateway.services.overview import Month
 
 # Authentication on the router for the reason ``admin.py`` declares it there:
 # the one handler happens to take an identity today, and one that did not would
@@ -31,27 +32,18 @@ router = APIRouter(
 )
 
 
-def _health(health: AllocationHealth | None) -> AllocationHealthResponse | None:
-    if health is None:
-        return None
-    return AllocationHealthResponse(
-        over_count=health.over_count,
-        near_count=health.near_count,
-        capped_count=health.capped_count,
-        total_count=health.total_count,
-        worst=(
-            WorstAllocationResponse(
-                budget_id=health.worst.budget_id,
-                name=health.worst.name,
-                spent=health.worst.spent,
-                allocated=health.worst.allocated,
-                scope_type=health.worst.scope_type,
-                scope_id=health.worst.scope_id,
-            )
-            if health.worst is not None
-            else None
-        ),
-    )
+def _month(value: str | None, now: datetime) -> Month:
+    """The month asked for, or the current one. Raises ``ValueError`` for one that does not exist or has not started."""
+
+    if value is None:
+        return Month.current(now)
+    year, number = int(value[:4]), int(value[5:])
+    # Refused before it is built: a month past year 9999 has no end to build.
+    if (year, number) > (now.year, now.month):
+        raise ValueError(f"{value} has not started")
+    if year < 1:
+        raise ValueError(f"{value} is not a month")
+    return Month.of(year, number, now)
 
 
 @router.get("")
@@ -62,19 +54,42 @@ async def get_overview(
         uuid.UUID | None,
         Query(description="Narrow the counts to one workspace of the caller's organization."),
     ] = None,
+    month: Annotated[
+        str | None,
+        Query(
+            pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+            description=(
+                "The calendar month whose spend and error rate to report, `YYYY-MM` in UTC. Defaults to the "
+                "current month; a month that has not started is refused. Limit and expiry items, and each "
+                "row's `limit_spent`, describe now whichever month is asked for."
+            ),
+        ),
+    ] = None,
+    scope: Annotated[
+        OverviewScope,
+        Query(
+            description=(
+                "Whose spend to read: the caller's own, the workspace's, or the organization's. "
+                "A scope the caller may not read falls back to `you`; `scope` in the answer says which was used."
+            )
+        ),
+    ] = "workspace",
 ) -> OverviewSummaryResponse:
     """Summarize what the dashboard overview shows beside its usage chart.
 
-    The counts and the budget judgment in one answer, so the page does not read
-    four collections to compute them. A workspace outside the caller's
-    organization is treated as none given rather than refused, because the id
-    comes from a switcher whose contents can go stale.
+    The counts, the budget judgment, the needs-attention list and the limits
+    rail in one answer, so the page does not read several collections to
+    compute them. A workspace outside the caller's organization is treated as
+    none given rather than refused, because the id comes from a switcher whose
+    contents can go stale. A month after the current one is refused.
     """
 
-    summary: OverviewSummary = await service.summary(identity=current_identity, workspace_id=workspace_id)
-    return OverviewSummaryResponse(
-        active_keys=summary.active_keys,
-        active_members=summary.active_members,
-        budgets=_health(summary.budgets),
-        ceilings=_health(summary.ceilings),
+    now = datetime.now(UTC)
+    try:
+        chosen = _month(month, now)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    summary = await service.summary(
+        identity=current_identity, workspace_id=workspace_id, month=chosen, scope=scope, now=now
     )
+    return OverviewSummaryResponse.model_validate(summary, from_attributes=True)

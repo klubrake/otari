@@ -7424,7 +7424,7 @@
         {
           "name": "Get Overview",
           "request": {
-            "description": "Summarize what the dashboard overview shows beside its usage chart.\n\nThe counts and the budget judgment in one answer, so the page does not read\nfour collections to compute them. A workspace outside the caller's\norganization is treated as none given rather than refused, because the id\ncomes from a switcher whose contents can go stale.",
+            "description": "Summarize what the dashboard overview shows beside its usage chart.\n\nThe counts, the budget judgment, the needs-attention list and the limits\nrail in one answer, so the page does not read several collections to\ncompute them. A workspace outside the caller's organization is treated as\nnone given rather than refused, because the id comes from a switcher whose\ncontents can go stale. A month after the current one is refused.",
             "header": [],
             "method": "GET",
             "url": {
@@ -7442,9 +7442,21 @@
                   "disabled": true,
                   "key": "workspace_id",
                   "value": ""
+                },
+                {
+                  "description": "The calendar month whose spend and error rate to report, `YYYY-MM` in UTC. Defaults to the current month; a month that has not started is refused. Limit and expiry items, and each row's `limit_spent`, describe now whichever month is asked for.",
+                  "disabled": true,
+                  "key": "month",
+                  "value": ""
+                },
+                {
+                  "description": "Whose spend to read: the caller's own, the workspace's, or the organization's. A scope the caller may not read falls back to `you`; `scope` in the answer says which was used.",
+                  "disabled": true,
+                  "key": "scope",
+                  "value": ""
                 }
               ],
-              "raw": "{{baseUrl}}/api/v1/overview?workspace_id="
+              "raw": "{{baseUrl}}/api/v1/overview?workspace_id=&month=&scope="
             }
           }
         }

@@ -3329,10 +3329,11 @@ export interface paths {
          * Get Overview
          * @description Summarize what the dashboard overview shows beside its usage chart.
          *
-         *     The counts and the budget judgment in one answer, so the page does not read
-         *     four collections to compute them. A workspace outside the caller's
-         *     organization is treated as none given rather than refused, because the id
-         *     comes from a switcher whose contents can go stale.
+         *     The counts, the budget judgment, the needs-attention list and the limits
+         *     rail in one answer, so the page does not read several collections to
+         *     compute them. A workspace outside the caller's organization is treated as
+         *     none given rather than refused, because the id comes from a switcher whose
+         *     contents can go stale. A month after the current one is refused.
          */
         get: operations["overview-get_overview"];
         put?: never;
@@ -12140,12 +12141,150 @@ export interface components {
          */
         OutputShape: "binary" | "multi_label" | "categorical" | "score" | "rubric" | "span";
         /**
+         * OverviewAttentionItemResponse
+         * @description One thing worth acting on now, for the caller's role, with the figures that make it so.
+         *
+         *     Which fields are set depends on ``kind``: a limit carries ``used``, ``limit``
+         *     and ``fraction``; ``key_expiring`` and ``budget_pace`` carry ``at`` (the
+         *     expiry, or the day spend is projected to pass the limit), and
+         *     ``provider_unreachable`` the time of the failed check; ``error_rate``
+         *     carries ``count`` (failures) and ``fraction`` (of requests). Limit and
+         *     expiry items describe now, whichever month was asked for.
+         */
+        OverviewAttentionItemResponse: {
+            /** At */
+            at?: string | null;
+            /** Count */
+            count?: number | null;
+            /** Fraction */
+            fraction?: number | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "provider_unreachable" | "budget_over" | "budget_near" | "budget_pace" | "key_over_limit" | "key_near_limit" | "key_expiring" | "error_rate";
+            /**
+             * Limit
+             * @description The limit, in USD.
+             */
+            limit?: number | null;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "alert" | "warn";
+            /**
+             * Subject Id
+             * @description The key, workspace or provider instance the item is about.
+             */
+            subject_id: string | null;
+            /** Subject Name */
+            subject_name: string | null;
+            /**
+             * Used
+             * @description USD spent against the limit in its current period.
+             */
+            used?: number | null;
+        };
+        /**
+         * OverviewLimitRowResponse
+         * @description One key or workspace in the overview's rail: what it billed this month, and what limits it.
+         */
+        OverviewLimitRowResponse: {
+            /** Expires At */
+            expires_at: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Is Mine
+             * @description A key billed to the caller; false for a workspace.
+             */
+            is_mine: boolean;
+            /**
+             * Is Subscription
+             * @description Everything this key recorded in the month was imported usage.
+             */
+            is_subscription: boolean;
+            /**
+             * Last Used At
+             * @description A key's last use; a workspace's last request in the month asked for. Null when there is none.
+             */
+            last_used_at: string | null;
+            /**
+             * Limit
+             * @description The USD cap of the key's or workspace's spend ceiling; null when uncapped.
+             */
+            limit: number | null;
+            /**
+             * Limit Spent
+             * @description What the ceiling counts now in its current period, holds included, whichever month was asked for; null when uncapped.
+             */
+            limit_spent: number | null;
+            /** Name */
+            name: string | null;
+            /**
+             * Owner Name
+             * @description The key's billed user, as the roster names them; null for a workspace.
+             */
+            owner_name: string | null;
+            /**
+             * Period End
+             * @description When the ceiling's period resets; null when it never does.
+             */
+            period_end: string | null;
+            /**
+             * Spent
+             * @description Billed spend in the month, in USD: cost less imported usage.
+             */
+            spent: number;
+        };
+        /**
+         * OverviewLimitsResponse
+         * @description The rail: the caller's keys, a workspace's keys, or the organization's workspaces.
+         *
+         *     At most eight, most billed first.
+         */
+        OverviewLimitsResponse: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "keys" | "workspaces";
+            /** Rows */
+            rows: components["schemas"]["OverviewLimitRowResponse"][];
+        };
+        /**
+         * OverviewMonthResponse
+         * @description The UTC calendar month the overview reads.
+         */
+        OverviewMonthResponse: {
+            /** Days */
+            days: number;
+            /**
+             * Elapsed Days
+             * @description Days of the month passed so far, counting today; all of them for a past month.
+             */
+            elapsed_days: number;
+            /**
+             * End
+             * Format: date-time
+             * @description The first instant of the next month; exclusive.
+             */
+            end: string;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+        };
+        /**
          * OverviewSummaryResponse
          * @description What the dashboard overview renders beside its usage chart.
          *
          *     ``budgets`` and ``ceilings`` are null where the caller may not see them,
          *     which is not the same as a strip with nothing in it: deployment budgets are
          *     the operator's, and spend ceilings are an organization owner's or admin's.
+         *     ``attention`` and ``limits`` are always present, for the ``scope`` used.
          */
         OverviewSummaryResponse: {
             /** Active Keys */
@@ -12155,8 +12294,21 @@ export interface components {
              * @description Active members of the named workspace; 0 when none is named.
              */
             active_members: number;
+            /**
+             * Attention
+             * @description Most severe first.
+             */
+            attention: components["schemas"]["OverviewAttentionItemResponse"][];
             budgets: components["schemas"]["AllocationHealthResponse"] | null;
             ceilings: components["schemas"]["AllocationHealthResponse"] | null;
+            limits: components["schemas"]["OverviewLimitsResponse"];
+            month: components["schemas"]["OverviewMonthResponse"];
+            /**
+             * Scope
+             * @description The scope read, after falling back to 'you' where the asked one is not allowed.
+             * @enum {string}
+             */
+            scope: "you" | "workspace" | "organization";
         };
         /**
          * PasskeySessionResponse
@@ -22477,6 +22629,10 @@ export interface operations {
             query?: {
                 /** @description Narrow the counts to one workspace of the caller's organization. */
                 workspace_id?: string | null;
+                /** @description The calendar month whose spend and error rate to report, `YYYY-MM` in UTC. Defaults to the current month; a month that has not started is refused. Limit and expiry items, and each row's `limit_spent`, describe now whichever month is asked for. */
+                month?: string | null;
+                /** @description Whose spend to read: the caller's own, the workspace's, or the organization's. A scope the caller may not read falls back to `you`; `scope` in the answer says which was used. */
+                scope?: "you" | "workspace" | "organization";
             };
             header?: never;
             path?: never;

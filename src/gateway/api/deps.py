@@ -1132,6 +1132,7 @@ WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)
 
 def get_overview_service(
     db: Annotated[AsyncSession, Depends(get_db)],
+    config: Annotated[GatewayConfig, Depends(get_config)],
     uow: UnitOfWorkDep,
     membership_listener: MembershipListenerDep,
     workspace_listener: WorkspaceListenerDep,
@@ -1148,6 +1149,7 @@ def get_overview_service(
         # The listener is for writes; this service only reads, and the same
         # pairing is what `routes/workspaces.py` builds.
         WorkspaceService(db, uow=uow, membership_listener=membership_listener, workspace_listener=workspace_listener),
+        config,
     )
 
 

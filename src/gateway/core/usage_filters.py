@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, NamedTuple, Protocol, cast, get_args
 
 from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement, and_, case, func, or_, select
+from sqlalchemy import ColumnElement, Select, Subquery, and_, case, func, or_, select
 
 from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
 from gateway.models.api_keys import APIKey
@@ -262,6 +262,11 @@ def billed_cache_write_sum() -> Any:
 def status_count(status: str) -> Any:
     """How many rows in scope have this status: rows, not requests (see :func:`request_count`)."""
     return func.coalesce(func.sum(case((UsageLog.status == status, 1), else_=0)), 0)
+
+
+def billed_cost_sum() -> Any:
+    """The cost of the rows in scope this deployment served: what it billed, imported usage left out."""
+    return func.coalesce(func.sum(case((UsageLog.source == SERVED_HERE_SLUG, UsageLog.cost), else_=0)), 0.0)
 
 
 def imported_cost_sum() -> Any:
@@ -536,3 +541,66 @@ def list_window(
     if sort == "timestamp" and not is_substring_search(q):
         return start_date, end_date
     return resolve_window(start_date, end_date)
+
+
+def window_rows(
+    start: datetime,
+    end: datetime,
+    workspaces: Any,
+    *,
+    user_id: str | None = None,
+    api_key_ids: Any = None,
+) -> list[UsageCondition]:
+    """Usage rows in ``[start, end)`` of ``workspaces`` (one id, or a select of ids), narrowed to one user or some keys.
+
+    For readers outside the usage domain that aggregate usage beside their own
+    tables, such as the overview's rails: they compose these pieces rather than
+    query ``usage_logs`` themselves.
+    """
+    in_workspaces = (
+        UsageLog.workspace_id == workspaces
+        if isinstance(workspaces, uuid.UUID)
+        else UsageLog.workspace_id.in_(workspaces)
+    )
+    where = [UsageLog.timestamp >= start, UsageLog.timestamp < end, in_workspaces]
+    if user_id is not None:
+        where.append(UsageLog.user_id == user_id)
+    if api_key_ids is not None:
+        where.append(UsageLog.api_key_id.in_(api_key_ids))
+    return where
+
+
+def spend_by_key(conditions: Sequence[UsageCondition]) -> Subquery:
+    """Each key's billed spend over ``conditions``, with its row count and how many rows were served here."""
+    return (
+        select(
+            UsageLog.api_key_id.label("key_id"),
+            billed_cost_sum().label("billed"),
+            func.count().label("rows"),
+            func.coalesce(func.sum(case((UsageLog.source == SERVED_HERE_SLUG, 1), else_=0)), 0).label("served"),
+        )
+        .where(*conditions, UsageLog.api_key_id.is_not(None))
+        .group_by(UsageLog.api_key_id)
+        .subquery()
+    )
+
+
+def spend_by_workspace(conditions: Sequence[UsageCondition]) -> Subquery:
+    """Each workspace's billed spend over ``conditions``, with its requests, failures and last request."""
+    return (
+        select(
+            UsageLog.workspace_id.label("workspace_id"),
+            billed_cost_sum().label("billed"),
+            request_count().label("requests"),
+            status_count("error").label("failures"),
+            func.max(UsageLog.timestamp).label("last_used_at"),
+        )
+        .where(*conditions)
+        .group_by(UsageLog.workspace_id)
+        .subquery()
+    )
+
+
+def requests_and_failures(conditions: Sequence[UsageCondition]) -> Select[tuple[int, int]]:
+    """Requests and failures over ``conditions``, counted as every usage read counts them."""
+    return select(request_count(), status_count("error")).where(*conditions)

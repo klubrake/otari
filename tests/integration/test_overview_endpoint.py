@@ -12,13 +12,14 @@ cannot act as a plain member.
 """
 
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.core.config import API_ROOT
+from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import Budget, ScopedBudget
 from gateway.models.tenancy import Organization, User, Workspace
@@ -31,7 +32,7 @@ from gateway.repositories.tenancy import (
     WorkspaceMemberRepository,
     WorkspaceRepository,
 )
-from gateway.services.overview.overview_service import OverviewService, judge
+from gateway.services.overview.overview_service import Month, OverviewService, OverviewSummary, judge
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
@@ -463,6 +464,14 @@ def _service(db: AsyncSession) -> OverviewService:
         OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener()),
         DeploymentUserService(db),
         WorkspaceService(db, **membership_writes(db)),
+        GatewayConfig(),
+    )
+
+
+async def _summary(db: AsyncSession, *, identity: User, workspace_id: uuid.UUID | None) -> OverviewSummary:
+    now = datetime.now(UTC)
+    return await _service(db).summary(
+        identity=identity, workspace_id=workspace_id, month=Month.current(now), scope="workspace", now=now
     )
 
 
@@ -476,7 +485,7 @@ async def test_a_member_gets_no_ceiling_strip_and_no_budget_strip(
     organization = await _organization(async_db, slug="acme-member")
     member = await _member(async_db, organization, role="member", full_name="Member")
 
-    summary = await _service(async_db).summary(identity=member, workspace_id=None)
+    summary = await _summary(async_db, identity=member, workspace_id=None)
 
     assert summary.ceilings is None
     assert summary.budgets is None
@@ -492,7 +501,7 @@ async def test_an_admin_sees_the_ceilings_but_not_the_deployment_budgets(
     organization = await _organization(async_db, slug="acme-admin")
     admin = await _member(async_db, organization, role="admin", full_name="Admin")
 
-    summary = await _service(async_db).summary(identity=admin, workspace_id=None)
+    summary = await _summary(async_db, identity=admin, workspace_id=None)
 
     assert summary.ceilings is not None
     assert summary.budgets is None
@@ -513,7 +522,7 @@ async def test_a_workspace_of_another_organization_is_ignored_rather_than_refuse
     their_workspace = await _workspace(async_db, theirs, name="Theirs", owner=their_owner)
     await async_db.flush()
 
-    summary = await _service(async_db).summary(identity=member, workspace_id=their_workspace.id)
+    summary = await _summary(async_db, identity=member, workspace_id=their_workspace.id)
 
     # Their workspace has one active member; ours is not scoped to it.
     assert summary.active_members == 0
@@ -539,8 +548,8 @@ async def test_a_member_cannot_count_a_workspace_they_are_not_in(
     async_db.add(APIKey(id="sk-private", key_hash="h9", workspace_id=workspace.id, is_active=True))
     await async_db.flush()
 
-    seen_by_owner = await _service(async_db).summary(identity=owner, workspace_id=workspace.id)
-    seen_by_outsider = await _service(async_db).summary(identity=outsider, workspace_id=workspace.id)
+    seen_by_owner = await _summary(async_db, identity=owner, workspace_id=workspace.id)
+    seen_by_outsider = await _summary(async_db, identity=outsider, workspace_id=workspace.id)
 
     assert seen_by_owner.active_members == 1
     # Not scoped to it at all, so the workspace's own roster never answers.
@@ -572,7 +581,7 @@ async def test_a_ceiling_keeps_the_scope_it_caps(
     )
     await async_db.flush()
 
-    summary = await _service(async_db).summary(identity=owner, workspace_id=None)
+    summary = await _summary(async_db, identity=owner, workspace_id=None)
 
     assert summary.ceilings is not None
     assert summary.ceilings.worst is not None
@@ -599,6 +608,6 @@ async def test_a_members_key_count_stays_inside_their_organization(
     async_db.add(APIKey(id="sk-theirs-2", key_hash="h5", workspace_id=their_workspace.id, is_active=True))
     await async_db.flush()
 
-    summary = await _service(async_db).summary(identity=member, workspace_id=None)
+    summary = await _summary(async_db, identity=member, workspace_id=None)
 
     assert summary.active_keys == 1
