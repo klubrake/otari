@@ -877,3 +877,83 @@ def test_the_organization_list_sorts_and_refines_inside_the_scope(client: TestCl
     assert code == status.HTTP_200_OK, body
     assert isinstance(body, dict)
     assert {group["key"] for group in body["groups"]} == set(_ALPHA_MODELS) - {"alpha-one-a"}
+
+
+def _summary(client: TestClient, world: _World, who: str, query: str) -> dict[str, list[dict[str, object]]]:
+    code, body = _as(client, world, who, f"{API_ROOT}/organizations/me/usage/summary{query}")
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    return body
+
+
+def test_a_breakdown_by_workspace_names_only_the_workspaces_in_scope(client: TestClient, world: _World) -> None:
+    """An owner sees their organization's workspaces by name; a member, theirs; nobody, another tenant's."""
+    owner = _summary(client, world, "alpha_owner", "?dimensions=workspace")
+    assert {(row["key"], row["label"]) for row in owner["by_workspace"]} == {
+        (str(world.workspaces["alpha_one"]), "Alpha one"),
+        (str(world.workspaces["alpha_two"]), "Alpha two"),
+    }
+    member = _summary(client, world, "alpha_member", "?dimensions=workspace")
+    assert [row["key"] for row in member["by_workspace"]] == [str(world.workspaces["alpha_one"])]
+    assert member["by_workspace"][0]["requests"] == len(_ALPHA_ONE_MEMBER_MODELS)
+
+
+def test_a_breakdown_by_channel_counts_only_the_callers_own_rows(client: TestClient, world: _World) -> None:
+    member = _summary(client, world, "alpha_member", "?dimensions=channel")
+    assert [(row["key"], row["requests"]) for row in member["by_channel"]] == [("api", len(_ALPHA_ONE_MEMBER_MODELS))]
+
+
+def test_a_series_by_workspace_splits_only_the_workspaces_in_scope(client: TestClient, world: _World) -> None:
+    code, body = _as(client, world, "alpha_member", f"{API_ROOT}/organizations/me/usage/series?group_by=workspace")
+    assert code == status.HTTP_200_OK, body
+    assert isinstance(body, dict)
+    assert {point["key"] for point in body["points"]} == {str(world.workspaces["alpha_one"])}
+    assert {group["key"] for group in body["groups"]} == {str(world.workspaces["alpha_one"])}
+
+
+def test_the_organization_summarys_per_group_extras_read_only_the_callers_rows(
+    client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """``p95_by`` and ``session_details`` rank and name a group from the rows in scope, not the whole group."""
+    session = db_session_factory()
+    try:
+        member = str(world.users["alpha_member"])
+        for source, latency, user_id in (
+            ("codex", 100, member),
+            ("codex", 200, member),
+            # Someone else's requests in the same session: slower, and from another tool.
+            ("claude_code", 90_000, None),
+            ("claude_code", 90_000, None),
+            ("claude_code", 90_000, None),
+        ):
+            session.add(
+                UsageLog(
+                    id=str(uuid.uuid4()),
+                    workspace_id=world.workspaces["alpha_one"],
+                    user_id=user_id,
+                    model="alpha-one-member",
+                    provider="p",
+                    endpoint="/v1/chat/completions",
+                    source=source,
+                    source_label="task-1",
+                    status="success",
+                    latency_ms=latency,
+                    timestamp=datetime.now(UTC),
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    body = _summary(
+        client,
+        world,
+        "alpha_member",
+        "?dimensions=source_label&p95_by=source_label&session_details=true&rank_by=name&rank_order=asc",
+    )
+    rows = {row["key"]: row for row in body["by_source_label"]}
+    assert rows["task-1"]["requests"] == 2
+    assert rows["task-1"]["p95_latency_ms"] == 200
+    assert rows["task-1"]["source"] == "codex"
+    # The member's unlabeled requests rank after the named session.
+    assert [row["key"] for row in body["by_source_label"]] == ["task-1", None]

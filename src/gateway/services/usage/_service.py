@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
+from typing import cast
 
 from gateway.core.series import SERIES_TOP_N, dense_series
 from gateway.core.sql import UsageBucketGrain
@@ -10,12 +11,18 @@ from gateway.repositories.usage import UsageReadRepository, UsageSummaryReposito
 from gateway.schemas.usage import (
     ActivityGroupBy,
     ActivityGroupOrder,
+    BreakdownDimension,
     Bucket,
     SeriesGroupBy,
     SummaryDimension,
     UsageActivityGroup,
     UsageActivityGroups,
+    UsageBreakdownRankBy,
     UsageGroupedSeries,
+    UsageGroupRow,
+    UsageRankBy,
+    UsageSeriesGroup,
+    UsageSessionRow,
     UsageSummary,
     UsageToolRow,
 )
@@ -132,12 +139,20 @@ class UsageReadService:
         bucket: UsageBucketGrain,
         dimensions: list[SummaryDimension] | None,
         include_p95: bool = False,
+        p95_by: BreakdownDimension | None = None,
+        session_details: bool = False,
+        rank_by: UsageBreakdownRankBy = "cost",
+        rank_order: SortOrder = "desc",
         group_by_tag: str | None = None,
     ) -> UsageSummary:
         """Totals, the breakdowns asked for and a zero-filled series, over an already-resolved window.
 
         Each breakdown is its own ``GROUP BY`` pass, which is why ``dimensions``
-        selects them; ``None`` asks for every one.
+        selects them; ``None`` asks for every one. Two extras cost one more grouped
+        pass each, and only when the breakdown they decorate is among them: ``p95_by``
+        ranks latency per group in that breakdown, and ``session_details`` names the
+        source and key most of each session's requests carry. Ranked by ``p95``, every
+        breakdown already carries its groups' p95, so ``p95_by`` adds no pass.
         """
         # ``none`` is dropped rather than rejected: it exists only so a caller can send
         # an empty selection, and it never contributes a dimension of its own.
@@ -146,7 +161,18 @@ class UsageReadService:
             totals = await self._summaries.totals(conditions, status)
             breakdowns = {
                 name: with_fold(
-                    await self._summaries.breakdown(name, conditions, limit=cap, status_filter=status), totals
+                    await self._breakdown(
+                        name,
+                        conditions,
+                        limit=cap,
+                        status=status,
+                        with_p95=name == p95_by and rank_by != "p95",
+                        with_details=session_details,
+                        rank_by=rank_by,
+                        rank_order=rank_order,
+                    ),
+                    totals,
+                    row_type=UsageSessionRow if name == "source_label" else UsageGroupRow,
                 )
                 for name, cap in SUMMARY_BREAKDOWNS.items()
                 if name in requested
@@ -166,6 +192,7 @@ class UsageReadService:
                         group_by_tag, conditions, limit=BREAKDOWN_TOP_N, status_filter=status
                     ),
                     totals,
+                    row_type=UsageGroupRow,
                 )
                 if group_by_tag
                 else []
@@ -182,15 +209,55 @@ class UsageReadService:
             by_user=breakdowns.get("user", []),
             by_api_key=breakdowns.get("api_key", []),
             by_source=breakdowns.get("source", []),
-            by_source_label=breakdowns.get("source_label", []),
+            # Built as session rows, fold included, by ``row_type`` above.
+            by_source_label=cast("list[UsageSessionRow]", breakdowns.get("source_label", [])),
             by_endpoint=breakdowns.get("endpoint", []),
             by_provider=breakdowns.get("provider", []),
+            by_policy=breakdowns.get("policy", []),
+            by_workspace=breakdowns.get("workspace", []),
+            by_channel=breakdowns.get("channel", []),
             by_tool=by_tool,
             by_tag=by_tag,
             errors_by_status_code=errors_by_status_code,
             # Zero-filled so the chart is time-linear (GROUP BY drops gaps).
             series=dense_series(start, end, bucket, populated, empty_usage_point),
         )
+
+    async def _breakdown(
+        self,
+        dimension: BreakdownDimension,
+        conditions: list[UsageCondition],
+        *,
+        limit: int,
+        status: str | None,
+        with_p95: bool,
+        with_details: bool,
+        rank_by: UsageBreakdownRankBy,
+        rank_order: SortOrder,
+    ) -> list[UsageGroupRow]:
+        """One breakdown's top groups, with the per-group extras asked for.
+
+        Sessions always carry their span, which their own pass reads; their source and
+        key name are the extra pass ``with_details`` asks for.
+        """
+        is_session = dimension == "source_label"
+        rows = await self._summaries.breakdown(
+            dimension,
+            conditions,
+            limit=limit,
+            status_filter=status,
+            with_span=is_session,
+            rank_by=rank_by,
+            rank_order=rank_order,
+        )
+        keys = [row.key for row in rows]
+        if with_p95:
+            p95 = await self._summaries.group_p95_latency_ms(dimension, keys, conditions)
+            rows = [row.model_copy(update={"p95_latency_ms": p95.get(row.key)}) for row in rows]
+        if is_session and with_details:
+            details = await self._summaries.session_details(keys, conditions, status_filter=status)
+            rows = [row.model_copy(update=asdict(details[row.key])) if row.key in details else row for row in rows]
+        return rows
 
     async def _tool_breakdown(self, conditions: list[UsageCondition]) -> list[UsageToolRow]:
         """Per-tool calls, failures, spend and requests, biggest spend first.
@@ -217,14 +284,19 @@ class UsageReadService:
         status: str | None,
         bucket: Bucket,
         group_by: SeriesGroupBy,
+        rank_by: UsageRankBy = "cost",
     ) -> UsageGroupedSeries:
-        """The window's top groups by spend, each a series of its own, and the rest folded into ``other``."""
+        """The window's top groups by ``rank_by``, each a series of its own, and the rest folded into ``other``."""
         dimension = SERIES_BREAKDOWNS[group_by]
         async with self._uow:
             totals = await self._summaries.totals(conditions, status)
+            top = await self._summaries.breakdown(
+                dimension, conditions, limit=SERIES_TOP_N, status_filter=status, rank_by=rank_by
+            )
             groups = with_fold(
-                await self._summaries.breakdown(dimension, conditions, limit=SERIES_TOP_N, status_filter=status),
+                [UsageSeriesGroup.model_validate(row.model_dump(exclude={"p95_latency_ms"})) for row in top],
                 totals,
+                row_type=UsageSeriesGroup,
             )
             points = await self._summaries.grouped_series(
                 dimension,

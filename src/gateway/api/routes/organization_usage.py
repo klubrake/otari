@@ -65,6 +65,12 @@ from gateway.api.routes._usage_common import (
     GROUP_SEARCH_DESC,
     INCLUDE_P95_DESC,
     ORDER_DESC,
+    P95_BY_DESC,
+    RANK_BY_DESC,
+    RANK_ORDER_DESC,
+    SERIES_GROUP_BY_DESC,
+    SERIES_RANK_BY_DESC,
+    SESSION_DETAILS_DESC,
     SORT_DESC,
     SUMMARY_BUCKET_DESC,
     GroupByTag,
@@ -82,11 +88,14 @@ from gateway.models.usage import UsageLog
 from gateway.schemas.usage import (
     ActivityGroupBy,
     ActivityGroupOrder,
+    BreakdownDimension,
     Bucket,
     SeriesGroupBy,
     SummaryDimension,
     UsageActivityGroups,
+    UsageBreakdownRankBy,
     UsageGroupedSeries,
+    UsageRankBy,
     UsageSummary,
 )
 from gateway.services.tenancy import OrganizationService
@@ -238,6 +247,10 @@ async def organization_usage_summary(
     bucket: UsageBucketGrain = Query(default="day", description=SUMMARY_BUCKET_DESC),
     dimensions: list[SummaryDimension] | None = Query(default=None, description=DIMENSIONS_DESC),
     include_p95: Annotated[bool, Query(description=INCLUDE_P95_DESC)] = False,
+    p95_by: Annotated[BreakdownDimension | None, Query(description=P95_BY_DESC)] = None,
+    session_details: Annotated[bool, Query(description=SESSION_DETAILS_DESC)] = False,
+    rank_by: Annotated[UsageBreakdownRankBy, Query(description=RANK_BY_DESC)] = "cost",
+    rank_order: Annotated[SortOrder, Query(description=RANK_ORDER_DESC)] = "desc",
     group_by_tag: GroupByTag = None,
 ) -> UsageSummary:
     """Aggregate spend, tokens and request volume for the caller's organization.
@@ -258,6 +271,10 @@ async def organization_usage_summary(
         bucket=bucket,
         dimensions=dimensions,
         include_p95=include_p95,
+        p95_by=p95_by,
+        session_details=session_details,
+        rank_by=rank_by,
+        rank_order=rank_order,
         group_by_tag=group_by_tag,
     )
 
@@ -268,8 +285,9 @@ async def organization_usage_series(
     db: Annotated[AsyncSession, Depends(get_db)],
     reads: UsageReadServiceDep,
     filters: Annotated[UsageReadFilters, Depends()],
-    group_by: SeriesGroupBy = Query(description="Dimension to split the series by"),
+    group_by: SeriesGroupBy = Query(description=SERIES_GROUP_BY_DESC),
     bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
+    rank_by: Annotated[UsageRankBy, Query(description=SERIES_RANK_BY_DESC)] = "cost",
 ) -> UsageGroupedSeries:
     """Time series split by one dimension, for the caller's organization.
 
@@ -287,6 +305,7 @@ async def organization_usage_series(
         status=filters.status,
         bucket=bucket,
         group_by=group_by,
+        rank_by=rank_by,
     )
 
 

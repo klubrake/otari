@@ -1,6 +1,6 @@
 """What the usage summary computes: which breakdowns, how many rows each keeps, and the fold."""
 
-from gateway.schemas.usage import BreakdownDimension, SeriesGroupBy, UsageGroupRow, UsageSeriesPoint, UsageTotals
+from gateway.schemas.usage import BreakdownDimension, SeriesGroupBy, UsageSeriesGroup, UsageSeriesPoint, UsageTotals
 from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME
 from gateway.services.tools import WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME
 
@@ -36,6 +36,9 @@ SUMMARY_BREAKDOWNS: dict[BreakdownDimension, int] = {
     "source_label": _SESSION_BREAKDOWN_TOP_N,
     "endpoint": BREAKDOWN_TOP_N,
     "provider": BREAKDOWN_TOP_N,
+    "policy": BREAKDOWN_TOP_N,
+    "workspace": BREAKDOWN_TOP_N,
+    "channel": BREAKDOWN_TOP_N,
 }
 
 # The failure taxonomy (``errors_by_status_code``) is a GROUP BY pass like the
@@ -52,13 +55,19 @@ SERIES_BREAKDOWNS: dict[SeriesGroupBy, BreakdownDimension] = {
     "user_id": "user",
     "api_key_id": "api_key",
     "source": "source",
+    "source_label": "source_label",
+    "channel": "channel",
+    "provider": "provider",
+    "policy": "policy",
+    "workspace": "workspace",
 }
 
 
-def with_fold(rows: list[UsageGroupRow], totals: UsageTotals) -> list[UsageGroupRow]:
-    """Append the synthesized ``other`` row the top rows leave out, derived from the grand totals.
+def with_fold[R: UsageSeriesGroup](rows: list[R], totals: UsageTotals, *, row_type: type[R]) -> list[R]:
+    """Append the synthesized ``other`` row for the groups the ranking left out, derived from the grand totals.
 
-    So a capped breakdown always reconciles with the tiles.
+    So a capped breakdown always reconciles with the tiles, whichever way it was
+    ranked. ``row_type`` builds the fold as the kind of row its breakdown lists.
     """
     seen_requests = sum(r.requests for r in rows)
     # request_count is an exact integer, so a positive residual is the reliable
@@ -69,12 +78,15 @@ def with_fold(rows: list[UsageGroupRow], totals: UsageTotals) -> list[UsageGroup
     billed_total = totals.billed_input_tokens + totals.billed_output_tokens
     return [
         *rows,
-        UsageGroupRow(
+        row_type(
             key=None,
             cost=totals.cost - sum(r.cost for r in rows),
             tokens=billed_total - sum(r.tokens for r in rows),
             requests=residual_requests,
             is_other=True,
+            imported_cost=totals.imported_cost - sum(r.imported_cost for r in rows),
+            error_count=totals.error_count - sum(r.error_count for r in rows),
+            cache_read_tokens=totals.billed_cache_read_tokens - sum(r.cache_read_tokens for r in rows),
         ),
     ]
 

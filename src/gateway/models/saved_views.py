@@ -21,10 +21,10 @@ from gateway.models.base import CreatedAtMixin, PrimaryKeyMixin, UpdatedAtMixin
 
 # The pages that keep saved views. Closed, so a view cannot be filed under a page
 # that will never read it.
-SavedViewPage = Literal["activity"]
+SavedViewPage = Literal["activity", "usage"]
 
 MAX_VIEW_NAME_LENGTH = 80
-# A view's query string. Well past what the Activity page's filters serialize to.
+# A view's query string. Well past what either page's filters serialize to.
 MAX_VIEW_QUERY_LENGTH = 2000
 # How many views one person may keep on one page of one workspace. A menu, not an
 # archive: past this the list stops being something to pick from.

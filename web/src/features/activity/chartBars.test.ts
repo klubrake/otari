@@ -26,6 +26,7 @@ function point(iso: string, requests: number, errors = 0): UsageSeriesPoint {
     output_tokens: 0,
     cache_read_tokens: 0,
     cache_write_tokens: 0,
+    imported_cost: 0,
   }
 }
 

@@ -128,6 +128,7 @@ def test_summary_empty_range_is_all_zero(client: TestClient, master_key_header: 
         "p95_latency_ms": None,
         "absorbed_count": 0,
         "imported_cost": 0.0,
+        "billed_cache_read_tokens": 0,
     }
     assert body["by_model"] == []
     assert body["by_user"] == []
@@ -136,6 +137,9 @@ def test_summary_empty_range_is_all_zero(client: TestClient, master_key_header: 
     assert body["by_source_label"] == []
     assert body["by_endpoint"] == []
     assert body["by_provider"] == []
+    assert body["by_policy"] == []
+    assert body["by_workspace"] == []
+    assert body["by_channel"] == []
     assert body["series"] == []
 
 
@@ -845,7 +849,7 @@ def test_grouped_series_requires_master_key_and_group_by(client: TestClient) -> 
 
 
 def test_grouped_series_rejects_unknown_group_by(client: TestClient, master_key_header: dict[str, str]) -> None:
-    assert client.get(SERIES_PATH, headers=master_key_header, params={"group_by": "provider"}).status_code == 422
+    assert client.get(SERIES_PATH, headers=master_key_header, params={"group_by": "endpoint"}).status_code == 422
     # group_by is required.
     assert client.get(SERIES_PATH, headers=master_key_header).status_code == 422
 

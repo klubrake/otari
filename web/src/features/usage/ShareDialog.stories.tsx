@@ -38,6 +38,9 @@ const MODEL_ROWS: UsageGroupRow[] = [
     tokens: 2_400_000,
     cost: 118.2,
     is_other: false,
+    imported_cost: 0,
+    error_count: 0,
+    cache_read_tokens: 0,
   },
   {
     key: "openai:gpt-4o-mini",
@@ -46,6 +49,9 @@ const MODEL_ROWS: UsageGroupRow[] = [
     tokens: 1_180_000,
     cost: 84.6,
     is_other: false,
+    imported_cost: 0,
+    error_count: 0,
+    cache_read_tokens: 0,
   },
   {
     key: "openai:gpt-4o",
@@ -54,6 +60,9 @@ const MODEL_ROWS: UsageGroupRow[] = [
     tokens: 640_000,
     cost: 186.4,
     is_other: false,
+    imported_cost: 0,
+    error_count: 0,
+    cache_read_tokens: 0,
   },
   {
     key: null,
@@ -62,6 +71,9 @@ const MODEL_ROWS: UsageGroupRow[] = [
     tokens: 61_000,
     cost: 23.7,
     is_other: true,
+    imported_cost: 0,
+    error_count: 0,
+    cache_read_tokens: 0,
   },
 ]
 
