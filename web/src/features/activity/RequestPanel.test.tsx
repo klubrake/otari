@@ -53,6 +53,17 @@ describe("RequestPanel", () => {
     ).toBeInTheDocument()
   })
 
+  it("shows the provider's own compute time only where the provider reported one", async () => {
+    await renderPanel(entry({ latency_ms: 900, provider_latency_ms: 412 }))
+    expect(screen.getByText("Provider")).toBeInTheDocument()
+    expect(screen.getByText("412 ms")).toBeInTheDocument()
+  })
+
+  it("leaves the provider time out when the provider reported none", async () => {
+    await renderPanel(entry({ latency_ms: 900, provider_latency_ms: null }))
+    expect(screen.queryByText("Provider")).not.toBeInTheDocument()
+  })
+
   it("draws no token composition for a request that reported no usage", async () => {
     await renderPanel(
       entry({

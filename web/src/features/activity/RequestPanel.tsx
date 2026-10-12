@@ -435,6 +435,12 @@ export function RequestPanel({
           <Row label="Total" isMono>
             {formatLatency(entry.latency_ms) ?? "—"}
           </Row>
+          {/* Reported by only some providers (Groq, Ollama); Total stays the measure. */}
+          {entry.provider_latency_ms !== null ? (
+            <Row label="Provider" isMono>
+              {formatLatency(entry.provider_latency_ms)}
+            </Row>
+          ) : null}
         </Group>
 
         <p className="text-caption text-subtle">
