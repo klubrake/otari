@@ -15,10 +15,17 @@ import type {
   WorkspaceMember,
   WorkspaceMemberRole,
   WorkspaceProviderKeyOverride,
+  WorkspaceVisibility,
+  WorkspaceVisibilityUpdate,
 } from "@/client"
 import { apiFetch } from "@/shared/api/client"
 import { fetchAllPaged } from "@/shared/api/paging"
-import { ORGANIZATIONS, WORKSPACES } from "@/shared/api/queryKeys"
+import {
+  ORGANIZATIONS,
+  OVERVIEW,
+  WORKSPACES,
+  workspaceVisibilityKey,
+} from "@/shared/api/queryKeys"
 
 export function useWorkspaces(enabled = true) {
   return useQuery({
@@ -71,6 +78,79 @@ export function useWorkspaceMembers(workspaceId: string | null) {
     enabled: workspaceId !== null,
     staleTime: 60_000,
   })
+}
+
+/**
+ * What a workspace shows members who do not manage it, the one answer every
+ * page reads it from. Any member may read it, because a member's pages are laid
+ * out from it. The overview's answer carries it too and seeds this entry, so a
+ * page that reads the overview passes `enabled: false` and asks no second time.
+ * Keyed by workspace, so an answer is only ever about the workspace it names.
+ */
+export function useWorkspaceVisibility(
+  workspaceId: string,
+  { enabled = true }: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: workspaceVisibilityKey(workspaceId),
+    queryFn: () =>
+      apiFetch<WorkspaceVisibility>(
+        `/workspaces/${encodeURIComponent(workspaceId)}/visibility`,
+      ),
+    enabled: enabled && workspaceId !== "",
+    staleTime: 60_000,
+  })
+}
+
+/**
+ * Change it, optimistically: a switch has to move when it is pressed. Only the
+ * fields in the change are sent, and merged over the answer on screen. The
+ * previous answer is kept so a refused write puts the switch back, and the
+ * entry is read again once the write settles either way.
+ */
+export function useSetWorkspaceVisibility(workspaceId: string) {
+  const queryClient = useQueryClient()
+  const queryKey = workspaceVisibilityKey(workspaceId)
+  return useMutation({
+    mutationFn: (change: WorkspaceVisibilityUpdate) =>
+      apiFetch<WorkspaceVisibility>(
+        `/workspaces/${encodeURIComponent(workspaceId)}/visibility`,
+        { method: "PATCH", body: JSON.stringify(change) },
+      ),
+    onMutate: async (change) => {
+      await queryClient.cancelQueries({ queryKey })
+      const previous = queryClient.getQueryData<WorkspaceVisibility>(queryKey)
+      if (previous !== undefined) {
+        queryClient.setQueryData<WorkspaceVisibility>(queryKey, {
+          ...previous,
+          ...definedFields(change),
+        })
+      }
+      return { previous }
+    },
+    onError: (_error, _change, context) => {
+      if (context?.previous !== undefined) {
+        queryClient.setQueryData(queryKey, context.previous)
+      }
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKey, data)
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey })
+      // The overview carries the setting beside the workspace's figures.
+      void queryClient.invalidateQueries({ queryKey: [OVERVIEW] })
+    },
+  })
+}
+
+/** The fields a change sets: a field it leaves null or out keeps its value. */
+function definedFields(
+  change: WorkspaceVisibilityUpdate,
+): Partial<WorkspaceVisibility> {
+  return Object.fromEntries(
+    Object.entries(change).filter(([, value]) => value != null),
+  )
 }
 
 export function useCreateWorkspace() {

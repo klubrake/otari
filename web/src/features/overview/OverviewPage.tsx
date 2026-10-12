@@ -27,6 +27,7 @@ import {
   attentionKey,
   billedByDay,
   canProjectMonth,
+  chartCaptionLead,
   comparisonLabel,
   costOnDay,
   describeAttention,
@@ -203,7 +204,7 @@ function OverviewPage({
         servesProviders: isOperator && servesProviders,
         canManageBudgets: viewer.canReadOrganization,
         workspaceId: viewer.workspaceId || undefined,
-        failuresSearch: data.failuresSearch,
+        failuresSearch: data.workspaceFailuresSearch,
       }),
     }),
   )
@@ -222,15 +223,13 @@ function OverviewPage({
       : scope === "workspace"
         ? `Everything in ${viewer.workspaceName || "this workspace"}, all members`
         : `All workspaces in ${organizationName}`
-  // The chart's bars are the workspace's at Workspace and, for a manager, at
-  // You (their share stacked under the rest). A member reads no workspace
-  // spend by day, so theirs are their own with nothing measured against them.
-  const ownOnly = scope === "you" && (!viewer.isManager || data.isFallback)
+  const { isOwnOnly, isAwaitingTotals } = data
   const chartTotals = workspaceTotals ?? ownTotals
   const marksCrossing = scope === "workspace" || workspaceTotals !== undefined
-  const chartCap = ownOnly ? undefined : cap
+  const chartCap = isOwnOnly ? undefined : cap
   const showsBudget = chartCap !== undefined
-  const isProjected = canProjectMonth(month, now) && !ownOnly
+  const isProjected =
+    canProjectMonth(month, now) && !isOwnOnly && !isAwaitingTotals
 
   const refresh = () => {
     refreshSetup()
@@ -293,7 +292,7 @@ function OverviewPage({
           comparison={comparisonLabel(data.before)}
           todayCost={month.isCurrent ? costOnDay(series, data.now) : undefined}
           budget={budget}
-          failuresSearch={data.failuresSearch}
+          failuresSearch={data.workspaceFailuresSearch}
         />
       </div>
 
@@ -304,11 +303,14 @@ function OverviewPage({
         <div className="min-w-0 border-border lg:border-r">
           <section
             aria-label={`Billed spend, ${monthName}`}
-            className="border-b border-border px-4 py-5 md:px-6"
+            aria-busy={isAwaitingTotals || undefined}
+            className={`border-b border-border px-4 py-5 transition-opacity md:px-6 ${
+              isAwaitingTotals ? "opacity-60" : ""
+            }`}
           >
             <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
               <h2 className="text-title">
-                {ownOnly
+                {isOwnOnly
                   ? `Your billed spend, ${monthName}`
                   : showsBudget
                     ? `Billed spend vs budget, ${monthName}`
@@ -324,7 +326,7 @@ function OverviewPage({
                   </>
                 ) : (
                   <LegendSwatch className="bg-accent">
-                    {ownOnly ? "Yours" : "So far"}
+                    {isOwnOnly ? "Yours" : "So far"}
                   </LegendSwatch>
                 )}
                 {isProjected ? (
@@ -342,6 +344,7 @@ function OverviewPage({
               </Link>
             </div>
             {summary.isSuccess &&
+            !isAwaitingTotals &&
             (!data.workspace || data.workspace.isSuccess) ? (
               <BudgetChart
                 key={`${month.key}-${scope}`}
@@ -351,19 +354,20 @@ function OverviewPage({
                 mine={workspaceTotals ? ownTotals : undefined}
                 cap={chartCap}
                 marksCrossing={marksCrossing}
-                ownOnly={ownOnly}
+                ownOnly={isOwnOnly}
               />
             ) : (
               <div className="h-51" aria-hidden />
             )}
             <p className="mt-2.5 text-caption">
-              {ownOnly && cap !== undefined
-                ? month.isCurrent
-                  ? "Your spend alone, so there's no budget line: the Workspace budget tile measures the whole workspace against it. "
-                  : "Your spend alone, so there's no budget line: workspace spend by month is for managers. "
-                : showsBudget && !month.isCurrent
-                  ? "Past budgets aren't stored, so the line is today's budget. "
-                  : ""}
+              {chartCaptionLead({
+                isAwaitingTotals,
+                isOwnOnly,
+                hasBudget: cap !== undefined,
+                isHiddenFromMember: data.isHiddenFromMember,
+                showsBudget,
+                isCurrentMonth: month.isCurrent,
+              })}
               Running total of billed spend. Subscription usage isn&rsquo;t
               included because it doesn&rsquo;t count toward{" "}
               {cap !== undefined ? "the budget" : "limits"}.
@@ -374,7 +378,12 @@ function OverviewPage({
             month={month}
             now={data.now}
             entries={data.failures.data ?? []}
-            count={totals?.error_count}
+            count={
+              data.isListingOwnFailures
+                ? data.ownFailureCount
+                : totals?.error_count
+            }
+            isOwnOnly={data.isListingOwnFailures}
             isLoading={
               !data.isReady || (data.failures.isPending && !data.failures.data)
             }
@@ -403,6 +412,7 @@ function OverviewPage({
             isPast={!month.isCurrent}
             now={now}
             workspaceId={viewer.workspaceId || undefined}
+            isMemberWorkspace={data.isHidingWorkspaceKeys}
           />
         </aside>
       </div>

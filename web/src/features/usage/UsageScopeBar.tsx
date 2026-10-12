@@ -16,6 +16,7 @@ import { SCOPE_LABELS, type UsageScopeKey, WINDOWS } from "./usageQuery"
 export function UsageScopeBar({
   scopes,
   scope,
+  isAwaitingScope = false,
   onScope,
   range,
   onRange,
@@ -27,6 +28,8 @@ export function UsageScopeBar({
 }: {
   scopes: readonly UsageScopeKey[]
   scope: UsageScopeKey
+  /** Which scope it is waits on the workspace's answer, so none is named yet. */
+  isAwaitingScope?: boolean
   onScope: (scope: UsageScopeKey) => void
   range: string
   onRange: (range: string) => void
@@ -39,7 +42,9 @@ export function UsageScopeBar({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-3 border-t border-border py-3">
-      {scopes.length > 1 ? (
+      {isAwaitingScope ? (
+        <span aria-hidden className="h-5 w-24" />
+      ) : scopes.length > 1 ? (
         <Segmented
           label="Scope"
           value={scope}

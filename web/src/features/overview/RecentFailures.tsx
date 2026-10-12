@@ -35,6 +35,7 @@ export function RecentFailures({
   isLoading,
   error,
   failuresSearch,
+  isOwnOnly = false,
 }: {
   month: Month
   now: Date
@@ -45,7 +46,20 @@ export function RecentFailures({
   error: unknown
   /** Activity's search for the month's failures, where it can show them. */
   failuresSearch: DashboardSearch | undefined
+  /**
+   * The reader's own failures in a scope whose other figures are the
+   * workspace's: a member reads no one else's requests.
+   */
+  isOwnOnly?: boolean
 }) {
+  const monthName = formatUtcMonthName(month.start.getTime())
+  const title = isOwnOnly
+    ? month.isCurrent
+      ? "Your recent failures"
+      : `Your failures in ${monthName}`
+    : month.isCurrent
+      ? "Recent failures"
+      : `Failures in ${monthName}`
   const navigate = useNavigate()
   const isPhone = useIsPhone()
   const allColumns: DataTableColumn<UsageEntry>[] = [
@@ -107,12 +121,8 @@ export function RecentFailures({
 
   return (
     <section className="flex flex-col px-4 py-5 md:px-6">
-      <div className="flex items-baseline gap-3 pb-3">
-        <h2 className="flex-1 text-title">
-          {month.isCurrent
-            ? "Recent failures"
-            : `Failures in ${formatUtcMonthName(month.start.getTime())}`}
-        </h2>
+      <div className="flex flex-wrap items-baseline gap-x-3 pb-3">
+        <h2 className="flex-1 text-title">{title}</h2>
         {failuresSearch && count ? (
           <Link
             to="/activity"
@@ -122,23 +132,23 @@ export function RecentFailures({
             View all {formatNumber(count)} in Activity →
           </Link>
         ) : null}
+        {isOwnOnly ? (
+          <p className="w-full text-caption text-subtle">
+            Only your own requests: other members&rsquo; failures aren&rsquo;t
+            shown to members.
+          </p>
+        ) : null}
       </div>
       <ErrorBanner error={error} />
       <div className="otari-overview-activity">
         <DataTable
-          ariaLabel={
-            month.isCurrent
-              ? "Recent failures"
-              : `Failures in ${formatUtcMonthName(month.start.getTime())}`
-          }
+          ariaLabel={title}
           columns={columns}
           rows={entries}
           getRowKey={(entry) => entry.id}
           isLoading={isLoading}
-          emptyContent={`No failed requests ${
-            month.isCurrent
-              ? "this month"
-              : `in ${formatUtcMonthName(month.start.getTime())}`
+          emptyContent={`No ${isOwnOnly ? "failed requests of yours" : "failed requests"} ${
+            month.isCurrent ? "this month" : `in ${monthName}`
           }.`}
           onRowAction={
             failuresSearch

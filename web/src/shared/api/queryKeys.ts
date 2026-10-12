@@ -106,6 +106,13 @@ export const ORGANIZATION_PROVIDER_AVAILABLE_MODELS =
 // one page reads it, and claiming a domain has no bearing on anything else.
 export const ORGANIZATION_DOMAINS = "organization-domains"
 export const WORKSPACES = "workspaces"
+// What a workspace shows members who do not manage it. Composed here because
+// three modules address it: its own read and write, the overview, whose answer
+// carries the setting and seeds it, and the usage reads, whose refusal says it
+// has changed. Nested under WORKSPACES so deleting a workspace drops it too.
+export function workspaceVisibilityKey(workspaceId: string) {
+  return [WORKSPACES, workspaceId, "visibility"] as const
+}
 // The first-request setup guide's state. Its own key rather than a child of
 // WORKSPACES: the guide polls while it is on screen, and nesting it would make
 // every one of those ticks invalidate (or be invalidated by) the workspace list

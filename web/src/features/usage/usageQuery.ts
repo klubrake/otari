@@ -6,6 +6,7 @@ import type {
   UsageSummary,
 } from "@/client"
 import type { BuiltInView } from "@/features/savedViews/savedViews"
+import type { MemberReach } from "@/features/workspaces/memberVisibility"
 import type { UsageBreakdownRow } from "@/shared/api/usage"
 import type { DashboardSearch } from "@/shared/helpers/search"
 import {
@@ -63,27 +64,6 @@ export const SCOPE_LABELS: Record<UsageScopeKey, string> = {
   you: "You",
   workspace: "Workspace",
   organization: "Organization",
-}
-
-/**
- * The scopes a reader may pick, in the order the switch lists them. A manager
- * whose own requests cannot be told apart reads the workspace only; while the
- * roster that would tell them apart loads, You stays offered.
- */
-export function scopesFor(viewer: {
-  isManager: boolean
-  canReadOrganization: boolean
-  ownUserId: string | undefined
-  isFindingOwnUserId: boolean
-}): UsageScopeKey[] {
-  if (!viewer.isManager) return ["you"]
-  const canNarrowToOwn =
-    viewer.ownUserId !== undefined || viewer.isFindingOwnUserId
-  return [
-    "workspace",
-    ...(canNarrowToOwn ? (["you"] as const) : []),
-    ...(viewer.canReadOrganization ? (["organization"] as const) : []),
-  ]
 }
 
 /** The scope the URL names, if the reader may have it, else their default. */
@@ -245,18 +225,29 @@ const SCOPE_DIMENSIONS: Record<UsageScopeKey, DimensionKey[]> = {
   organization: ["workspace", "model", "provider", "channel"],
 }
 
-export function dimensionsFor(scope: UsageScopeKey): DimensionKey[] {
-  return SCOPE_DIMENSIONS[scope]
+/**
+ * The breakdowns a scope offers. Where the reader's reads of the workspace go
+ * as an ask for its totals, the ones that ask may split by, in the scope's
+ * order.
+ */
+export function dimensionsFor(
+  scope: UsageScopeKey,
+  reach: Pick<MemberReach, "isReadingWorkspaceTotals" | "totalsDimensions">,
+): DimensionKey[] {
+  const offered = SCOPE_DIMENSIONS[scope]
+  if (scope !== "workspace" || !reach.isReadingWorkspaceTotals) return offered
+  return offered.filter((key) =>
+    reach.totalsDimensions.includes(DIMENSIONS[key].summary),
+  )
 }
 
-/** The breakdown the URL names, if the scope has it, else the scope's first. */
+/** The breakdown the URL names, if the scope offers it, else the first offered. */
 export function readDimension(
   url: UsageUrl,
-  scope: UsageScopeKey,
+  offered: readonly DimensionKey[],
 ): DimensionKey {
   const asked = url.get("by")
-  const offered = dimensionsFor(scope)
-  return (offered as string[]).includes(asked)
+  return (offered as readonly string[]).includes(asked)
     ? (asked as DimensionKey)
     : offered[0]
 }
@@ -287,6 +278,24 @@ export function readFilters(url: UsageUrl): UsageFilter[] {
         : []),
     ]
   })
+}
+
+/**
+ * Whether a filter narrows what the page reads: its breakdown is offered, and
+ * where the read is limited to an allowlist of filters (a member's ask for the
+ * workspace's totals), its parameter is on it. The rest wait in the URL.
+ */
+export function filterApplies(
+  filter: UsageFilter,
+  offered: readonly DimensionKey[],
+  allowed?: ReadonlySet<string>,
+): boolean {
+  if (!offered.includes(filter.dimension)) return false
+  if (!allowed) return true
+  const def = DIMENSIONS[filter.dimension]
+  return allowed.has(
+    filter.mode === "exclude" && def.exclude ? def.exclude : def.include,
+  )
 }
 
 /** Whether a dimension's value can be picked several at a time, or left out. */
@@ -367,6 +376,8 @@ export interface UsageContext {
   /** The caller's own id, which a manager's You narrows to. */
   ownUserId: string | undefined
   isManager: boolean
+  /** Activity can list the requests the Workspace scope counts. */
+  canOpenWorkspaceActivity: boolean
 }
 
 /** The usage API's filters for what the page shows, in the scope it is in. */
@@ -436,6 +447,9 @@ export function activitySearch({
   filters: readonly UsageFilter[]
   row?: { dimension: DimensionKey; key: string | null }
 }): DashboardSearch | undefined {
+  if (context.scope === "workspace" && !context.canOpenWorkspaceActivity) {
+    return undefined
+  }
   const search: DashboardSearch = {}
   if (window.start) search.start_date = window.start
   if (window.end) search.end_date = window.end

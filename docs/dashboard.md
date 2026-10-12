@@ -169,18 +169,29 @@ operator also sees whether each provider answers. The scope and month live in
 the URL.
 
 Whether members see workspace totals is a per-workspace setting its managers
-change, and it starts on. While it is on, a member's Workspace scope reads the
-workspace's figures (the tiles, the chart and its budget line, requests and
-failures, and the error rate) but lists no keys in the limits, since the
-workspace's keys are other people's; what needs attention names the workspace
-budget and the member's own keys only. While it is off, a member reads only
-their own usage, so their chart is their own running total alone, with no budget
-line or projection: their share cannot show how close the workspace is to its
-budget. The Budget tile then gives them the workspace budget for the month
-running as a share of its cap, without the dollars spent. A month that has ended is drawn
-against today's budget and today's limits, since past ones are not stored, so it
-carries no verdict: no crossing date, no severity, and limits named ("Limit
-today") rather than measured against the month.
+change on the Members page, and it starts on. While it is on, a member switches
+between You and Workspace. At You, their chart stacks their own spend under the
+rest of the workspace's against the budget line and its projection, as a
+manager's does, and the Budget tile adds their share. At Workspace, the tiles
+and the chart are the workspace's, but the limits rail lists no keys, since the
+workspace's keys are other people's, and says to switch to You for their own.
+The failures listed there stay the member's own, titled "Your recent failures"
+and counted from their own requests, because a member reads no one else's
+requests; the Requests tile still counts the workspace's failures, without a
+link, since Activity would show only theirs. What needs attention names the
+workspace budget and the member's own keys only. While the setting is off, a
+member reads only their own usage, so their chart is their own running total
+alone, with no budget line or projection: their share cannot show how close the
+workspace is to its budget, and the caption says the totals are hidden by an
+admin. The Budget tile then gives the workspace budget for the month running as
+a whole percent of its cap ("used of $1,000"), without the dollars spent; with
+no budget set it shows their own billed spend as before. Where the setting
+cannot be read (the overview failed), a member sees their own spend, as if
+hidden, and where a read of the workspace's totals is refused because the
+setting changed meanwhile, the page reads it again and follows it. A month that has ended
+is drawn against today's budget and today's limits, since past ones are not
+stored, so it carries no verdict: no crossing date, no severity, and limits
+named ("Limit today") rather than measured against the month.
 
 Before anything has been sent, Overview opens with a getting-started strip. A
 deployment operator sees it on a gateway with no providers and no usage, with a
@@ -251,9 +262,10 @@ it, and a view can be saved by name; someone who manages the workspace can share
 one with it.
 
 Usage answers where usage is going over time. Pick whose usage (You, the
-Workspace if you manage it, or the whole Organization if you manage that) and a
-window from a day to a year. Three numbers lead: the total at API prices, split
-into what was billed and counts toward limits and what a subscription covered,
+Workspace if you manage it or its managers share its totals with members, or the
+whole Organization if you manage that) and a window from a day to a year.
+Three numbers lead: the total at API prices, split into what was billed and
+counts toward limits and what a subscription covered,
 which is tracked but billed nothing; requests, with how many failed; and tokens,
 with how much came from cache. Each compares with the window before it. One
 choice of breakdown (model, API key, session, channel, provider, policy, member
@@ -264,7 +276,16 @@ with more groups than the table lists, the rows kept are the top of that
 column rather than of the share. A row's cell narrows the page to its value or
 leaves it out, dragging across the chart narrows it to a stretch of dates, and
 clicking a row opens its requests in Activity with the same filters and window;
-from Organization scope Activity opens on that row's workspace. The
+from Organization scope Activity opens on that row's workspace. A member at
+Workspace scope reads the workspace's totals: the breakdowns are model and
+provider only, no filter naming a person, key, session, channel or policy is
+sent (one already in the URL waits there, marked as not in this scope), and rows
+do not open in Activity, which shows a member only their own requests. While the
+workspace keeps its totals from members, a member's Usage is You only, and the
+workspace budget beside the window reads as a percent "used of" its cap, with a
+line saying the total is hidden by an admin. A link to Workspace scope waits for
+the setting before it reads anything, rather than showing a member their own
+usage first. The
 organization's usage is that Organization scope rather than a page of the
 organization view. Everything lives
 in the URL under the names Activity reads (`model`, `api_key_id`, `user_id` and
@@ -295,6 +316,13 @@ than serving an empty scrape.
 Organizations own workspaces. The workspace switcher determines which keys,
 members, usage, tools, aliases, and stored routing policies are in view. The
 organization section manages resources shared across those workspaces.
+
+The Members page lists the selected workspace's roster. For someone who manages
+the workspace it also holds Workspace visibility: one switch, Workspace totals,
+that decides whether members see the workspace's spend, budget used and request
+counts on Overview and Usage, and a list of what a member will see with it on or
+off. A member always sees their own requests and usage, and never anyone else's
+individual requests. Members do not see the section.
 
 What a signed-in person can see or change is enforced by their organization and
 workspace roles. Deployment-wide operations require an operator. See

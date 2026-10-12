@@ -19,7 +19,10 @@ const ROUTES: ReadonlyArray<{
     ready: (page) =>
       page.getByRole("button").filter({ hasText: "gpt-parity-priced" }).first(),
   },
-  { route: "/usage" },
+  {
+    route: "/usage",
+    ready: (page) => page.getByRole("grid", { name: /^Usage by/ }),
+  },
   { route: "/keys" },
   { route: "/models" },
   { route: "/routing" },
