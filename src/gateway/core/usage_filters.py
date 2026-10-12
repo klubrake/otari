@@ -16,10 +16,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement, and_, case, func, or_, select
 
 from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
-from gateway.core.usage_source import not_served_here
 from gateway.models.api_keys import APIKey
 from gateway.models.money import MAX_USD_LIMIT
-from gateway.models.usage import UsageLog
+from gateway.models.usage import SERVED_HERE_SLUG, UsageLog
 from gateway.models.users import User
 
 # One WHERE condition over ``usage_logs``, as the reads pass them through the usage service.
@@ -126,6 +125,16 @@ def tool_calls_expr(tool: str) -> Any:
     return UsageLog.billing_meters[(TOOL_METER_NAMESPACE, tool, "billed")].as_integer()
 
 
+def tag_expr(key: str) -> Any:
+    """The value of request tag ``key`` on a row, or null when the row does not carry it."""
+    return UsageLog.tags[key].as_string()
+
+
+def tag_conditions(tags: dict[str, list[str]]) -> list[ColumnElement[bool]]:
+    """One condition per tag key: values for one key match any of them, and different keys must all match."""
+    return [match_any(tag_expr(key), values) for key, values in tags.items()]
+
+
 def tool_used_condition(tool: str) -> ColumnElement[bool]:
     """Rows of requests that ran this gateway tool, or any tool for :data:`ANY_TOOL`.
 
@@ -213,7 +222,7 @@ def status_count(status: str) -> Any:
 
 def imported_cost_sum() -> Any:
     """The cost of the rows in scope this deployment did not serve: imported usage, never charged to a budget."""
-    return func.coalesce(func.sum(case((not_served_here(UsageLog.source), UsageLog.cost), else_=0)), 0.0)
+    return func.coalesce(func.sum(case((UsageLog.source != SERVED_HERE_SLUG, UsageLog.cost), else_=0)), 0.0)
 
 
 # The orders a page of usage rows can be read in, and which way.

@@ -26,6 +26,7 @@ from gateway.core.usage_filters import (
     needs_pricing_condition,
     request_count,
     status_count,
+    tag_expr,
     tool_calls_expr,
 )
 from gateway.models.usage import UsageLog
@@ -178,6 +179,31 @@ class UsageSummaryRepository(BaseRepository[UsageLog, Never, Never]):
             UsageGroupRow(key=row[0], label=row[1], cost=float(row[2]), tokens=int(row[3]), requests=int(row[4]))
             for row in rows
         ]
+
+    async def tag_breakdown(
+        self,
+        key: str,
+        conditions: list[ColumnElement[bool]],
+        *,
+        limit: int | None,
+        status_filter: str | None = None,
+    ) -> list[UsageGroupRow]:
+        """Spend/tokens/requests grouped by the value of request tag ``key``, biggest spend first.
+
+        Rows that do not carry the tag group under a null key. ``tokens`` is billed, as in :meth:`breakdown`.
+        """
+        value = tag_expr(key)
+        cost_sum = func.coalesce(func.sum(UsageLog.cost), 0.0)
+        stmt = (
+            select(value, cost_sum, billed_input_sum() + billed_output_sum(), request_count(status_filter))
+            .where(*conditions)
+            .group_by(value)
+            .order_by(cost_sum.desc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        rows = (await self.db.execute(stmt)).all()
+        return [UsageGroupRow(key=row[0], cost=float(row[1]), tokens=int(row[2]), requests=int(row[3])) for row in rows]
 
     async def tool_usage(self, tool: str, conditions: list[ColumnElement[bool]]) -> UsageToolRow | None:
         """One tool's calls, failures, spend and requests, or None when the rows never ran it.

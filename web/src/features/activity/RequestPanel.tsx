@@ -116,7 +116,7 @@ export function RequestPanel({
   /** Narrow the log to this request's session, source, model, or the tools it ran. */
   onFilter: (filter: "session" | "source" | "model" | "tool") => void
   /** Only for a deployment operator: a price is a deployment-wide write. */
-  onPriceModel: ((modelKey: string) => void) | undefined
+  onPriceModel: ((modelKey: string, endpoint: string) => void) | undefined
   /**
    * Read over the list (a phone's pushed view, a narrow desk's drawer), filling
    * what holds it, rather than beside it at its own width.
@@ -379,7 +379,10 @@ export function RequestPanel({
                     : ", so this request carries no cost."}
                 </span>
                 {onPriceModel ? (
-                  <Button size="sm" onPress={() => onPriceModel(pricingKey)}>
+                  <Button
+                    size="sm"
+                    onPress={() => onPriceModel(pricingKey, entry.endpoint)}
+                  >
                     Set model price…
                   </Button>
                 ) : (

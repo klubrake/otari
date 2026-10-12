@@ -105,7 +105,10 @@ describe("RequestPanel", () => {
       screen.getByText(/so this request carries no cost/),
     ).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Set model price…" }))
-    expect(handlers.onPriceModel).toHaveBeenCalledWith("fireworks:deepseek")
+    expect(handlers.onPriceModel).toHaveBeenCalledWith(
+      "fireworks:deepseek",
+      "/v1/chat/completions",
+    )
   })
 
   it("tells anyone else who sets prices, and never says the request cost $0", async () => {
