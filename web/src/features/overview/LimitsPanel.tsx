@@ -1,0 +1,112 @@
+import { useNavigate } from "@tanstack/react-router"
+import { FiPlus } from "react-icons/fi"
+import type { OverviewLimits } from "@/client"
+import { Button } from "@/design-system/actions/Button"
+import type { UsageScopeKey } from "@/features/usage/usageQuery"
+import { LimitRow } from "./LimitRow"
+
+/**
+ * What limits spend in this scope, each against its limit: the reader's keys
+ * at You, the workspace's keys at Workspace, the organization's workspaces
+ * against their ceilings across it. Then the way to make more or manage them.
+ */
+export function LimitsPanel({
+  scope,
+  limits,
+  isLoading,
+  isError,
+  inMonth,
+  isPast,
+  now,
+  workspaceId,
+}: {
+  scope: UsageScopeKey
+  limits: OverviewLimits | undefined
+  isLoading: boolean
+  /** The read failed with nothing to show from before; the banner says why. */
+  isError: boolean
+  /** "this month", "in September". */
+  inMonth: string
+  /** The month read has ended, so its limits are today's. */
+  isPast: boolean
+  now: number
+  /** The workspace on screen, marked in a list of workspaces. */
+  workspaceId: string | undefined
+}) {
+  const navigate = useNavigate()
+  // What the rows are is the answer's own word, so the title cannot name
+  // something other than the rows under it.
+  const isWorkspaces = limits
+    ? limits.kind === "workspaces"
+    : scope === "organization"
+  const title = isWorkspaces
+    ? "Workspaces"
+    : scope === "you"
+      ? "Your keys"
+      : "Keys"
+  const rows = limits?.rows ?? []
+  const anyCeiling = rows.some((row) => row.limit !== null)
+  const caption = isWorkspaces
+    ? `Billed spend ${inMonth}${anyCeiling ? (isPast ? " with each ceiling today" : " against each ceiling") : ""}.`
+    : scope === "you"
+      ? `Billed spend ${inMonth} ${isPast ? "with each key's limit today" : "against each key's limit"}.`
+      : `Top keys by billed spend ${inMonth}.`
+
+  return (
+    <div className="flex min-w-0 flex-col">
+      <h2 className="text-title">{title}</h2>
+      <span className="mb-2 text-caption text-subtle">{caption}</span>
+      {isLoading ? (
+        <p className="border-t border-border-subtle py-3 text-caption">
+          Loading…
+        </p>
+      ) : isError ? (
+        <p className="border-t border-border-subtle py-3 text-caption">
+          {isWorkspaces ? "Workspaces" : "Keys"} could not be loaded.
+        </p>
+      ) : rows.length === 0 ? (
+        <p className="border-t border-border-subtle py-3 text-caption">
+          {isWorkspaces ? "No workspaces yet." : "No keys yet."}
+        </p>
+      ) : (
+        <ul className="flex flex-col">
+          {rows.map((row) => (
+            <LimitRow
+              key={row.id}
+              row={row}
+              now={now}
+              isCurrent={isWorkspaces && row.id === workspaceId}
+              isPast={isPast}
+              neverUsed={isWorkspaces ? `No requests ${inMonth}` : "Never used"}
+              marksMine={scope === "workspace"}
+              noLimit={isWorkspaces ? "No spend ceiling" : "No limit"}
+            />
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-wrap gap-2 border-t border-border-subtle pt-3">
+        {isWorkspaces ? (
+          <Button size="sm" onPress={() => navigate({ to: "/budgets" })}>
+            Manage budgets
+          </Button>
+        ) : (
+          <Button size="sm" onPress={() => navigate({ to: "/keys" })}>
+            <FiPlus aria-hidden className="size-3.5" />
+            Create key
+          </Button>
+        )}
+        {scope === "you" ? null : (
+          <Button
+            size="sm"
+            variant="ghost"
+            onPress={() =>
+              navigate({ to: isWorkspaces ? "/workspaces" : "/keys" })
+            }
+          >
+            {isWorkspaces ? "All workspaces" : "All keys"}
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}

@@ -2333,7 +2333,7 @@ main {
   border-top: 0;
 }
 /* Only the breakdown tables freeze a lane, and the Overview preview is ruled
-   *out* rather than pending: it is five rows of six narrow lanes and never
+   *out* rather than pending: it is five rows of four lanes and never
    scrolls, and Time leading is right for a chronology preview even though the
    identity is Model. Where a table does scroll and its identity is not the
    first lane, the frozen region runs from the first lane through the row header
@@ -2889,28 +2889,29 @@ main {
 .otari-overview-activity .table__row .table__cell:first-child {
   white-space: nowrap;
 }
-.otari-overview-activity .table__column[data-key="key"] {
-  width: 12.5rem;
+/* Fixed lanes, so a long error message truncates in its lane rather than
+   pushing the table past the column. */
+.otari-overview-activity .table__content {
+  table-layout: fixed;
+  width: 100%;
 }
-.otari-overview-activity .table__column[data-key="tokens"],
-.otari-overview-activity .table__column[data-key="cost"],
-.otari-overview-activity .table__column[data-key="status"] {
-  width: 6.875rem;
+.otari-overview-activity .table__column[data-key="model"] {
+  width: 13.75rem;
+}
+.otari-overview-activity .table__column[data-key="key"] {
+  width: 8.125rem;
 }
 .otari-overview-activity .table__row .table__cell {
   height: 2.8125rem;
   padding-block: 0;
 }
-/* A phone renders three of the six lanes (`RecentActivity`), with the time as
-   a second line under the model, so the model lane gives up its floor and the
+/* A phone renders two of the four lanes (`RecentFailures`), with the time and
+   key as a second line under the model, so the model lane gives up its floor and the
    row grows to hold the two lines. */
 @media (max-width: 767px) {
   .otari-overview-activity .table__column[data-key="model"] {
     min-width: 0;
-  }
-  .otari-overview-activity .table__column[data-key="cost"],
-  .otari-overview-activity .table__column[data-key="status"] {
-    width: auto;
+    width: 50%;
   }
   .otari-overview-activity .table__row .table__cell {
     height: auto;
@@ -2982,4 +2983,30 @@ main {
       transform: scale(1.06);
     }
   }
+}
+
+/* A projected bar: hatched in the ramp's mid step, capped by a line in it, so
+ * it reads as an estimate beside the solid bars of what happened. Past the
+ * budget it hatches in danger instead. Used by the Overview's budget chart and
+ * its legend swatch. */
+.otari-hatch {
+  --hatch: var(--color-chart-ramp-3);
+  background: repeating-linear-gradient(
+    135deg,
+    var(--hatch) 0 1px,
+    transparent 1px 5px
+  );
+  box-shadow: inset 0 1px 0 var(--hatch);
+}
+.otari-hatch[data-over="true"] {
+  --hatch: color-mix(in srgb, var(--color-danger) 45%, transparent);
+  box-shadow: inset 0 1px 0 var(--color-danger);
+}
+.otari-hatch-swatch {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--color-chart-ramp-3) 0 1px,
+    transparent 1px 3px
+  );
+  box-shadow: inset 0 0 0 1px var(--color-chart-ramp-3);
 }

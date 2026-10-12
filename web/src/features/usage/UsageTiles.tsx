@@ -10,6 +10,7 @@ import {
   formatUsd,
 } from "@/shared/helpers/format"
 import type { DashboardSearch } from "@/shared/helpers/search"
+import { CostSplit } from "./CostSplit"
 import { SplitBar } from "./SplitBar"
 import { describeGrowth } from "./usageModel"
 import { billedTokenTotal, cacheSums } from "./usageTotals"
@@ -78,33 +79,7 @@ export function UsageTiles({
             "Billed + subscription"
           )
         }
-        graphic={
-          <span className="flex w-full flex-col gap-1.5 pt-1">
-            <SplitBar
-              ariaLabel={`${formatUsd(billed)} billed, ${formatUsd(subscription)} subscription`}
-              parts={[
-                { value: billed, className: "bg-accent" },
-                { value: subscription, className: "bg-chart-ramp-4" },
-              ]}
-            />
-            <span className="grid grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-x-2 text-caption whitespace-nowrap">
-              <span aria-hidden className="size-2 bg-accent" />
-              <span className="text-mono-caption text-foreground">
-                {formatUsd(billed)}
-              </span>
-              <span className="truncate text-subtle">
-                billed · counts toward limits
-              </span>
-              <span aria-hidden className="size-2 bg-chart-ramp-4" />
-              <span className="text-mono-caption text-foreground">
-                {formatUsd(subscription)}
-              </span>
-              <span className="truncate text-subtle">
-                subscription · not billed, no limits
-              </span>
-            </span>
-          </span>
-        }
+        graphic={<CostSplit billed={billed} subscription={subscription} />}
       />
       <KpiCell
         label="Requests"

@@ -22,10 +22,13 @@ import {
   formatUsd,
   formatUsdAxis,
   formatUsdHeadline,
+  formatUsdLimit,
   formatUtcDateTime,
   formatUtcDay,
   formatUtcMinute,
   formatUtcMonth,
+  formatUtcMonthName,
+  formatUtcMonthYear,
   formatUtcTime,
   formatUtcWeekdayHour,
 } from "@/shared/helpers/format"
@@ -44,6 +47,14 @@ describe("formatUsd", () => {
     expect(formatUsd(1240.5)).toBe("$1,240.50")
     // No sub-cent precision here (unlike formatCost): tiles stay readable.
     expect(formatUsd(0.004)).toBe("$0.00")
+  })
+})
+
+describe("formatUsdLimit", () => {
+  it("writes a limit as it was set", () => {
+    expect(formatUsdLimit(1000)).toBe("$1,000")
+    expect(formatUsdLimit(25)).toBe("$25")
+    expect(formatUsdLimit(12.5)).toBe("$12.50")
   })
 })
 
@@ -253,6 +264,8 @@ describe("the gateway's clock", () => {
     expect(formatUtcTime(MOMENT, true)).toBe("09:05:07")
     expect(formatUtcDay(MOMENT)).toBe("Sep 27")
     expect(formatUtcMonth(MOMENT)).toBe("Sep")
+    expect(formatUtcMonthName(MOMENT)).toBe("September")
+    expect(formatUtcMonthYear(MOMENT)).toBe("September 2026")
     expect(formatUtcMinute(MOMENT)).toBe("Sep 27 09:05")
     expect(formatUtcDateTime(MOMENT)).toBe("2026-09-27 09:05:07 UTC")
     expect(formatUtcWeekdayHour(MOMENT)).toBe("Sun 09h")
@@ -346,11 +359,10 @@ describe("formatters are locale-pinned", () => {
       )
     })
     expect([...new Set(offenders)].sort()).toEqual([
-      // The two date call sites this sweep does not decide. Both render a
+      // The date call site this sweep does not decide. It renders a
       // timestamp, where the open question is US versus the reader's own, and
-      // both are a `new Date(...)` rather than a number.
+      // is a `new Date(...)` rather than a number.
       "features/keys/KeysPage.tsx",
-      "features/overview/OverviewPage.tsx",
       "shared/helpers/format.ts",
     ])
   })

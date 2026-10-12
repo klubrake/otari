@@ -53,6 +53,18 @@ function emptySummary(): UsageSummary {
   }
 }
 
+/** What every overview answer carries beside its strips. */
+const OVERVIEW_REST = {
+  month: {
+    start: "2026-10-01T00:00:00Z",
+    end: "2026-11-01T00:00:00Z",
+    elapsed_days: 12,
+    days: 31,
+  },
+  attention: [],
+  limits: { kind: "workspaces", rows: [] },
+}
+
 /** The overview summary an organization admin gets, carrying one ceiling. */
 function ceilingSummary({
   spent,
@@ -62,6 +74,8 @@ function ceilingSummary({
   allocated: number
 }) {
   return {
+    ...OVERVIEW_REST,
+    scope: "organization",
     active_keys: 0,
     active_members: 0,
     budgets: null,
@@ -161,6 +175,10 @@ function mockApi({
           // The strip is withheld rather than refused: the summary answers 200
           // for a member and simply carries no ceilings.
           return {
+            ...OVERVIEW_REST,
+            // A member's organization scope falls back to their own.
+            scope: "you",
+            limits: { kind: "keys", rows: [] },
             active_keys: 0,
             active_members: 0,
             budgets: null,
@@ -211,7 +229,8 @@ function renderShellOverPage() {
         </SelectedWorkspaceProvider>
       </DeploymentProvider>
     </QueryClientProvider>,
-    { wrapper: withRouter({ url: "/overview" }) },
+    // Across the organization, where the Overview reads the tightest ceiling.
+    { wrapper: withRouter({ url: "/overview?scope=organization" }) },
   )
 }
 
@@ -253,7 +272,7 @@ describe("switching organization", () => {
   it("keeps a page working where the new role is lower", async () => {
     const requests = mockApi({ roleThere: "member" })
     renderShellOverPage()
-    await screen.findByText(/At-a-glance spend/)
+    await screen.findByText(/Spend, limits and failures at a glance/)
 
     await switchOrganization()
 
@@ -274,13 +293,13 @@ describe("switching organization", () => {
     })
     expect(screen.queryByText(/Not enough privileges/)).toBeNull()
     // And no budget cell, because the summary withheld the strip.
-    expect(screen.queryByText("10.0%")).toBeNull()
+    expect(screen.queryByText("10%")).toBeNull()
   })
 
   it("takes the new role from the switch's own answer", async () => {
     const requests = mockApi({ roleThere: "member" })
     renderShellOverPage()
-    await screen.findByText(/At-a-glance spend/)
+    await screen.findByText(/Spend, limits and failures at a glance/)
 
     await switchOrganization()
 
@@ -305,25 +324,25 @@ describe("switching organization", () => {
       holdCeilingsHere: { held: hold.promise, answered: answered.resolve },
     })
     renderShellOverPage()
-    await screen.findByText(/At-a-glance spend/)
+    await screen.findByText(/Spend, limits and failures at a glance/)
 
     await switchOrganization()
     // The organization switched into has answered, so the cell has a figure of
     // its own for the late one to overwrite.
-    expect(await screen.findByText("10.0%")).toBeInTheDocument()
+    expect(await screen.findByText("10%")).toBeInTheDocument()
 
     hold.resolve()
     await answered.promise
     await act(async () => {})
 
-    expect(screen.getByText("10.0%")).toBeInTheDocument()
-    expect(screen.queryByText("80.0%")).toBeNull()
+    expect(screen.getByText("10%")).toBeInTheDocument()
+    expect(screen.queryByText("80%")).toBeNull()
   })
 
   it("makes the gated read again where the role survives the switch", async () => {
     const requests = mockApi({ roleThere: "admin" })
     renderShellOverPage()
-    await screen.findByText(/At-a-glance spend/)
+    await screen.findByText(/Spend, limits and failures at a glance/)
 
     await switchOrganization()
 

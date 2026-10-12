@@ -126,6 +126,32 @@ export const InlineSections: Story = {
 }
 
 /**
+ * Choices, then a way elsewhere ruled off below them by an untitled section:
+ * the rule says the last row leaves the list rather than picking from it.
+ */
+export const RuledOff: Story = {
+  render: () => (
+    <div className="w-60 border border-control-border bg-surface">
+      <Menu label="Month" selectionMode="single" selectedKeys={["2026-10"]}>
+        <MenuSection>
+          <MenuItem
+            id="2026-10"
+            trailing={<span className="text-caption text-subtle">October</span>}
+          >
+            This month
+          </MenuItem>
+          <MenuItem id="2026-09">September 2026</MenuItem>
+          <MenuItem id="2026-08">August 2026</MenuItem>
+        </MenuSection>
+        <MenuSection>
+          <MenuItem id="usage">Other ranges in Usage</MenuItem>
+        </MenuSection>
+      </Menu>
+    </div>
+  ),
+}
+
+/**
  * Centered under its trigger, with a label set in more than plain text:
  * `textValue` gives the item the name a screen reader reads and type-ahead
  * matches.

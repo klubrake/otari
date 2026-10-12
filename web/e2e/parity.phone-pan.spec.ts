@@ -12,7 +12,7 @@ const ROUTES: ReadonlyArray<{
 }> = [
   {
     route: "/",
-    ready: (page) => page.getByRole("img", { name: /^Daily spend/ }),
+    ready: (page) => page.getByRole("slider", { name: /^Billed spend in / }),
   },
   {
     route: "/activity",
@@ -35,7 +35,7 @@ const ROUTES: ReadonlyArray<{
 ]
 
 // 375 is the common phone; 320 is the narrowest one still sold, and the width
-// at which the Overview chart's last date label first spilled past the page.
+// at which the Overview chart's last date label once spilled past the page.
 const WIDTHS = [375, 320]
 
 /**

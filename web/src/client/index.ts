@@ -274,6 +274,10 @@ export type DiscoverableModelsResponse = Schemas["DiscoverableModelsResponse"]
 // The overview's strips, judged server-side: the page renders three integers
 // and one worst-case row, and used to download four collections to get them.
 export type OverviewSummary = Schemas["OverviewSummaryResponse"]
+// What needs acting on, and the rail's limit rows.
+export type OverviewAttentionItem = Schemas["OverviewAttentionItemResponse"]
+export type OverviewLimits = Schemas["OverviewLimitsResponse"]
+export type OverviewLimitRow = Schemas["OverviewLimitRowResponse"]
 export type AllocationHealth = Schemas["AllocationHealthResponse"]
 export type WorstAllocation = Schemas["WorstAllocationResponse"]
 

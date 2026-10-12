@@ -233,9 +233,10 @@ export function useUsageLogs(
   {
     sort = NEWEST_FIRST,
     enabled = true,
-  }: { sort?: UsageSort; enabled?: boolean } = {},
+    usageScope = "caller",
+  }: { sort?: UsageSort; enabled?: boolean; usageScope?: UsageScope } = {},
 ) {
-  const scope = useUsageScope()
+  const scope = useUsageScope(usageScope)
   return useQuery({
     ...usagePageQuery(scope.base, filters, page, pageSize, sort),
     enabled: enabled && scope.isReady,

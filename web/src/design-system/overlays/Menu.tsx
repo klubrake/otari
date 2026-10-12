@@ -149,17 +149,23 @@ export function MenuItem({
   )
 }
 
-/** A titled run of items, ruled off from the run above it. */
+/**
+ * A run of items, ruled off from the run above it. Untitled, it is only the
+ * rule: a way out of the list ("Other ranges in Usage") set apart from the
+ * choices in it.
+ */
 export function MenuSection({
   title,
   children,
 }: {
-  title: string
+  title?: string
   children: ReactNode
 }) {
   return (
     <HeroMenu.Section className="not-first:mt-1 not-first:border-t not-first:border-border-subtle not-first:pt-1">
-      <Header className="px-3 pt-2 pb-1 text-overline">{title}</Header>
+      {title ? (
+        <Header className="px-3 pt-2 pb-1 text-overline">{title}</Header>
+      ) : null}
       {children}
     </HeroMenu.Section>
   )

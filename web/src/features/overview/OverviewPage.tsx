@@ -1,1491 +1,475 @@
-import { Button } from "@heroui/react"
-import type { LinkProps } from "@tanstack/react-router"
-import { Link, useNavigate } from "@tanstack/react-router"
-import type { ReactNode } from "react"
-import { useEffect, useMemo, useState } from "react"
-import type { UsageEntry } from "@/client"
-import { RefreshButton } from "@/design-system/actions/RefreshButton"
-import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
+import { Link } from "@tanstack/react-router"
+import { type ReactNode, useEffect, useRef } from "react"
+import type { UsageSeriesPoint } from "@/client"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
-import { Dot } from "@/design-system/indicators/Dot"
 import { PageIntro } from "@/design-system/layout/PageIntro"
-import { Section } from "@/design-system/layout/Section"
-import { Sparkline } from "@/design-system/metrics/charts"
-import { KpiCell } from "@/design-system/metrics/KpiCell"
-import { KpiStrip } from "@/design-system/metrics/KpiStrip"
-import { SpendMeter } from "@/design-system/metrics/SpendMeter"
-import { TrendChip } from "@/design-system/metrics/TrendChip"
 import { scopeLabel } from "@/features/budgets/organizationBudget"
 import { SetupGuide } from "@/features/onboarding/SetupGuide"
-import { canManage, isDeploymentOperator } from "@/features/organization/roles"
-import {
-  allocationStrip,
-  type BudgetHealth,
-  errorRateHealth,
-  providerHealthStatus,
-} from "@/features/overview/overview"
+import { isDeploymentOperator } from "@/features/organization/roles"
+import { tightestAllocation } from "@/features/overview/overview"
 import { useModels } from "@/shared/api/models"
 import { useOrganizationContext } from "@/shared/api/organizations"
-import { useOverviewSummary } from "@/shared/api/overview"
+import { useRefreshOverview } from "@/shared/api/overview"
 import { useProviderHealth, useProviders } from "@/shared/api/providers"
-import {
-  NO_BREAKDOWNS,
-  useUsageLogs,
-  useUsageSummary,
-} from "@/shared/api/usage"
-import {
-  deltaFraction,
-  formatNumber,
-  formatPct,
-  formatRelative,
-  formatUsd,
-} from "@/shared/helpers/format"
-import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
+import { useUsageLogs } from "@/shared/api/usage"
+import { formatUtcMonthName } from "@/shared/helpers/format"
+import { useUrlState } from "@/shared/helpers/urlState"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
-import { useIsPhone } from "@/shared/hooks/useIsPhone"
-
-const DAY_MS = 86_400_000
-const PERIOD_DAYS = 30
-
-// The operator's current local date, as a stable key. Used to hold the window
-// bounds steady within a day (so query keys don't churn every render) while still
-// letting them advance across midnight.
-export function localDayKey(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
-}
-
-// Window bounds for the summary queries. Held stable within a local day so the
-// query keys don't churn (and the vs-prev delta compares a fixed baseline), but
-// advanced when the tab is refocused on a new day, so a tab left open overnight
-// does not keep aggregating yesterday's "today" or a stale 30-day window.
-// "Today" is LOCAL midnight rendered to an absolute instant, so the operator's
-// wall-clock day is what the server aggregates, not UTC's.
-function useWindows() {
-  const [dayKey, setDayKey] = useState(localDayKey)
-  useEffect(() => {
-    const check = () => {
-      if (document.visibilityState === "visible") {
-        const next = localDayKey()
-        setDayKey((prev) => (prev === next ? prev : next))
-      }
-    }
-    document.addEventListener("visibilitychange", check)
-    window.addEventListener("focus", check)
-    return () => {
-      document.removeEventListener("visibilitychange", check)
-      window.removeEventListener("focus", check)
-    }
-  }, [])
-  // dayKey drives the refresh: same day -> same bounds; new day -> re-derive.
-  // Nothing inside reads it, so the rule sees it as surplus; it is the whole
-  // point of the memo.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: dayKey is the cache key, not an input
-  return useMemo(() => {
-    const now = Date.now()
-    const d = new Date(now)
-    return {
-      today: new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString(),
-      periodStart: new Date(now - PERIOD_DAYS * DAY_MS).toISOString(),
-      prevStart: new Date(now - 2 * PERIOD_DAYS * DAY_MS).toISOString(),
-    }
-  }, [dayKey])
-}
-
-// The queries every overview variant is built on: the three summary windows
-// behind the usage tiles, and the newest few requests. Every filter carries the
-// shell's selected workspace, so the tiles, the sparklines and the
-// recent-requests strip narrow together with whatever sits beside them. The
-// usage hooks pick the surface for the caller (deployment-wide for an operator,
-// organization-scoped otherwise; see useUsageScope), which is what lets the
-// operator page and the organization page share this derivation.
-function useUsageOverview() {
-  const w = useWindows()
-  const { selected: workspace } = useSelectedWorkspace()
-  const scope = workspace?.workspace_id
-
-  const todayFilters = useMemo(
-    () => ({ workspace_id: scope, start_date: w.today }),
-    [scope, w],
-  )
-  const periodFilters = useMemo(
-    () => ({ workspace_id: scope, start_date: w.periodStart }),
-    [scope, w],
-  )
-  // Bounded previous window ([-60d, -30d)) so it does not overlap the current one.
-  const prevFilters = useMemo(
-    () => ({
-      workspace_id: scope,
-      start_date: w.prevStart,
-      end_date: w.periodStart,
-    }),
-    [scope, w],
-  )
-  const recentFilters = useMemo(() => ({ workspace_id: scope }), [scope])
-
-  // Tiles and the sparkline read only `totals` and `series`, so all three windows
-  // opt out of every breakdown rather than making the server run a GROUP BY per
-  // dimension three times over for numbers this page never shows.
-  const today = useUsageSummary(todayFilters, "hour", NO_BREAKDOWNS)
-  const period = useUsageSummary(periodFilters, "day", NO_BREAKDOWNS)
-  const previous = useUsageSummary(prevFilters, "day", NO_BREAKDOWNS)
-  const recent = useUsageLogs(recentFilters, 0, 5)
-
-  return { scope, today, period, previous, recent }
-}
-
-// The severity a cell states under its number, keyed off the derived Health.
-// Paired with a dot as well as the color, so the judgment never rides on hue
-// alone. Restored after the teardown briefly dropped them: the number alone
-// says 3.8% and leaves the reader to decide whether that is fine, which is the
-// one thing an at-a-glance page should not make them do.
-const ERROR_WORDS = { ok: "Healthy", warn: "Elevated", alert: "High" } as const
-const BUDGET_WORDS = {
-  ok: "On track",
-  warn: "Near limit",
-  alert: "Over budget",
-} as const
-
-/**
- * The four cells both overviews open with: spend today, spend and request
- * volume over the window, and the window's error rate.
- *
- * A fragment rather than its own strip, so each page seats them beside whatever
- * else it is entitled to show. The derivations are pure and cheap, so a page
- * that also needs one of them (the operator's attention strip reads the error
- * rate) derives it again rather than threading it out of here.
- */
-function UsageKpiCells({
-  today,
-  period,
-  previous,
-  isEmpty,
-}: {
-  today: ReturnType<typeof useUsageSummary>
-  period: ReturnType<typeof useUsageSummary>
-  previous: ReturnType<typeof useUsageSummary>
-  isEmpty: boolean
-}) {
-  const todayTotals = today.data?.totals
-  const periodTotals = period.data?.totals
-  const prevTotals = previous.data?.totals
-
-  // The 30-day daily series is already on the wire, and so is today's hourly
-  // one: the today window is requested at `"hour"` granularity for exactly this.
-  // A single point has no trend to draw, so a sparkline needs two.
-  const periodSeries = period.data?.series ?? []
-  const todaySeries = today.data?.series ?? []
-  const hasTrend = periodSeries.length > 1
-  const hasHourlyTrend = todaySeries.length > 1
-
-  const err = errorRateHealth(periodTotals)
-  const errPrev = errorRateHealth(prevTotals)
-  // Each delta is its own const so the cell below can gate its chip on the
-  // fraction rather than on the query: `deltaFraction` also returns null once
-  // the current window has landed but the previous one has not, and when the
-  // previous value is 0.
-  const costDelta = periodTotals
-    ? deltaFraction(periodTotals.cost, prevTotals?.cost)
-    : null
-  const requestDelta = periodTotals
-    ? deltaFraction(periodTotals.request_count, prevTotals?.request_count)
-    : null
-  const errDelta =
-    err.rate !== null && errPrev.rate !== null
-      ? deltaFraction(err.rate, errPrev.rate)
-      : null
-
-  return (
-    <>
-      <KpiCell
-        label="Spend today"
-        // A real zero where zero is a fact, an em dash where the value is
-        // unknown: a failed query must not read as "you spent nothing".
-        value={todayTotals ? formatUsd(todayTotals.cost) : "—"}
-        // "midnight" and not "00:00 UTC": `useWindows` builds this window from
-        // the caller's *local* midnight, deliberately and with a comment saying
-        // so, so a UTC string would be false for everyone not on it.
-        subline={
-          isEmpty
-            ? "no prior spend"
-            : todayTotals
-              ? "since midnight"
-              : "no data"
-        }
-        graphic={
-          !isEmpty && hasHourlyTrend ? (
-            <Sparkline
-              values={todaySeries.map((point) => point.cost)}
-              ariaLabel="Spend by hour today"
-              height={40}
-            />
-          ) : undefined
-        }
-      />
-      <KpiCell
-        label="Spend, last 30 days"
-        value={periodTotals ? formatUsd(periodTotals.cost) : "—"}
-        subline={
-          isEmpty ? "no prior spend" : periodTotals ? undefined : "no data"
-        }
-        // Spend falling is the improvement, so a rise paints danger while the
-        // arrow keeps telling the truth about which way it went.
-        delta={
-          costDelta !== null ? (
-            <TrendChip
-              fraction={costDelta}
-              polarity="down-is-good"
-              caption="vs prev"
-            />
-          ) : undefined
-        }
-        graphic={
-          !isEmpty && hasTrend ? (
-            <Sparkline
-              values={periodSeries.map((point) => point.cost)}
-              ariaLabel="Spend trend over the last 30 days"
-              height={40}
-            />
-          ) : undefined
-        }
-      />
-      <KpiCell
-        label="Requests, last 30 days"
-        value={periodTotals ? formatNumber(periodTotals.request_count) : "—"}
-        subline={
-          isEmpty ? "no prior traffic" : periodTotals ? undefined : "no data"
-        }
-        // Volume, so no polarity: more traffic through the gateway is neither
-        // a win nor a regression on its own, and the error rate beside it is
-        // what carries the judgment.
-        delta={
-          requestDelta !== null ? (
-            <TrendChip fraction={requestDelta} caption="vs prev" />
-          ) : undefined
-        }
-        graphic={
-          !isEmpty && hasTrend ? (
-            <Sparkline
-              values={periodSeries.map((point) => point.requests)}
-              ariaLabel="Request volume trend over the last 30 days"
-              height={40}
-            />
-          ) : undefined
-        }
-      />
-      <KpiCell
-        label="Error rate, last 30 days"
-        value={err.rate === null ? "—" : formatPct(err.rate)}
-        // The word is present whenever there is a rate to judge, "Healthy"
-        // included: a line that appears only when something is wrong makes
-        // its absence ambiguous with a page that has not loaded.
-        severity={
-          err.status === "neutral"
-            ? undefined
-            : { status: err.status, word: ERROR_WORDS[err.status] }
-        }
-        subline={
-          err.rate === null
-            ? isEmpty
-              ? "NO REQUESTS YET"
-              : "no requests in range"
-            : undefined
-        }
-        // Errors falling is the improvement, as with spend.
-        delta={
-          errDelta !== null ? (
-            <TrendChip
-              fraction={errDelta}
-              polarity="down-is-good"
-              caption="vs prev"
-            />
-          ) : undefined
-        }
-        graphic={
-          !isEmpty && periodTotals ? (
-            <span className="text-xs text-muted">
-              {`${formatNumber(periodTotals.error_count)} of ${formatNumber(periodTotals.request_count)} requests`}
-            </span>
-          ) : undefined
-        }
-      />
-    </>
-  )
-}
+import { BudgetChart } from "./BudgetChart"
+import { GetStartedStrip } from "./GetStartedStrip"
+import { LimitsPanel } from "./LimitsPanel"
+import { OverviewAttention } from "./OverviewAttention"
+import { OverviewScopeBar } from "./OverviewScopeBar"
+import { OverviewTiles } from "./OverviewTiles"
+import {
+  billedByDay,
+  budgetView,
+  comparisonLabel,
+  describeAttention,
+  groupAttention,
+  runningTotal,
+} from "./overviewModel"
+import { OVERVIEW_URL_DEFAULTS, offeredMonths } from "./overviewQuery"
+import { ProvidersPanel } from "./ProvidersPanel"
+import { RecentFailures } from "./RecentFailures"
+import { useOverviewData } from "./useOverviewData"
 
 /**
  * The landing route, which is the one page nobody navigates to on purpose.
  *
- * The operator page's status panels read deployment-wide endpoints (provider
- * health, budgets, keys, accounts), and since otari-ai#1880 those answer 403
- * to anyone who is not an operator of the deployment. The gate is here rather
- * than on the queries because the hooks do not all take an `enabled` flag, and
- * a component that is not rendered runs none of them: that is what keeps a
- * tenant's first page from being a row of failed requests.
- *
- * Decided from the organization context, which is where `useUsageScope` and the
- * nav rail take the same answer from, so nothing on screen can hold a different
- * one (otari-ai#1936). Two sources compose into a page that reports nothing
- * while being wrong: the deployment-wide panels beside usage tiles quietly
- * reading `/organizations/me/usage`, every number disagreeing with its
- * neighbor and each query happy with its own. It also costs no request, since
- * the shell reads this context before it paints.
- *
- * So it fails toward the scoped page, the direction the hooks behind those tiles
- * already fail in: the narrower surface understates rather than refusing, and
- * reports its own error where this page can show it. An errored context is an
- * answer, not a wait, for `useUsageScope`'s reason: holding the page on a
- * loading state that no retry clears renders nothing at all.
+ * Provider health and the provider list answer 403 to anyone who does not
+ * operate the deployment, so the operator's parts mount only for an operator:
+ * a component that is not rendered runs none of its queries. Decided from the
+ * organization context, where the usage hooks and the nav rail take the same
+ * answer, and an errored context is an answer rather than a wait.
  */
 export function OverviewIndex() {
   const context = useOrganizationContext()
-
-  // `isFetched`, not `isPending`: a query that errored with no data goes back to
-  // pending on its next fetch, and the page below this line mounts a second
-  // observer of the same context (the usage hooks), whose mount is what asks for
-  // that fetch. Reading the transient state would swing the page back to this
-  // spinner, unmount the observer, and start the round again forever.
+  // `isFetched`, not `isPending`: an errored query goes back to pending on its
+  // next fetch, which a second observer below would ask for, swinging the page
+  // back to this spinner forever.
   if (!context.isFetched) {
     return <PageLoading />
   }
   if (!isDeploymentOperator(context.data)) {
     return <OrganizationOverview />
   }
-  return <OperatorOverviewIndex />
+  return <OperatorOverview />
 }
 
 /**
- * The landing page for a signed-in caller who does not operate the deployment.
- *
- * The 11 Aug roles matrix has Overview as "my usage" for every role
- * (otari-ai#1946), so this is a real page rather than a card apologizing for
- * the operator one (otari-ai#1929), and it is built from the same primitives:
- * the usage cells, the spend chart, the recent-request preview and the rail,
- * served by the scope-aware hooks, which read `/organizations/me/...` for
- * this caller. The server narrows those rows to what the caller may read (their
- * organization for an admin, the workspaces they belong to for a member;
- * otari#837), so nothing here re-derives roles for them.
- *
- * Two things the operator page has are deliberately absent. The attention strip
- * reads provider health and the deployment's budgets, neither of which is this
- * caller's to see. And there is no `isDeploymentOperator` anywhere below this
- * line: this *is* the non-operator branch, so asking again is how otari-ai#2080
- * happened.
+ * The operator's page: the provider list decides whether a fresh gateway gets
+ * the getting-started strip, and provider health fills the rail.
  */
-function OrganizationOverview() {
-  const { scope, today, period, previous, recent } = useUsageOverview()
-  const context = useOrganizationContext()
-  // Owner or admin, which is the line the server already draws on the ceilings
-  // route: `require_active_organization_management_access`, the same gate that
-  // opens the organization rail in `AppShell`. A member is refused there, so a
-  // member is not asked here (the matrix has Spend & budgets Hidden for them).
-  const managesSpend = canManage(context.data)
-  // What this caller could route a request to, which is the setup guide's gate
-  // here: `/providers`, the operator page's answer to the same question,
-  // refuses this caller. The catalog is not operator-gated and is filtered to
-  // the selectors this caller may name, the deployment's configured instances
-  // plus their organization's own keys, so an empty one means there is nothing
-  // to send a request to yet. Not asked until a workspace is selected, since the
-  // guide is about one.
-  const models = useModels(scope !== undefined)
-  // The rail counts and the ceiling strip in one read. Each used to be a whole
-  // collection fetched to produce one number (otari#1425); the gateway scopes
-  // and judges them now, and withholds the ceilings a member may not see.
-  const summary = useOverviewSummary(scope)
-
-  const periodSeries = period.data?.series ?? []
-  const ceilingHealth = allocationStrip(summary.data?.ceilings, {
-    none: "No spend ceilings configured",
-    noneCapped: "No ceiling caps spend",
-    // No workspace roster is loaded here, so a workspace ceiling reads as
-    // "A workspace", which is what the Spend page shows for an id it cannot
-    // resolve either.
-    nameOf: (worst) =>
-      worst.scope_type
-        ? scopeLabel(
-            { scope_type: worst.scope_type, scope_id: worst.scope_id ?? "" },
-            {
-              organizationName:
-                context.data?.organization.name ?? "This organization",
-              workspaces: [],
-            },
-          )
-        : worst.budget_id,
-  })
-
-  // Why the cell has no percentage to show, once the read has landed. The two
-  // are told apart because they ask for different things: nothing is capped
-  // yet, or what is capped is capped on tokens or requests rather than dollars.
-  const noCeilingReason =
-    (summary.data?.ceilings?.total_count ?? 0) === 0
-      ? "no spend ceilings set"
-      : "no ceiling caps spend"
-
-  const activeKeys = summary.data?.active_keys ?? 0
-  const activeMembers = summary.data?.active_members ?? 0
-
-  // Recent activity is excluded for the operator page's reason: it renders its
-  // own inline banner, so including it here would double-report. The previous
-  // window is included: its only reader is the trend chips, so its failure
-  // would otherwise just silently strip them. The catalog is excluded too: it
-  // decides whether an optional offer appears, not whether this page is right.
-  const loadError =
-    today.error ?? period.error ?? previous.error ?? summary.error
-
-  const refresh = () => {
-    void today.refetch()
-    void period.refetch()
-    void previous.refetch()
-    void recent.refetch()
-    void summary.refetch()
-    // Both guarded because `refetch` runs a disabled query: the catalog would be
-    // asked with no workspace to use it, and the ceilings with a role the server
-    // refuses.
-    if (scope !== undefined) void models.refetch()
-  }
-  const isRefreshing =
-    today.isFetching ||
-    period.isFetching ||
-    previous.isFetching ||
-    recent.isFetching ||
-    summary.isFetching ||
-    models.isFetching
-
-  return (
-    <div className="flex flex-col">
-      <OverviewHeader
-        refresh={refresh}
-        isRefreshing={isRefreshing}
-        updatedAt={period.dataUpdatedAt}
-      >
-        At-a-glance spend, traffic, and recent activity in your organization.
-      </OverviewHeader>
-
-      {/* Offered to whoever manages the workspace, which on a multi-tenant
-          deployment is this caller. It decides for itself whether to render. */}
-      <SetupGuide canServeRequests={(models.data?.data.length ?? 0) > 0} />
-
-      <ErrorBanner error={loadError} />
-
-      <KpiStrip isEmpty={false} columns={managesSpend ? 5 : 4}>
-        <UsageKpiCells
-          today={today}
-          period={period}
-          previous={previous}
-          isEmpty={false}
-        />
-        {managesSpend ? (
-          <KpiCell
-            label="Budget health"
-            // Keyed on the data and not on the query's phase: an errored
-            // read goes back to pending on its next fetch, and a cell that
-            // read that as "loaded, and zero" is the false zero
-            // otari-ai#1935 and #1961 were both about.
-            value={
-              summary.data?.ceilings && ceilingHealth.worst
-                ? formatPct(ceilingHealth.worst.pct)
-                : "—"
-            }
-            severity={
-              summary.data?.ceilings &&
-              ceilingHealth.worst &&
-              ceilingHealth.status !== "neutral"
-                ? {
-                    status: ceilingHealth.status,
-                    word: BUDGET_WORDS[ceilingHealth.status],
-                  }
-                : undefined
-            }
-            subline={
-              summary.data?.ceilings && ceilingHealth.worst
-                ? undefined
-                : summary.data?.ceilings
-                  ? noCeilingReason
-                  : "no data"
-            }
-            // `SpendMeter`, not the plain accent `Meter`, and the same
-            // component the Spend page's own rows use, so the two cannot say
-            // different things about one ceiling.
-            graphic={
-              summary.data?.ceilings && ceilingHealth.worst ? (
-                <SpendMeter
-                  spent={ceilingHealth.worst.spent}
-                  allocated={ceilingHealth.worst.allocated}
-                  ariaLabel={`Tightest spend ceiling: ${ceilingHealth.worst.name}`}
-                />
-              ) : undefined
-            }
-          />
-        ) : null}
-      </KpiStrip>
-
-      <SpendChart series={periodSeries} isReady={period.isSuccess} />
-
-      <ActivitySplit
-        recent={recent}
-        activeKeys={summary.data ? activeKeys : null}
-        activeMembers={summary.data ? activeMembers : null}
-        links={railLinks(managesSpend)}
-      />
-    </div>
-  )
-}
-
-// The operator index uses the provider list to make the empty gateway a
-// useful getting-started page. The providers query is operator-gated, so this
-// only runs once the gate above has answered.
-function OperatorOverviewIndex() {
+function OperatorOverview() {
   const providers = useProviders()
+  const needsSetup =
+    providers.isSuccess && providers.data.providers.length === 0
+  // Imported usage lands without a provider, so "no providers" alone does not
+  // mean nothing has happened: the strip waits on the log being empty too.
+  const anyUsage = useUsageLogs({}, 0, 1, { enabled: needsSetup })
   if (providers.isLoading) {
-    // A visible wait beats a blank screen while the master-key-gated providers
-    // query resolves on first paint.
     return <PageLoading />
   }
-  // A failed providers query leaves the setup state unknown, so it stays neutral
-  // (no getting-started block) and the error is reported instead of swallowed.
-  // Its refetch goes down with it: the query is cached for minutes and does not
-  // refetch on focus, so without this the page's Refresh could not clear the
-  // banner and a recovered backend would need a full reload to be noticed.
   return (
     <OverviewPage
-      needsSetup={providers.isSuccess && providers.data.providers.length === 0}
-      hasProviders={providers.isSuccess && providers.data.providers.length > 0}
+      isOperator
+      setup={
+        <>
+          {needsSetup && anyUsage.isSuccess && anyUsage.data.length === 0 ? (
+            <GetStartedStrip />
+          ) : null}
+          <SetupGuide
+            canServeRequests={
+              providers.isSuccess && providers.data.providers.length > 0
+            }
+          />
+        </>
+      }
       setupError={providers.error}
-      refreshSetup={providers.refetch}
+      refreshSetup={() => void providers.refetch()}
       setupFetching={providers.isFetching}
     />
   )
 }
 
 /**
- * The one page nobody navigates to on purpose, rebuilt as a divided surface.
- *
- * There are no cards here any more. The page is one ground partitioned by
- * hairlines: a header, an optional attention strip, a KPI strip of five cells
- * divided by vertical rules, a subordinate spend chart, and a lower split of
- * the activity table against a workspace rail. Each section is full-bleed
- * between `border-border` rules, which is what `-mx-4 md:-mx-6` is doing at
- * every one of them: `<main>` pads its column, and a rule that stops short of
- * the column edge reads as a card's top border rather than as a division of
- * the page.
+ * Everyone else's page. Whether a request could succeed is read off the model
+ * catalog, which lists the selectors this caller may name, since `/providers`
+ * refuses them.
  */
-export function OverviewPage({
-  needsSetup = false,
-  hasProviders = false,
+function OrganizationOverview() {
+  const models = useModels()
+  return (
+    <OverviewPage
+      isOperator={false}
+      setup={
+        <SetupGuide canServeRequests={(models.data?.data.length ?? 0) > 0} />
+      }
+      refreshSetup={() => void models.refetch()}
+      setupFetching={models.isFetching}
+    />
+  )
+}
+
+/** The cost of the UTC day `now` falls on, from a daily series. */
+function costOn(series: readonly UsageSeriesPoint[], now: Date) {
+  const today = now.toISOString().slice(0, 10)
+  return (
+    series.find((point) => point.bucket_start.slice(0, 10) === today)?.cost ?? 0
+  )
+}
+
+/**
+ * Spend, limits and failures for one scope and one calendar month: what needs
+ * attention, three numbers, the month's running total against its budget, the
+ * latest failures, and the limits beside them.
+ *
+ * The scope and month live in the URL (`overviewQuery.ts`); `useOverviewData`
+ * reads them, and this composes the page from what it returns.
+ */
+function OverviewPage({
+  isOperator,
+  setup,
   setupError,
   refreshSetup,
-  setupFetching = false,
+  setupFetching,
 }: {
-  needsSetup?: boolean
-  /**
-   * Whether a provider is configured, which is the *other* answer the same
-   * query gives: `needsSetup` is only true once it has succeeded and found
-   * none, so its negation would also cover a failed query. The setup guide
-   * needs the positive form, and takes it from here rather than asking again
-   * (see `SetupGuide`).
-   */
-  hasProviders?: boolean
+  isOperator: boolean
+  setup: ReactNode
   setupError?: unknown
-  refreshSetup?: () => void
-  setupFetching?: boolean
+  refreshSetup: () => void
+  setupFetching: boolean
 }) {
-  const usage = useUsageOverview()
-  const { today, period, previous, recent } = usage
-  const health = useProviderHealth()
-  // The two rail counts and the budget strip in one read (otari#1425). The
-  // counts are scoped the way the pages they link to are scoped, so the tile
-  // and the table behind it cannot disagree: keys by the selected workspace,
-  // members by that workspace's roster rather than the organization's.
-  const summary = useOverviewSummary(usage.scope)
+  const url = useUrlState(OVERVIEW_URL_DEFAULTS)
+  const data = useOverviewData(url)
+  const context = useOrganizationContext()
+  const servesProviders = useSurfaces()("providers")
+  const { viewer, scope, month, summary, overview } = data
+  const now = data.now.getTime()
 
-  const periodSeries = period.data?.series ?? []
+  const series = summary.data?.series ?? []
+  const totals = summary.data?.totals
+  const billed = totals
+    ? Math.max(0, totals.cost - (totals.imported_cost ?? 0))
+    : undefined
+  const ownTotals = runningTotal(billedByDay(series, month))
+  const workspaceTotals = data.workspace?.data
+    ? runningTotal(billedByDay(data.workspace.data.series, month))
+    : undefined
+  const workspaceBilledTotals = data.workspace?.data?.totals
+  const workspaceBilled =
+    scope === "workspace"
+      ? billed
+      : workspaceBilledTotals
+        ? Math.max(
+            0,
+            workspaceBilledTotals.cost -
+              (workspaceBilledTotals.imported_cost ?? 0),
+          )
+        : undefined
 
-  // The attention strip reads the window's error rate too; errorRateHealth is
-  // pure, so it is derived here again rather than threaded out of the cells.
-  const err = errorRateHealth(period.data?.totals)
-
-  const budget = allocationStrip(summary.data?.budgets, {
-    none: "No budgets configured",
-    noneCapped: "No capped budgets",
+  const spend = scope === "organization" ? undefined : data.spend.data
+  const cap = spend?.max_budget ?? undefined
+  const limits = overview.data?.limits
+  const organizationName =
+    context.data?.organization.name ?? "This organization"
+  const tightest = tightestAllocation(
+    overview.data?.ceilings,
+    (worst) =>
+      limits?.rows.find((row) => row.id === worst.scope_id)?.name ??
+      (worst.scope_type
+        ? scopeLabel(
+            { scope_type: worst.scope_type, scope_id: worst.scope_id ?? "" },
+            { organizationName, workspaces: [] },
+          )
+        : worst.budget_id),
+  )
+  // The server's word on this workspace's budget pace, and the settled spend
+  // to pace from where it is known: the month's billed spend, for a budget
+  // whose period is this calendar month.
+  const pace = overview.data?.attention.find(
+    (item) =>
+      item.kind === "budget_pace" && item.subject_id === viewer.workspaceId,
+  )
+  const periodIsMonth =
+    spend?.period_start != null &&
+    spend.period_end != null &&
+    Date.parse(spend.period_start) === month.start.getTime() &&
+    Date.parse(spend.period_end) === month.end.getTime()
+  const budget = budgetView({
+    scope,
+    month,
+    now,
+    isManager: viewer.isManager && !data.isFallback,
+    canSetBudgets: viewer.canReadOrganization,
+    spend: data.spend.isError ? undefined : spend,
+    ownBilled: scope === "you" ? billed : undefined,
+    workspaceBilled,
+    billed,
+    tightest,
+    ceilingCount: overview.data
+      ? (overview.data.ceilings?.total_count ?? null)
+      : null,
+    serverPace: pace ? { at: pace.at ?? null } : undefined,
+    settledSpent: periodIsMonth ? workspaceBilled : undefined,
   })
-  const providerHealth = providerHealthStatus(health.data)
 
-  const activeKeys = summary.data?.active_keys ?? 0
-  const activeMembers = summary.data?.active_members ?? 0
+  const attention = groupAttention(overview.data?.attention ?? []).map((item) =>
+    describeAttention(item, {
+      servesProviders: isOperator && servesProviders,
+      canManageBudgets: viewer.canReadOrganization,
+      workspaceId: viewer.workspaceId || undefined,
+      failuresSearch: data.failuresSearch,
+    }),
+  )
 
-  // The getting-started state is an onboarding empty state: the gateway has no
-  // providers AND no recorded usage. Imported OTLP usage lands in the usage
-  // tables (with counts_toward_budget=false) through a budget-exempt key and no
-  // provider config, so "no providers" alone no longer means "nothing has
-  // happened". `recent` is the unfiltered, all-time log query
-  // `useUsageOverview` already loads; gate on it having resolved so the strip
-  // never flashes in then hides.
-  const hasAnyUsage = (recent.data?.length ?? 0) > 0
-  const isEmpty = needsSetup && recent.isSuccess && !hasAnyUsage
+  const months = offeredMonths(data.now)
+  // Another scope's or month's answers are still on screen: dimmed, and said
+  // to be busy, until the new ones land.
+  const busy = data.isStale ? "opacity-60" : ""
+  const monthName = formatUtcMonthName(month.start.getTime())
+  const inMonth = month.isCurrent ? "this month" : `in ${monthName}`
+  // Where the server fell back to the caller's own usage, the switch keeps
+  // the scope asked for and the description says what was read instead.
+  const description =
+    scope === "you"
+      ? `${data.isFallback ? "Your usage: " : ""}Requests made with your keys and your subscription`
+      : scope === "workspace"
+        ? `Everything in ${viewer.workspaceName || "this workspace"}, all members`
+        : `All workspaces in ${organizationName}`
+  // The chart's bars are the workspace's at Workspace and, for a manager, at
+  // You (their share stacked under the rest). A member sees no workspace
+  // totals, so theirs are their own with nothing measured against them.
+  const ownOnly = scope === "you" && (!viewer.isManager || data.isFallback)
+  const chartTotals = workspaceTotals ?? ownTotals
+  const marksCrossing = scope === "workspace" || workspaceTotals !== undefined
+  const chartCap = ownOnly ? undefined : cap
+  const showsBudget = chartCap !== undefined
 
-  // Surface the first load error across the cell queries so a broken master key
-  // or backend does not just leave a wall of "—". Recent activity is excluded: it
-  // renders its own inline banner, so including it here would double-report. The
-  // provider-list error from the index comes first: it is the query that decides
-  // whether this page is a getting-started screen, so its failure is the most
-  // load-bearing thing to tell the operator about.
-  const loadError =
-    setupError ??
-    today.error ??
-    period.error ??
-    previous.error ??
-    health.error ??
-    summary.error
-
-  // Manual refresh for the whole page; the windows already advance across
-  // midnight on focus, but the numbers within a day are only as fresh as the
-  // last fetch, so give the operator a way to pull the latest.
   const refresh = () => {
-    refreshSetup?.()
-    void today.refetch()
-    void period.refetch()
-    void previous.refetch()
-    void health.refetch()
-    void summary.refetch()
-    void recent.refetch()
+    refreshSetup()
+    data.refresh()
   }
-  const isRefreshing =
-    setupFetching ||
-    today.isFetching ||
-    period.isFetching ||
-    previous.isFetching ||
-    health.isFetching ||
-    summary.isFetching ||
-    recent.isFetching
 
   return (
     <div className="flex flex-col">
-      <OverviewHeader
-        refresh={refresh}
-        isRefreshing={isRefreshing}
-        updatedAt={period.dataUpdatedAt}
+      <PageIntro title="Overview">
+        Spend, limits and failures at a glance. Subscription usage is tracked
+        but doesn&rsquo;t count toward limits.
+      </PageIntro>
+
+      {setup}
+
+      <ErrorBanner error={setupError ?? data.error} />
+
+      <OverviewAttention
+        items={attention}
+        isAlert={(overview.data?.attention ?? []).some(
+          (item) => item.severity === "alert",
+        )}
+        isBusy={data.isStale}
       />
 
-      {isEmpty ? <GetStartedStrip /> : null}
-
-      {/* The step after that one: a provider exists, so the guide can hand out a
-          key and watch for the first request. It decides for itself whether to
-          render, including holding back while there is no provider, which is
-          when the strip above is the right guide instead. */}
-      <SetupGuide canServeRequests={hasProviders} />
-
-      <ErrorBanner error={loadError} />
-
-      <AttentionStrip
-        providerHealth={providerHealth}
-        healthy={health.data?.healthy ?? 0}
-        degraded={health.data?.degraded ?? 0}
-        total={health.data?.total ?? 0}
-        budget={budget}
-        errStatus={err.status}
-        errRate={err.rate}
-        // The strip evaluates health, budgets, and error rate only after all
-        // three load successfully, avoiding transient or false alerts.
-        isReady={health.isSuccess && summary.isSuccess && period.isSuccess}
-        hasFailed={health.isError || summary.isError || period.isError}
+      <OverviewScopeBar
+        scopes={data.scopes}
+        scope={data.requested}
+        onScope={(next) =>
+          url.patch({ scope: next === data.scopes[0] ? "" : next })
+        }
+        months={months}
+        month={data.requestedMonth}
+        shownMonth={month}
+        days={
+          overview.data
+            ? {
+                elapsed: overview.data.month.elapsed_days,
+                length: overview.data.month.days,
+              }
+            : { elapsed: month.elapsed, length: month.length }
+        }
+        onMonth={(key) =>
+          url.patch({ month: key === months[0].key ? "" : key })
+        }
+        description={description}
+        onRefresh={refresh}
+        isFetching={data.isFetching || setupFetching}
+        updatedAt={data.updatedAt}
       />
 
-      <KpiStrip isEmpty={isEmpty}>
-        <UsageKpiCells
-          today={today}
-          period={period}
-          previous={previous}
-          isEmpty={isEmpty}
-        />
-        <KpiCell
-          label="Budget health"
-          value={
-            summary.data?.budgets && budget.worst
-              ? formatPct(budget.worst.pct)
-              : "—"
-          }
-          severity={
-            summary.data?.budgets && budget.worst && budget.status !== "neutral"
-              ? { status: budget.status, word: BUDGET_WORDS[budget.status] }
-              : undefined
-          }
-          // The defect this rule was written for: without it, a deployment with
-          // no budgets showed a bare em dash on the populated page and only
-          // explained itself in the empty state.
-          subline={
-            summary.data?.budgets && budget.worst
-              ? undefined
-              : isEmpty
-                ? "NO BUDGETS SET"
-                : summary.data?.budgets
-                  ? "no budgets set"
-                  : "no data"
-          }
-          // `SpendMeter`, not the plain accent `Meter`: a one-color bar would
-          // draw a budget 37% past its limit and one comfortably inside it the
-          // same way, leaving the strip to name the state in words alone. Same
-          // component as the Budgets table's cell, so the two cannot say
-          // different things about the same budget.
-          graphic={
-            !isEmpty && summary.data?.budgets && budget.worst ? (
-              <SpendMeter
-                spent={budget.worst.spent}
-                allocated={budget.worst.allocated}
-                ariaLabel={`Worst budget usage: ${budget.worst.name}`}
-              />
-            ) : undefined
-          }
-        />
-      </KpiStrip>
-
-      {/* Subordinate to the strip above it, which is the point: the numbers are
-          the answer and the shape of the month is the context. Absent entirely
-          in the empty state, where there is no shape to show. */}
-      {isEmpty ? null : (
-        <SpendChart series={periodSeries} isReady={period.isSuccess} />
-      )}
-
-      <ActivitySplit
-        recent={recent}
-        activeKeys={summary.data ? activeKeys : null}
-        activeMembers={summary.data ? activeMembers : null}
-        // An operator reaches every one of these; the rail on the tenant page
-        // drops the two the organization rail withholds from a member.
-        links={RAIL_LINKS}
-      />
-    </div>
-  )
-}
-
-/**
- * The page title, its window caption and its Refresh control.
- *
- * `children` is the standfirst, which is the one part of the header that
- * differs between the two pages: an operator is told about the gateway, a
- * tenant about their organization.
- */
-function OverviewHeader({
-  refresh,
-  isRefreshing,
-  updatedAt,
-  children = "At-a-glance spend, traffic, and health across the gateway.",
-}: {
-  refresh: () => void
-  isRefreshing: boolean
-  updatedAt: number
-  children?: ReactNode
-}) {
-  return (
-    <PageIntro
-      title="Overview"
-      action={
-        <div className="flex items-center gap-3">
-          <span className="text-overline">Last 30 days</span>
-          <RefreshButton
-            onRefresh={refresh}
-            isFetching={isRefreshing}
-            updatedAt={updatedAt}
-          />
-        </div>
-      }
-    >
-      {children}
-    </PageIntro>
-  )
-}
-
-// Where "add a provider credential" lives on this deployment. Standalone serves
-// both provider pages and this prefers the deployment's own, which is not the
-// obvious answer once there are two. It is the right one because of who reaches
-// this button: `OverviewIndex` hands a caller who does not operate the
-// deployment to `OrganizationOverview`, which draws no getting-started strip, so
-// the only person who can press this is the operator, and `/providers` is where
-// a fresh gateway is set up and carries the first-run panel that continues the
-// flow. Gating on the caller here too would restate a rule already guaranteed
-// one level up. Hosted and a control plane report no `providers` surface, so
-// naming it unconditionally would point an operator at the shell's "not
-// available here" panel.
-//
-// Only correct for *adding* one, which is why provider health does not use it:
-// `/providers/health` reports on `config.providers`, the process-global
-// table, so on a hosted deployment an unreachable instance is not a row the
-// organization page could show. `AttentionStrip` drops the link there rather
-// than sending somebody to a page the instance is not on.
-function useAddProviderRoute(): "/providers" | "/organization/provider-keys" {
-  const serves = useSurfaces()
-  return serves("providers") ? "/providers" : "/organization/provider-keys"
-}
-
-function GetStartedStrip() {
-  const navigate = useNavigate()
-  const addProviderRoute = useAddProviderRoute()
-
-  return (
-    <Section
-      // Its top rule only, for the reason `AttentionStrip` gives below: whatever
-      // follows this band in the empty state (the attention strip, or the KPI
-      // strip under it) draws the seam from its own side.
-      className="border-t border-border py-5"
-      contentClassName="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
-    >
-      <div className="flex items-start gap-3">
-        <Dot className="mt-2.5 bg-accent" />
-        <div>
-          <h2 className="text-display-sub">Get started with Otari</h2>
-          <p className="mt-1 text-sm text-muted">
-            Add a provider to begin serving models. Once it is configured, this
-            page will show your gateway&rsquo;s traffic, spend, and health.
-          </p>
-        </div>
-      </div>
-      <Button
-        variant="primary"
-        className="shrink-0"
-        onPress={() => navigate({ to: addProviderRoute })}
+      <div
+        aria-busy={data.isStale || undefined}
+        className={`-mx-4 transition-opacity md:-mx-6 ${busy}`}
       >
-        Add your first provider
-      </Button>
-    </Section>
-  )
-}
-
-// A neutral, hue-free line for a failed status source. Its details are also
-// surfaced in the ErrorBanner, but this preserves context at the status area.
-function NeutralStrip({ text }: { text: string }) {
-  return (
-    <Section
-      role="status"
-      className="border-t border-border py-3"
-      contentClassName="text-sm text-muted"
-    >
-      {text}
-    </Section>
-  )
-}
-
-function AttentionStrip({
-  providerHealth,
-  healthy,
-  degraded,
-  total,
-  budget,
-  errStatus,
-  errRate,
-  isReady,
-  hasFailed,
-}: {
-  providerHealth: "ok" | "warn" | "alert" | "neutral"
-  healthy: number
-  degraded: number
-  total: number
-  budget: BudgetHealth
-  errStatus: "ok" | "warn" | "alert" | "neutral"
-  errRate: number | null
-  isReady: boolean
-  hasFailed: boolean
-}) {
-  // Provider health is about `config.providers`, which a hosted deployment
-  // serves no page for, so those two entries state the problem without offering
-  // a destination there. Naming one would be worse than naming none: both
-  // candidates are wrong, `/providers` because the shell answers it with "not
-  // available here" and the organization page because the instance is not on it.
-  const providerProblemsAreReachable = useSurfaces()("providers")
-  // A failed source deserves a visible status message; while loading, wait for
-  // actionable information instead of reserving space for a transient banner.
-  if (hasFailed) {
-    return <NeutralStrip text="Some status data could not be loaded." />
-  }
-  if (!isReady) {
-    return null
-  }
-
-  const problems: {
-    text: string
-    // Absent where this deployment hosts no page for the problem; the entry
-    // renders as plain text rather than as a link nobody can follow.
-    to?: LinkProps["to"]
-    search?: LinkProps["search"]
-  }[] = []
-  if ((providerHealth === "warn" || providerHealth === "alert") && total > 0) {
-    // A degraded provider answers no model listing but is not down, so it is
-    // reported separately rather than folded into "unreachable" (issue #447).
-    const down = total - healthy - degraded
-    if (down > 0) {
-      problems.push({
-        text: `${down} provider${down === 1 ? "" : "s"} unreachable`,
-        to: providerProblemsAreReachable ? "/providers" : undefined,
-      })
-    }
-    if (degraded > 0) {
-      problems.push({
-        text: `${degraded} provider${degraded === 1 ? "" : "s"} without model discovery`,
-        to: providerProblemsAreReachable ? "/providers" : undefined,
-      })
-    }
-  }
-  if (budget.overCount > 0) {
-    problems.push({
-      text: `${budget.overCount} budget${budget.overCount === 1 ? "" : "s"} over limit`,
-      to: "/budgets",
-    })
-  } else if (budget.nearCount > 0) {
-    problems.push({
-      text: `${budget.nearCount} budget${budget.nearCount === 1 ? "" : "s"} near limit`,
-      to: "/budgets",
-    })
-  }
-  if (errStatus === "alert" && errRate !== null) {
-    problems.push({
-      text: `error rate ${formatPct(errRate)}`,
-      to: "/activity",
-      search: { status: "error" },
-    })
-  }
-
-  if (problems.length === 0) {
-    return null
-  }
-
-  // No fill and no radius any more: the strip is a band of the page under a
-  // rule, and the square danger dot is what carries the urgency the tinted
-  // attention fill used to.
-  //
-  // Its top rule only. The band below it declares its own top rule, and two
-  // rules meeting on one line paint 1px twice: measured on this page, that seam
-  // came out two rows of pixels where every other rule was one, which is what
-  // read as a heavier rule. The seam belongs to the band below, which always
-  // renders; this band does not always.
-  return (
-    <Section
-      role="alert"
-      className="border-t border-border py-3"
-      contentClassName="flex flex-col gap-2 text-sm sm:flex-row sm:flex-wrap sm:items-center"
-    >
-      <span className="flex items-center gap-2 font-semibold text-foreground">
-        <Dot className="bg-danger" />
-        Needs attention
-      </span>
-      {problems.map((p, i) => (
-        <span key={p.text} className="flex items-center gap-2 text-muted">
-          {i > 0 ? (
-            <span aria-hidden className="text-subtle">
-              ·
-            </span>
-          ) : null}
-          {p.to ? (
-            <Link
-              to={p.to}
-              search={p.search}
-              // Thicken the underline on hover rather than lightening the text:
-              // the color here is already the one tuned to clear AA.
-              className="underline underline-offset-2 hover:decoration-2"
-            >
-              {p.text}
-            </Link>
-          ) : (
-            <span>{p.text}</span>
-          )}
-        </span>
-      ))}
-    </Section>
-  )
-}
-
-/**
- * The month's shape, under the numbers that answer the question. Bars rather
- * than an area, square-topped, on a baseline rule.
- *
- * Subordinate to the strip above it, and subordinate means a shorter plot and
- * fewer x labels. It does **not** mean fewer axes: a bar chart with no y-axis
- * cannot be read quantitatively, and a chart that cannot be read is decoration
- * rather than a supporting detail. The y-axis was missing here and this is the
- * fix; five steps in a 44px lane, nine x labels at every fourth day.
- */
-function SpendChart({
-  series,
-  isReady,
-}: {
-  series: { bucket_start: string; cost: number }[]
-  isReady: boolean
-}) {
-  const [hovered, setHovered] = useState<number>()
-  if (!isReady || series.length < 2) {
-    return null
-  }
-  const peak = Math.max(...series.map((point) => point.cost), 0)
-  const hoveredPoint = hovered === undefined ? undefined : series[hovered]
-  // A rounded ceiling rather than the peak itself, so the top label is a number
-  // somebody would say out loud and the steps between are even.
-  const top = niceCeiling(peak)
-  // Top-down, which is the order they are drawn in.
-  const steps = [1, 0.75, 0.5, 0.25, 0].map((fraction) => top * fraction)
-  return (
-    <Section className="border-b border-border py-5" contentClassName="">
-      <div className="flex items-baseline justify-between">
-        <h2 className="text-title">Spend, last 30 days</h2>
-        <Link
-          to="/usage"
-          className="text-sm text-muted underline underline-offset-2 hover:text-foreground"
-        >
-          View usage →
-        </Link>
+        <OverviewTiles
+          totals={totals}
+          series={series}
+          previousCost={data.previous.data?.totals.cost}
+          comparison={comparisonLabel(data.before)}
+          todayCost={month.isCurrent ? costOn(series, data.now) : undefined}
+          budget={budget}
+          failuresSearch={data.failuresSearch}
+        />
       </div>
-      <div className="mt-4 flex">
-        {/* The lane is fixed so the plot's left edge does not move as the
-            numbers change width. */}
-        <div
-          aria-hidden
-          className="flex h-[180px] w-11 shrink-0 flex-col justify-between pr-2 text-right text-mono-micro text-subtle"
-        >
-          {steps.map((value) => (
-            <span key={value} className="leading-none">
-              {formatAxisUsd(value)}
-            </span>
-          ))}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div
-            role="img"
-            aria-label={`Daily spend over the last 30 days, peaking at ${formatUsd(peak)}`}
-            className="relative flex h-[180px] items-end gap-[3px] border-b border-border"
-            onPointerLeave={() => setHovered(undefined)}
+
+      <div
+        aria-busy={data.isStale || undefined}
+        className={`-mx-4 grid transition-opacity md:-mx-6 lg:grid-cols-[minmax(0,1fr)_23.75rem] ${busy}`}
+      >
+        <div className="min-w-0 border-border lg:border-r">
+          <section
+            aria-label={`Billed spend, ${monthName}`}
+            className="border-b border-border px-4 py-5 md:px-6"
           >
-            {series.map((point, i) => (
-              // The hit area is the whole column, not the drawn bar: a day with
-              // almost no spend is two pixels tall, and a tooltip you can only
-              // reach by hitting two pixels is one nobody reaches.
-              <button
-                type="button"
-                key={point.bucket_start}
-                aria-label={`${shortDate(point.bucket_start)}: ${formatUsd(point.cost)}`}
-                className="group flex min-w-px flex-1 items-end self-stretch"
-                onPointerEnter={() => setHovered(i)}
-                onFocus={() => setHovered(i)}
-                onBlur={() => setHovered(undefined)}
-              >
-                <span
-                  className="w-full bg-accent group-hover:bg-accent-hover"
-                  style={{
-                    height:
-                      top > 0
-                        ? `${Math.max(1, (point.cost / top) * 100)}%`
-                        : "1px",
-                  }}
-                />
-              </button>
-            ))}
-            {hoveredPoint ? (
-              <ChartHoverCard
-                date={shortDate(hoveredPoint.bucket_start)}
-                value={formatUsd(hoveredPoint.cost)}
-                atPercent={((hovered as number) + 0.5) / series.length}
-                barPercent={top > 0 ? hoveredPoint.cost / top : 0}
-              />
-            ) : null}
-          </div>
-          {/* Every fourth day, which lands nine labels across a thirty-day
-              window: enough to date a bar, few enough not to become a second
-              row of text under a chart that is not the headline. A phone's
-              day column is about 10px against a 40px label, so below `md`
-              every eighth: every fourth ran the labels into each other and
-              pushed the last one past the plot. The labels a phone skips are
-              not rendered there rather than hidden, because a hidden label
-              still overflows: the last one spilled past the page and let the
-              whole Overview pan sideways. */}
-          <div className="mt-1.5 flex text-mono-micro text-subtle">
-            {series.map((point, i) => (
-              <span
-                key={point.bucket_start}
-                className="min-w-px flex-1 text-center whitespace-nowrap"
-              >
-                {i % 8 === 0 ? (
-                  shortDate(point.bucket_start)
-                ) : i % 4 === 0 ? (
+            <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+              <h2 className="text-title">
+                {ownOnly
+                  ? `Your billed spend, ${monthName}`
+                  : showsBudget
+                    ? `Billed spend vs budget, ${monthName}`
+                    : `Billed spend, ${monthName}`}
+              </h2>
+              <span className="flex items-center gap-3 text-caption">
+                {workspaceTotals ? (
                   <>
-                    <span className="hidden md:inline">
-                      {shortDate(point.bucket_start)}
-                    </span>
-                    <span className="md:hidden">{"\u00a0"}</span>
+                    <LegendSwatch className="bg-accent">Yours</LegendSwatch>
+                    <LegendSwatch className="bg-chart-cat-other">
+                      Rest of workspace
+                    </LegendSwatch>
                   </>
                 ) : (
-                  "\u00a0"
+                  <LegendSwatch className="bg-accent">
+                    {ownOnly ? "Yours" : "So far"}
+                  </LegendSwatch>
                 )}
+                {month.isCurrent && !ownOnly ? (
+                  <LegendSwatch className="otari-hatch-swatch">
+                    Projected
+                  </LegendSwatch>
+                ) : null}
               </span>
-            ))}
-          </div>
+              <Link
+                to="/usage"
+                className="ml-auto text-sm whitespace-nowrap text-link underline-offset-2 hover:underline focus-visible:otari-focus-ring"
+              >
+                Daily spend in Usage →
+              </Link>
+            </div>
+            {summary.isSuccess &&
+            (!data.workspace || data.workspace.isSuccess) ? (
+              <BudgetChart
+                key={`${month.key}-${scope}`}
+                month={month}
+                totals={chartTotals}
+                mine={workspaceTotals ? ownTotals : undefined}
+                cap={chartCap}
+                marksCrossing={marksCrossing}
+                ownOnly={ownOnly}
+              />
+            ) : (
+              <div className="h-51" aria-hidden />
+            )}
+            <p className="mt-2.5 text-caption">
+              {ownOnly && cap !== undefined
+                ? "Members don't see workspace totals, so there's no budget line: your spend alone can't show how close the workspace is. "
+                : showsBudget && !month.isCurrent
+                  ? "Past budgets aren't stored, so the line is today's budget. "
+                  : ""}
+              Running total of billed spend. Subscription usage isn&rsquo;t
+              included because it doesn&rsquo;t count toward{" "}
+              {cap !== undefined ? "the budget" : "limits"}.
+              {month.isCurrent && !ownOnly
+                ? " Projection uses this month's daily average."
+                : ""}
+            </p>
+          </section>
+          <RecentFailures
+            month={month}
+            now={data.now}
+            entries={data.failures.data ?? []}
+            count={totals?.error_count}
+            isLoading={!data.isReady || data.failures.isLoading}
+            error={data.failures.error}
+            failuresSearch={data.failuresSearch}
+          />
         </div>
-      </div>
-      <p className="mt-2 text-xs text-muted">
-        Daily totals for the selected workspace. Unpriced requests are recorded
-        at zero.
-      </p>
-    </Section>
-  )
-}
-
-/**
- * The chart's hover card: the same small divided surface the Usage chart's
- * tooltip is, on the floating rule (surface fill, control edge, square, no
- * shadow). A mono date over a rule, then the value.
- *
- * Anchored to the top of the bar under the pointer, horizontally and
- * vertically. `bottom-full` would put it above the whole plot, a full
- * plot-height away from a bar near the baseline, with the card saying one thing
- * and the pointer somewhere else. `bottom` is the bar's own height as a share
- * of the plot, so the card rides up and down with what it is describing, which
- * is what the Usage chart's tooltip does by following the pointer.
- *
- * Clamped at both ends. Horizontally by `translate`, so a card at either edge
- * stays inside the plot; vertically at 72%, so a bar near the top does not push
- * the card out through the plot's ceiling.
- */
-function ChartHoverCard({
-  date,
-  value,
-  atPercent,
-  barPercent,
-}: {
-  date: string
-  value: string
-  atPercent: number
-  /** The hovered bar's height as a share of the plot, 0 to 1. */
-  barPercent: number
-}) {
-  return (
-    <span
-      aria-hidden
-      className="pointer-events-none absolute z-10 mb-2 min-w-[7.5rem] border border-control-border bg-surface text-xs"
-      style={{
-        left: `${atPercent * 100}%`,
-        bottom: `${Math.min(72, Math.max(0, barPercent * 100))}%`,
-        transform: `translateX(-${Math.min(90, Math.max(10, atPercent * 100))}%)`,
-      }}
-    >
-      <span className="block border-b border-border px-2.5 py-1.5 text-mono-micro text-subtle">
-        {date}
-      </span>
-      <span className="flex items-center gap-2 px-2.5 py-1.5">
-        <Dot className="bg-accent" />
-        <span className="text-muted">Spend</span>
-        <span className="ml-auto text-mono-caption text-foreground tabular-nums">
-          {value}
-        </span>
-      </span>
-    </span>
-  )
-}
-
-/**
- * The next 1, 2 or 5 times a power of ten at or above a value, so an axis tops
- * out at a number a reader would say rather than at the tallest bar.
- */
-function niceCeiling(value: number): number {
-  if (!(value > 0)) return 1
-  const magnitude = 10 ** Math.floor(Math.log10(value))
-  const step = [1, 2, 5, 10].find((candidate) => value <= candidate * magnitude)
-  return (step ?? 10) * magnitude
-}
-
-/** Axis money: whole dollars once the scale is past them, cents below. */
-function formatAxisUsd(value: number): string {
-  return value >= 10 || value === 0
-    ? `$${Math.round(value)}`
-    : `$${value.toFixed(2)}`
-}
-
-function shortDate(bucket: string | undefined): string {
-  if (!bucket) return ""
-  const d = new Date(bucket)
-  return Number.isNaN(d.getTime())
-    ? ""
-    : d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
-}
-
-// "absorbed" is kept verbatim rather than folded into "ok": it is an attempt a
-// routing policy recovered from, so calling it "ok" would present a failed attempt
-// as a served request, and this preview is unfiltered so those rows do appear here.
-// It is still not an error, which is why it does not read as one.
-function statusWord(status: string): string {
-  if (status === "error") return "error"
-  return status === "absorbed" ? "absorbed" : "ok"
-}
-
-/**
- * Status as a family on a square dot plus a severity in text, never as a fill.
- * The dot says which family (served, failed, recovered) and the word says what
- * happened, so neither hue alone nor shape alone has to carry it.
- */
-function StatusMark({ status }: { status: string }) {
-  const word = statusWord(status)
-  const dot =
-    word === "error"
-      ? "bg-danger"
-      : word === "absorbed"
-        ? "bg-text-subtle"
-        : "bg-success"
-  const text = word === "error" ? "text-danger" : "text-muted"
-  return (
-    <span className={`flex items-center gap-2 text-mono-caption ${text}`}>
-      <Dot className={dot} />
-      {word.toUpperCase()}
-    </span>
-  )
-}
-
-const PHONE_HIDDEN = new Set(["time", "key", "tokens"])
-
-// Newest few requests, as an at-a-glance preview. Rows are read-only; a single
-// "View all" link opens the full Activity log. Cost and tokens are nullable per
-// row, and a failed request has neither, which reads as an em dash rather than
-// as a zero it did not spend.
-function RecentActivity({
-  entries,
-  loading,
-  error,
-}: {
-  entries: UsageEntry[]
-  loading: boolean
-  error: unknown
-}) {
-  const isPhone = useIsPhone()
-  const allColumns: DataTableColumn<UsageEntry>[] = [
-    {
-      id: "time",
-      header: "Time",
-      cell: (entry) => (
-        <span
-          className="text-mono-caption text-muted"
-          title={new Date(entry.timestamp).toLocaleString()}
-        >
-          {formatRelative(entry.timestamp)}
-        </span>
-      ),
-    },
-    {
-      id: "model",
-      header: "Model",
-      isRowHeader: true,
-      cell: (entry) =>
-        isPhone ? (
-          <span className="flex min-w-0 flex-col">
-            <span className="text-mono-caption break-all text-foreground">
-              {entry.model}
-            </span>
-            <span className="text-mono-micro text-subtle">
-              {formatRelative(entry.timestamp)}
-            </span>
-          </span>
-        ) : (
-          <span className="text-mono-caption text-foreground">
-            {entry.model}
-          </span>
-        ),
-    },
-    {
-      id: "key",
-      header: "Key",
-      cell: (entry) => (
-        <span className="text-mono-caption text-muted">
-          {entry.api_key_name ?? "—"}
-        </span>
-      ),
-    },
-    {
-      id: "tokens",
-      header: "Tokens",
-      align: "end",
-      cell: (entry) => (
-        <span className="text-mono-caption tabular-nums">
-          {entry.total_tokens === null ? "—" : formatNumber(entry.total_tokens)}
-        </span>
-      ),
-    },
-    {
-      id: "cost",
-      header: "Cost",
-      align: "end",
-      cell: (entry) => (
-        <span className="text-mono-caption tabular-nums">
-          {entry.cost === null ? "—" : formatUsd(entry.cost)}
-        </span>
-      ),
-    },
-    {
-      id: "status",
-      header: "Status",
-      cell: (entry) => <StatusMark status={entry.status} />,
-    },
-  ]
-  // Six lanes need about 830px, so a phone keeps the three that answer "what
-  // ran, what did it cost, did it work" and moves the time under the model.
-  // The key and the token count are a tap away in Activity.
-  const columns = isPhone
-    ? allColumns.filter((column) => !PHONE_HIDDEN.has(column.id))
-    : allColumns
-
-  return (
-    <section className="flex flex-col pt-6 lg:pr-6">
-      <div className="flex items-baseline justify-between pb-3">
-        <h2 className="text-title">Recent activity</h2>
-        <Link
-          to="/activity"
-          className="text-sm text-muted underline underline-offset-2 hover:text-foreground"
-        >
-          View all →
-        </Link>
-      </div>
-      <ErrorBanner error={error} />
-      {/* The lane widths and the row pitch are in globals.css, keyed on the
-          column ids below: they have to reach `.table__column`, which is
-          HeroUI's DOM and not addressable from here. */}
-      <div className="otari-overview-activity">
-        <DataTable
-          ariaLabel="Recent activity"
-          columns={columns}
-          rows={entries}
-          getRowKey={(entry) => entry.id}
-          isLoading={loading}
-          emptyContent="No requests yet. Once the gateway serves traffic, it appears here."
-        />
-      </div>
-    </section>
-  )
-}
-
-/**
- * The page's lower half: the activity preview against the workspace rail.
- *
- * One component rather than the same wrappers on both overviews, because the
- * rail's fixed lane and the rule between the two are layout they share.
- */
-function ActivitySplit({
-  recent,
-  activeKeys,
-  activeMembers,
-  links,
-}: {
-  recent: ReturnType<typeof useUsageLogs>
-  activeKeys: number | null
-  activeMembers: number | null
-  links: readonly RailDestination[]
-}) {
-  return (
-    <div className="flex flex-col lg:flex-row lg:items-stretch">
-      <div className="min-w-0 flex-1">
-        <RecentActivity
-          entries={recent.data ?? []}
-          loading={recent.isLoading}
-          error={recent.error}
-        />
-      </div>
-      <div className="border-border lg:w-[18.75rem] lg:shrink-0 lg:border-l">
-        <WorkspaceRail
-          activeKeys={activeKeys}
-          activeMembers={activeMembers}
-          links={links}
-        />
+        <aside className="flex min-w-0 flex-col border-t border-border px-4 py-5 md:px-6 lg:border-t-0">
+          {isOperator ? (
+            <OperatorProviders
+              reportedDown={
+                overview.isPlaceholderData
+                  ? undefined
+                  : overview.data?.attention
+                      .filter((item) => item.kind === "provider_unreachable")
+                      .map((item) => item.subject_id ?? "")
+              }
+            />
+          ) : null}
+          <LimitsPanel
+            scope={scope}
+            limits={limits}
+            isLoading={overview.isLoading}
+            isError={overview.isError && !overview.data}
+            inMonth={inMonth}
+            isPast={!month.isCurrent}
+            now={now}
+            workspaceId={viewer.workspaceId || undefined}
+          />
+        </aside>
       </div>
     </div>
   )
 }
 
-interface RailDestination {
-  to: LinkProps["to"]
-  label: string
-  /** Reached through the organization rail, which opens only to its managers. */
-  organization?: true
-}
-
-const RAIL_LINKS: readonly RailDestination[] = [
-  { to: "/keys", label: "API keys" },
-  { to: "/organization/members", label: "Members", organization: true },
-  { to: "/budgets", label: "Budgets", organization: true },
-  { to: "/activity", label: "Activity" },
-]
-
 /**
- * Where a caller may actually go from here.
- *
- * Members and Budgets sit behind the organization rail, which `AppShell` opens
- * only to a caller who manages the organization, and both destinations refuse a
- * member on the server too. Offering them anyway would send that member to a
- * page of refusals from the one page they land on without choosing to.
+ * Provider health, read only where the reader operates the deployment. The
+ * attention list reads the same check from the gateway's cache, which a fresh
+ * gateway fills only once this read runs, so a disagreement asks for the
+ * overview again.
  */
-function railLinks(managesOrganization: boolean): readonly RailDestination[] {
-  return managesOrganization
-    ? RAIL_LINKS
-    : RAIL_LINKS.filter((link) => !link.organization)
-}
-
-/**
- * The workspace's own numbers, beside the activity table rather than in it. A
- * rail and not two more KPI cells: these count things that belong to one
- * workspace, and the strip above counts what was served.
- */
-function WorkspaceRail({
-  activeKeys,
-  activeMembers,
-  links,
+function OperatorProviders({
+  reportedDown,
 }: {
-  activeKeys: number | null
-  activeMembers: number | null
-  links: readonly RailDestination[]
+  /** The providers the overview's attention list names as unreachable. */
+  reportedDown: string[] | undefined
 }) {
+  const health = useProviderHealth()
+  const refreshOverview = useRefreshOverview()
+  const down = health.data?.providers
+    .filter((provider) => !provider.ok && !provider.discovery_unsupported)
+    .map((provider) => provider.instance)
+    .sort()
+    .join()
+  const reported = reportedDown?.toSorted().join()
+  // Once per check result, so a lasting disagreement cannot loop.
+  const askedFor = useRef<string>(undefined)
+  useEffect(() => {
+    if (down === undefined || reported === undefined || down === reported)
+      return
+    if (askedFor.current === down) return
+    askedFor.current = down
+    void refreshOverview()
+  }, [down, reported, refreshOverview])
   return (
-    <section className="flex flex-col gap-6 pt-6 lg:pl-6">
-      <div>
-        <h2 className="text-title">This workspace</h2>
-        <dl className="mt-3 flex gap-8 lg:flex-col lg:gap-4">
-          <RailStat
-            label="Active keys"
-            value={activeKeys === null ? "—" : formatNumber(activeKeys)}
-          />
-          <RailStat
-            label="Active members"
-            value={activeMembers === null ? "—" : formatNumber(activeMembers)}
-          />
-        </dl>
-      </div>
-      <div>
-        <h2 className="text-overline">Go to</h2>
-        <ul className="mt-1 flex flex-col">
-          {links.map((link) => (
-            <RailLink key={link.label} to={link.to}>
-              {link.label}
-            </RailLink>
-          ))}
-        </ul>
-      </div>
-    </section>
+    <ProvidersPanel
+      providers={health.data?.providers}
+      isError={health.isError}
+    />
   )
 }
 
-function RailStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-overline">{label}</dt>
-      <dd className="text-mono-figure font-normal text-foreground">{value}</dd>
-    </div>
-  )
-}
-
-function RailLink({
-  to,
+function LegendSwatch({
+  className,
   children,
 }: {
-  to: LinkProps["to"]
-  children: ReactNode
+  className: string
+  children: string
 }) {
   return (
-    <li className="border-b border-separator-secondary last:border-b-0">
-      <Link
-        to={to}
-        className="flex items-center justify-between py-2.5 text-sm text-muted hover:text-foreground"
-      >
-        {children}
-        <span aria-hidden>→</span>
-      </Link>
-    </li>
+    <span className="flex items-center gap-1.5 whitespace-nowrap">
+      <span aria-hidden className={`size-2 ${className}`} />
+      {children}
+    </span>
   )
 }
