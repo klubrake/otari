@@ -10961,8 +10961,307 @@
         "title": "OutputShape",
         "type": "string"
       },
+      "OverviewAttentionItemResponse": {
+        "description": "One thing worth acting on now, for the caller's role, with the figures that make it so.\n\nWhich fields are set depends on ``kind``: a limit carries ``used``, ``limit``\nand ``fraction``; ``key_expiring`` and ``budget_pace`` carry ``at`` (the\nexpiry, or the day spend is projected to pass the limit), and\n``provider_unreachable`` the time of the failed check; ``error_rate``\ncarries ``count`` (failures) and ``fraction`` (of requests). Limit and\nexpiry items describe now, whichever month was asked for.",
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "kind": {
+            "enum": [
+              "provider_unreachable",
+              "budget_over",
+              "budget_near",
+              "budget_pace",
+              "key_over_limit",
+              "key_near_limit",
+              "key_expiring",
+              "error_rate"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The limit, in USD.",
+            "title": "Limit"
+          },
+          "severity": {
+            "enum": [
+              "alert",
+              "warn"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The key, workspace or provider instance the item is about.",
+            "title": "Subject Id"
+          },
+          "subject_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Name"
+          },
+          "used": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "USD spent against the limit in its current period.",
+            "title": "Used"
+          }
+        },
+        "required": [
+          "kind",
+          "severity",
+          "subject_id",
+          "subject_name"
+        ],
+        "title": "OverviewAttentionItemResponse",
+        "type": "object"
+      },
+      "OverviewLimitRowResponse": {
+        "description": "One key or workspace in the overview's rail: what it billed this month, and what limits it.",
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_mine": {
+            "description": "A key billed to the caller; false for a workspace.",
+            "title": "Is Mine",
+            "type": "boolean"
+          },
+          "is_subscription": {
+            "description": "Everything this key recorded in the month was imported usage.",
+            "title": "Is Subscription",
+            "type": "boolean"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A key's last use; a workspace's last request in the month asked for. Null when there is none.",
+            "title": "Last Used At"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The USD cap of the key's or workspace's spend ceiling; null when uncapped.",
+            "title": "Limit"
+          },
+          "limit_spent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the ceiling counts now in its current period, holds included, whichever month was asked for; null when uncapped.",
+            "title": "Limit Spent"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "owner_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The key's billed user, as the roster names them; null for a workspace.",
+            "title": "Owner Name"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the ceiling's period resets; null when it never does.",
+            "title": "Period End"
+          },
+          "spent": {
+            "description": "Billed spend in the month, in USD: cost less imported usage.",
+            "title": "Spent",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "owner_name",
+          "is_mine",
+          "spent",
+          "limit",
+          "limit_spent",
+          "period_end",
+          "last_used_at",
+          "expires_at",
+          "is_subscription"
+        ],
+        "title": "OverviewLimitRowResponse",
+        "type": "object"
+      },
+      "OverviewLimitsResponse": {
+        "description": "The rail: the caller's keys, a workspace's keys, or the organization's workspaces.\n\nAt most eight, most billed first.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "keys",
+              "workspaces"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/OverviewLimitRowResponse"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "rows"
+        ],
+        "title": "OverviewLimitsResponse",
+        "type": "object"
+      },
+      "OverviewMonthResponse": {
+        "description": "The UTC calendar month the overview reads.",
+        "properties": {
+          "days": {
+            "title": "Days",
+            "type": "integer"
+          },
+          "elapsed_days": {
+            "description": "Days of the month passed so far, counting today; all of them for a past month.",
+            "title": "Elapsed Days",
+            "type": "integer"
+          },
+          "end": {
+            "description": "The first instant of the next month; exclusive.",
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "elapsed_days",
+          "days"
+        ],
+        "title": "OverviewMonthResponse",
+        "type": "object"
+      },
       "OverviewSummaryResponse": {
-        "description": "What the dashboard overview renders beside its usage chart.\n\n``budgets`` and ``ceilings`` are null where the caller may not see them,\nwhich is not the same as a strip with nothing in it: deployment budgets are\nthe operator's, and spend ceilings are an organization owner's or admin's.",
+        "description": "What the dashboard overview renders beside its usage chart.\n\n``budgets`` and ``ceilings`` are null where the caller may not see them,\nwhich is not the same as a strip with nothing in it: deployment budgets are\nthe operator's, and spend ceilings are an organization owner's or admin's.\n``attention`` and ``limits`` are always present, for the ``scope`` used.",
         "properties": {
           "active_keys": {
             "title": "Active Keys",
@@ -10972,6 +11271,14 @@
             "description": "Active members of the named workspace; 0 when none is named.",
             "title": "Active Members",
             "type": "integer"
+          },
+          "attention": {
+            "description": "Most severe first.",
+            "items": {
+              "$ref": "#/components/schemas/OverviewAttentionItemResponse"
+            },
+            "title": "Attention",
+            "type": "array"
           },
           "budgets": {
             "anyOf": [
@@ -10992,13 +11299,33 @@
                 "type": "null"
               }
             ]
+          },
+          "limits": {
+            "$ref": "#/components/schemas/OverviewLimitsResponse"
+          },
+          "month": {
+            "$ref": "#/components/schemas/OverviewMonthResponse"
+          },
+          "scope": {
+            "description": "The scope read, after falling back to 'you' where the asked one is not allowed.",
+            "enum": [
+              "you",
+              "workspace",
+              "organization"
+            ],
+            "title": "Scope",
+            "type": "string"
           }
         },
         "required": [
           "active_keys",
           "active_members",
           "budgets",
-          "ceilings"
+          "ceilings",
+          "month",
+          "scope",
+          "attention",
+          "limits"
         ],
         "title": "OverviewSummaryResponse",
         "type": "object"
@@ -32741,7 +33068,7 @@
     },
     "/api/v1/overview": {
       "get": {
-        "description": "Summarize what the dashboard overview shows beside its usage chart.\n\nThe counts and the budget judgment in one answer, so the page does not read\nfour collections to compute them. A workspace outside the caller's\norganization is treated as none given rather than refused, because the id\ncomes from a switcher whose contents can go stale.",
+        "description": "Summarize what the dashboard overview shows beside its usage chart.\n\nThe counts, the budget judgment, the needs-attention list and the limits\nrail in one answer, so the page does not read several collections to\ncompute them. A workspace outside the caller's organization is treated as\nnone given rather than refused, because the id comes from a switcher whose\ncontents can go stale. A month after the current one is refused.",
         "operationId": "overview-get_overview",
         "parameters": [
           {
@@ -32761,6 +33088,42 @@
               ],
               "description": "Narrow the counts to one workspace of the caller's organization.",
               "title": "Workspace Id"
+            }
+          },
+          {
+            "description": "The calendar month whose spend and error rate to report, `YYYY-MM` in UTC. Defaults to the current month; a month that has not started is refused. Limit and expiry items, and each row's `limit_spent`, describe now whichever month is asked for.",
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The calendar month whose spend and error rate to report, `YYYY-MM` in UTC. Defaults to the current month; a month that has not started is refused. Limit and expiry items, and each row's `limit_spent`, describe now whichever month is asked for.",
+              "title": "Month"
+            }
+          },
+          {
+            "description": "Whose spend to read: the caller's own, the workspace's, or the organization's. A scope the caller may not read falls back to `you`; `scope` in the answer says which was used.",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "workspace",
+              "description": "Whose spend to read: the caller's own, the workspace's, or the organization's. A scope the caller may not read falls back to `you`; `scope` in the answer says which was used.",
+              "enum": [
+                "you",
+                "workspace",
+                "organization"
+              ],
+              "title": "Scope",
+              "type": "string"
             }
           }
         ],

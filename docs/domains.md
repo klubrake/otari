@@ -241,11 +241,12 @@ Nothing is built yet. Its code goes in the target shape when it is built.
 
 ### overview
 
-The dashboard overview's summary: the counts and the budget health that the
-page shows, in one answer. It is a read model across api-keys, organizations
-and budgets, so it has no tables of its own and writes nothing.
+The dashboard overview's summary: the counts, the budget health, the
+needs-attention list and the limits rail that the page shows for one calendar
+month, in one answer. It is a read model across api-keys, organizations,
+budgets and usage, so it has no tables of its own and writes nothing.
 
-`overview/overview_repository.py` reads the tables of those three domains
+`overview/overview_repository.py` reads the tables of those four domains
 directly, and it takes the session instead of extending `BaseRepository`. The
 target shape has the overview service ask each domain's service for its data.
 

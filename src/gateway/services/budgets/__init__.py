@@ -2,7 +2,7 @@
 
 from gateway.services.budgets._ledger import run_reservation_sweeper
 from gateway.services.budgets._member_policies import WorkspaceBudgetDefaultService
-from gateway.services.budgets._periods import budget_window, period_window
+from gateway.services.budgets._periods import budget_window, effective_period, period_window
 from gateway.services.budgets._reservations import (
     ZERO,
     ReservationHandle,
@@ -30,6 +30,7 @@ __all__ = [
     "applicable_budgets",
     "budget_window",
     "cadence_of",
+    "effective_period",
     "estimate_cost",
     "estimate_tokens",
     "get_budget_state",

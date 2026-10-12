@@ -79,6 +79,15 @@ function overviewSummary(over: Partial<OverviewSummary> = {}): OverviewSummary {
     active_members: 0,
     budgets: null,
     ceilings: null,
+    month: {
+      start: "2026-07-01T00:00:00Z",
+      end: "2026-08-01T00:00:00Z",
+      elapsed_days: 1,
+      days: 31,
+    },
+    scope: "you",
+    attention: [],
+    limits: { kind: "keys", rows: [] },
     ...over,
   }
 }

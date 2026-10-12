@@ -949,7 +949,9 @@ def get_workspace_service(db: Annotated[AsyncSession, Depends(get_db)]) -> Works
 WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
 
 
-def get_overview_service(db: Annotated[AsyncSession, Depends(get_db)]) -> OverviewService:
+def get_overview_service(
+    db: Annotated[AsyncSession, Depends(get_db)], config: Annotated[GatewayConfig, Depends(get_config)]
+) -> OverviewService:
     """Build the dashboard overview's summary service on the request's session.
 
     Assembled here rather than in the route, because a route does not name a
@@ -960,6 +962,7 @@ def get_overview_service(db: Annotated[AsyncSession, Depends(get_db)]) -> Overvi
         OrganizationService(db, membership_listener=None),
         DeploymentUserService(db),
         get_workspace_service(db),
+        config,
     )
 
 
