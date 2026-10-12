@@ -1633,7 +1633,7 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
     },
     "gateway.models.providers.ProviderEndpoint": {
         "repository": "gateway/repositories/providers/provider_endpoint_repository.py",
-        "baseline": (),
+        "baseline": ("gateway/repositories/tenancy/user_merge_repository.py",),
     },
     "gateway.models.rate_limits.StoredRateLimitRule": {
         "repository": "gateway/repositories/rate_limits/rate_limit_rule_repository.py",
@@ -1834,6 +1834,7 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
             "gateway/repositories/budgets/end_user_repository.py",
             "gateway/repositories/inference/idempotency_repository.py",
             "gateway/repositories/overview/overview_repository.py",
+            "gateway/repositories/tenancy/user_merge_repository.py",
             "gateway/repositories/usage/usage_read_repository.py",
             "gateway/services/budgets/_end_users.py",
             "gateway/services/budgets/_ledger.py",

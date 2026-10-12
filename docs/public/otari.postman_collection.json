@@ -11255,7 +11255,7 @@
               },
               "raw": "{\n  \"source_user_id\": \"string\"\n}"
             },
-            "description": "Merge another user in the caller's organization into this one.\n\nMoves the source user's API keys, usage history, telemetry, files, batches,\nbudget resets and reservations, per-user aliases and routing policies, and\nrouting memory onto this user, adds its spend, token and request counters to\nthis user's, and soft-deletes it. This user keeps its budget, model access and\nblocked flag. Refused with 409 when the source is a sign-in account's own\nuser, has a budget reservation in flight, or holds a per-user alias or policy\nwhose name this user already uses in the same workspace.",
+            "description": "Merge another user in the caller's organization into this one.\n\nMoves the source user's API keys, usage history, telemetry, files, batches,\nbudget resets and reservations, per-user aliases, routing policies and\nprovider endpoints, routing memory, and the end users its service keys bill\nonto this user, adds its spend, token and request counters to this user's,\nand soft-deletes it. This user keeps its budget, model access and blocked\nflag. Refused with 409 when the source is a sign-in account's own user, has a\nbudget reservation in flight, holds a per-user alias, policy or provider\nendpoint whose name this user already uses in the same workspace, or bills an\nend user under an id this user's keys also bill.",
             "header": [
               {
                 "key": "Content-Type",

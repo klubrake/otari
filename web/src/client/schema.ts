@@ -5469,12 +5469,14 @@ export interface paths {
          * @description Merge another user in the caller's organization into this one.
          *
          *     Moves the source user's API keys, usage history, telemetry, files, batches,
-         *     budget resets and reservations, per-user aliases and routing policies, and
-         *     routing memory onto this user, adds its spend, token and request counters to
-         *     this user's, and soft-deletes it. This user keeps its budget, model access and
-         *     blocked flag. Refused with 409 when the source is a sign-in account's own
-         *     user, has a budget reservation in flight, or holds a per-user alias or policy
-         *     whose name this user already uses in the same workspace.
+         *     budget resets and reservations, per-user aliases, routing policies and
+         *     provider endpoints, routing memory, and the end users its service keys bill
+         *     onto this user, adds its spend, token and request counters to this user's,
+         *     and soft-deletes it. This user keeps its budget, model access and blocked
+         *     flag. Refused with 409 when the source is a sign-in account's own user, has a
+         *     budget reservation in flight, holds a per-user alias, policy or provider
+         *     endpoint whose name this user already uses in the same workspace, or bills an
+         *     end user under an id this user's keys also bill.
          */
         post: operations["users-merge_user"];
         delete?: never;

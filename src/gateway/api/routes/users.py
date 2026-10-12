@@ -32,6 +32,7 @@ from gateway.services.alias_service import refresh_alias_cache
 from gateway.services.budgets import budget_window
 from gateway.services.model_access import validate_allowed_models
 from gateway.services.policy_store import refresh_policy_cache
+from gateway.services.providers import refresh_provider_endpoint_cache
 from gateway.services.tenancy.user_merge import SameUserMergeError, UserMergeError, merge_users
 
 router = APIRouter(
@@ -466,12 +467,14 @@ async def merge_user(
     """Merge another user in the caller's organization into this one.
 
     Moves the source user's API keys, usage history, telemetry, files, batches,
-    budget resets and reservations, per-user aliases and routing policies, and
-    routing memory onto this user, adds its spend, token and request counters to
-    this user's, and soft-deletes it. This user keeps its budget, model access and
-    blocked flag. Refused with 409 when the source is a sign-in account's own
-    user, has a budget reservation in flight, or holds a per-user alias or policy
-    whose name this user already uses in the same workspace.
+    budget resets and reservations, per-user aliases, routing policies and
+    provider endpoints, routing memory, and the end users its service keys bill
+    onto this user, adds its spend, token and request counters to this user's,
+    and soft-deletes it. This user keeps its budget, model access and blocked
+    flag. Refused with 409 when the source is a sign-in account's own user, has a
+    budget reservation in flight, holds a per-user alias, policy or provider
+    endpoint whose name this user already uses in the same workspace, or bills an
+    end user under an id this user's keys also bill.
     """
     target = await _load_user_in_organization(db, user_id, organization_id)
     source = await _load_user_in_organization(db, request.source_user_id, organization_id)
@@ -486,12 +489,12 @@ async def merge_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Database error",
         ) from None
-    await _refresh_caches_after_merge(db, moved)
+    await _refresh_caches_after_merge(db, uow, moved)
     return MergeUserResponse(user=UserResponse.from_model(target), moved=moved)
 
 
-async def _refresh_caches_after_merge(db: AsyncSession, moved: dict[str, int]) -> None:
-    """Reload the per-user alias and policy caches a merge changed.
+async def _refresh_caches_after_merge(db: AsyncSession, uow: UnitOfWork, moved: dict[str, int]) -> None:
+    """Reload the per-user alias, policy and provider endpoint caches a merge changed.
 
     The merge is committed, so a refresh failure is logged rather than raised;
     other workers converge on their next background refresh.
@@ -501,6 +504,8 @@ async def _refresh_caches_after_merge(db: AsyncSession, moved: dict[str, int]) -
             await refresh_alias_cache(db)
         if moved.get("routing_policies"):
             await refresh_policy_cache(db)
+        if moved.get("provider_endpoints"):
+            await refresh_provider_endpoint_cache(uow)
     except SQLAlchemyError:
         logger.warning("Cache refresh failed after merging users; converges on the next background refresh")
 
