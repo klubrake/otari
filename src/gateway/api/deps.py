@@ -1131,6 +1131,7 @@ WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)
 
 
 def get_overview_service(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     uow: UnitOfWorkDep,
@@ -1150,6 +1151,8 @@ def get_overview_service(
         # pairing is what `routes/workspaces.py` builds.
         WorkspaceService(db, uow=uow, membership_listener=membership_listener, workspace_listener=workspace_listener),
         config,
+        uow,
+        request.app.state.heavy_usage_reads,
     )
 
 
@@ -1196,9 +1199,11 @@ def get_saved_view_service(
 SavedViewServiceDep = Annotated[SavedViewService, Depends(get_saved_view_service)]
 
 
-def get_usage_read_service(uow: Annotated[UnitOfWork, Depends(get_unit_of_work)]) -> UsageReadService:
+def get_usage_read_service(request: Request, uow: Annotated[UnitOfWork, Depends(get_unit_of_work)]) -> UsageReadService:
     """Build the request's usage-log read service on the request's Unit of Work."""
-    return UsageReadService(uow, UsageReadRepository(uow), UsageSummaryRepository(uow))
+    return UsageReadService(
+        uow, UsageReadRepository(uow), UsageSummaryRepository(uow), request.app.state.heavy_usage_reads
+    )
 
 
 UsageReadServiceDep = Annotated[UsageReadService, Depends(get_usage_read_service)]
