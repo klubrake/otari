@@ -624,6 +624,17 @@ class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, ToolSett
             "database memory one page load can take."
         ),
     )
+    usage_rollup_refresh_interval_sec: Annotated[float, Shown(SettingsGroup.SERVER)] = Field(
+        default=30.0,
+        gt=0,
+        description=(
+            "Seconds between rebuilds of the hourly usage rollups the dashboard's usage reads take "
+            "an hour's sums from (PostgreSQL only). An hour written to since its last rebuild is "
+            "read from the usage rows until the next, so this trades the database work of a "
+            "rebuild against how much a read scans. Not 0: the marks a write leaves are removed "
+            "only by a rebuild."
+        ),
+    )
     db_ingest_pool_size: Annotated[int, Shown(SettingsGroup.SERVER)] = Field(
         default=4,
         ge=1,
