@@ -219,6 +219,10 @@ export type BudgetView =
       kind: "budget"
       label: string
       fraction: number
+      /**
+       * What the meter draws: the spend against the cap, or the share against
+       * a cap of one where the dollars are withheld from the reader.
+       */
       used: number
       cap: number
       /** None for a month that has ended: today's budget is no verdict on it. */
@@ -277,7 +281,9 @@ export function budgetView({
   spend:
     | {
         max_budget: number | null
-        spent: number
+        /** Undefined where the workspace keeps its totals from this reader. */
+        spent: number | undefined
+        used_fraction: number | null
         period_start: string | null
         period_end: string | null
       }
@@ -376,6 +382,32 @@ export function budgetView({
   }
 
   const cap = spend.max_budget
+  // The workspace keeps its dollars from this reader: the share used of the
+  // cap, and nothing a member's own spend could be set against.
+  if (spend.spent === undefined) {
+    const hidden = `Workspace total hidden by your admin${yours}`
+    if (!month.isCurrent || spend.used_fraction === null) {
+      return {
+        kind: "unknown",
+        label: "Workspace budget",
+        subline: `${formatUsdLimit(cap)} budget`,
+        line: hidden,
+      }
+    }
+    const fraction = spend.used_fraction
+    const pacePasses = serverPace !== undefined
+    return {
+      kind: "budget",
+      label: "Workspace budget",
+      fraction,
+      used: fraction,
+      cap: 1,
+      severity: budgetState(fraction, { pacePasses }),
+      subline: `used of ${formatUsdLimit(cap)}`,
+      line: hidden,
+      isWarning: pacePasses && fraction < 1,
+    }
+  }
   if (month.isCurrent) {
     // The pace is the settled spend's, as the server projects it; the budget's
     // own figure counts holds still in flight, so it is not a rate.
@@ -470,7 +502,7 @@ export function readBudget({
   spend:
     | Pick<
         WorkspaceSpend,
-        "max_budget" | "spent" | "period_start" | "period_end"
+        "max_budget" | "spent" | "used_fraction" | "period_start" | "period_end"
       >
     | null
     | undefined
@@ -510,12 +542,8 @@ export function readBudget({
     now,
     isManager,
     canSetBudgets,
-    // A null `spent` is a figure this caller may not read: unknown, not zero.
-    // A null `spend` (no budget) stays null, apart from undefined (not read yet).
-    spend:
-      spend?.spent === null
-        ? undefined
-        : spend && { ...spend, spent: spend.spent },
+    // A null `spent` is a figure this caller may not read: withheld, not zero.
+    spend: spend && { ...spend, spent: spend.spent ?? undefined },
     ownBilled: scope === "you" ? billed : undefined,
     workspaceBilled,
     billed,
@@ -696,4 +724,43 @@ export function limitFraction(row: OverviewLimitRow): number {
 /** Whole days until `iso` from `now`, rounded up; 0 or less once it has passed. */
 export function daysUntil(iso: string, now: number): number {
   return Math.ceil((Date.parse(iso) - now) / DAY_MS)
+}
+
+/**
+ * What the chart's caption says before its standing sentence: why there is no
+ * budget line, or that the line is today's budget. Nothing while it is not yet
+ * known whether a member is shown the workspace's totals.
+ */
+export function describeChartCaptionLead({
+  isAwaitingTotals,
+  isOwnOnly,
+  hasBudget,
+  isHiddenFromMember,
+  showsBudget,
+  isCurrentMonth,
+}: {
+  isAwaitingTotals: boolean
+  /** The chart is the reader's own spend alone. */
+  isOwnOnly: boolean
+  /** The workspace has a dollar budget. */
+  hasBudget: boolean
+  /** A member whose workspace keeps its totals from members. */
+  isHiddenFromMember: boolean
+  /** The chart draws the budget line. */
+  showsBudget: boolean
+  isCurrentMonth: boolean
+}): string {
+  if (isAwaitingTotals) return ""
+  if (isOwnOnly && hasBudget) {
+    if (isHiddenFromMember) {
+      return "Workspace totals are hidden by your admin, so there's no budget line: your spend alone can't show how close the workspace is. "
+    }
+    return isCurrentMonth
+      ? "Your spend alone, so there's no budget line: the Workspace budget tile measures the whole workspace against it. "
+      : "Your spend alone, so there's no budget line: workspace spend by month is for managers. "
+  }
+  if (showsBudget && !isCurrentMonth) {
+    return "Past budgets aren't stored, so the line is today's budget. "
+  }
+  return ""
 }

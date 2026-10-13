@@ -22,6 +22,7 @@ export function LimitsPanel({
   isPast,
   now,
   workspaceId,
+  isHidingKeys = false,
 }: {
   scope: UsageScopeKey
   limits: OverviewLimits | undefined
@@ -35,7 +36,24 @@ export function LimitsPanel({
   now: number
   /** The workspace on screen, marked in a list of workspaces. */
   workspaceId: string | undefined
+  /**
+   * A member reading the workspace's totals, whose keys are other people's:
+   * the server lists none, and the panel says where theirs are instead.
+   */
+  isHidingKeys?: boolean
 }) {
+  if (isHidingKeys) {
+    return (
+      <div className="flex min-w-0 flex-col">
+        <h2 className="text-title">Keys</h2>
+        <p className="mt-2 border-t border-border-subtle py-3 text-caption">
+          Other members&rsquo; keys aren&rsquo;t shown to members. Switch to{" "}
+          <strong className="font-semibold text-foreground">You</strong> for
+          your own keys and their limits.
+        </p>
+      </div>
+    )
+  }
   // What the rows are is the answer's own word, so the title cannot name
   // something other than the rows under it.
   const isWorkspaces = limits

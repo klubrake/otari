@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { OverviewSummary } from "@/client"
 import { apiFetch, heavyReadSignal } from "@/shared/api/client"
-import { OVERVIEW } from "@/shared/api/queryKeys"
+import { OVERVIEW, workspaceVisibilityKey } from "@/shared/api/queryKeys"
 import { HEAVY_READ } from "@/shared/api/usage"
 
 export type OverviewScope = OverviewSummary["scope"]
@@ -25,15 +25,26 @@ export function useOverviewSummary({
   month: string
   scope: OverviewScope
 }) {
+  const queryClient = useQueryClient()
   return useQuery({
     queryKey: [OVERVIEW, workspaceId ?? null, month, scope],
     // Its month aggregate waits its turn with the Usage page's reads.
-    queryFn: ({ signal }) => {
+    queryFn: async ({ signal }) => {
       const params = new URLSearchParams({ month, scope })
       if (workspaceId) params.set("workspace_id", workspaceId)
-      return apiFetch<OverviewSummary>(`/overview?${params}`, {
+      const answer = await apiFetch<OverviewSummary>(`/overview?${params}`, {
         signal: heavyReadSignal(signal),
       })
+      // The workspace's visibility rides along, and is the one answer every
+      // page reads it from (`useWorkspaceVisibility`). Only the answer about
+      // the workspace this read named seeds it.
+      if (workspaceId && answer.visibility) {
+        queryClient.setQueryData(
+          workspaceVisibilityKey(workspaceId),
+          answer.visibility,
+        )
+      }
+      return answer
     },
     staleTime: 60_000,
     ...HEAVY_READ,

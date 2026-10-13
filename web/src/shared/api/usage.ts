@@ -40,7 +40,12 @@ import {
   longRequestSignal,
 } from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
-import { USAGE } from "@/shared/api/queryKeys"
+import {
+  OVERVIEW,
+  USAGE,
+  workspaceSpendKey,
+  workspaceVisibilityKey,
+} from "@/shared/api/queryKeys"
 import { isoAgo } from "@/shared/helpers/timeRange"
 
 // ---------- activity / request log ----------
@@ -163,6 +168,92 @@ export function useUsageScope(scope: UsageScope = "caller"): {
  * work back in the same queue, so a failed one waits for the page's refresh.
  */
 export const HEAVY_READ = { retry: false } as const
+
+/**
+ * A usage scope, or a member's ask for a workspace's aggregates
+ * (`workspace_totals=true`), which the organization surface's summary, latency,
+ * series and groups take. The server grants it while the workspace shares its
+ * totals with members, split by model, provider or status code and with no
+ * filter naming a person, key or session; the list and the count have no such
+ * ask, so a member never reads anyone else's rows.
+ */
+export type TotalsScope = UsageScope | "workspace_totals"
+
+function useTotalsScope(scope: TotalsScope) {
+  const queryClient = useQueryClient()
+  const isWorkspaceTotals = scope === "workspace_totals"
+  const resolved = useUsageScope(isWorkspaceTotals ? "organization" : scope)
+  return {
+    ...resolved,
+    // In every key, so a member's own figures and the workspace's never share
+    // a cache entry.
+    keyBase: isWorkspaceTotals
+      ? `${resolved.base}?workspace_totals`
+      : resolved.base,
+    params: (filters: UsageFilters) => {
+      const params = usageParams(filters)
+      if (isWorkspaceTotals) params.set("workspace_totals", "true")
+      return params
+    },
+    /**
+     * Reads `path` under the scope's base. A refused ask for a workspace's
+     * totals says the setting the page was laid out from has moved, so the
+     * workspace's visibility is read again, with the overview that carries it.
+     */
+    read: async <T>(
+      path: string,
+      filters: UsageFilters,
+      signal: AbortSignal,
+    ): Promise<T> => {
+      try {
+        return await apiFetch<T>(`${resolved.base}${path}`, {
+          signal: heavyReadSignal(signal),
+        })
+      } catch (error) {
+        const workspaceId = filters.workspace_id
+        if (
+          isWorkspaceTotals &&
+          workspaceId &&
+          error instanceof ApiError &&
+          error.status === 403
+        ) {
+          // Several reads are refused at once; they share one read again.
+          const once = { cancelRefetch: false }
+          void queryClient.invalidateQueries(
+            { queryKey: workspaceVisibilityKey(workspaceId) },
+            once,
+          )
+          void queryClient.invalidateQueries(
+            { queryKey: [OVERVIEW, workspaceId] },
+            once,
+          )
+          // And the budget, whose dollars the same setting withholds.
+          void queryClient.invalidateQueries(
+            { queryKey: workspaceSpendKey(workspaceId) },
+            once,
+          )
+        }
+        throw error
+      }
+    },
+  }
+}
+
+/**
+ * A usage read's error as a page reports it. A refused ask for a workspace's
+ * totals is left out: it is the setting having moved, not a failure, and the
+ * re-read it sets off drops the page to the member's own view.
+ */
+export function pickReportedError(
+  error: Error | null,
+  usageScope: TotalsScope,
+): Error | null {
+  const isRefusedTotals =
+    usageScope === "workspace_totals" &&
+    error instanceof ApiError &&
+    error.status === 403
+  return isRefusedTotals ? null : error
+}
 
 export interface UsageSort {
   key: UsageSortKey
@@ -587,20 +678,20 @@ export function useUsageSummary(
   bucket: UsageBucket,
   dimensions?: SummaryDimension[],
   enabled = true,
-  usageScope: UsageScope = "caller",
+  usageScope: TotalsScope = "caller",
 ) {
-  const scope = useUsageScope(usageScope)
+  const scope = useTotalsScope(usageScope)
   return useQuery({
     queryKey: [
       USAGE,
       "summary",
-      scope.base,
+      scope.keyBase,
       filters,
       bucket,
       dimensions ?? "all",
     ],
     queryFn: ({ signal }) => {
-      const params = usageParams(filters)
+      const params = scope.params(filters)
       params.set("bucket", bucket)
       // A repeated query param has no empty-list form, so an empty selection goes
       // on the wire as the server's `none` sentinel.
@@ -610,9 +701,10 @@ export function useUsageSummary(
           params.append("dimensions", dimension)
         })
       }
-      return apiFetch<UsageSummary>(
-        `${scope.base}/summary?${params.toString()}`,
-        { signal: heavyReadSignal(signal) },
+      return scope.read<UsageSummary>(
+        `/summary?${params.toString()}`,
+        filters,
+        signal,
       )
     },
     enabled: enabled && scope.isReady,
@@ -749,15 +841,18 @@ export function useUsageBreakdown(
   bucket: UsageBucket,
   dimension: BreakdownDimension,
   rank: { by: UsageBreakdownRankBy; order: UsageRankOrder },
-  { enabled = true, usageScope = "caller" as UsageScope } = {},
+  {
+    enabled = true,
+    usageScope = "caller",
+  }: { enabled?: boolean; usageScope?: TotalsScope } = {},
 ) {
-  const scope = useUsageScope(usageScope)
+  const scope = useTotalsScope(usageScope)
   return useQuery({
     queryKey: [
       USAGE,
       "summary",
       "breakdown",
-      scope.base,
+      scope.keyBase,
       filters,
       bucket,
       rank.by,
@@ -765,15 +860,16 @@ export function useUsageBreakdown(
       dimension,
     ],
     queryFn: async ({ signal }) => {
-      const params = usageParams(filters)
+      const params = scope.params(filters)
       params.set("bucket", bucket)
       params.append("dimensions", dimension)
       params.set("rank_by", rank.by)
       params.set("rank_order", rank.order)
       if (dimension === "source_label") params.set("session_details", "true")
-      const summary = await apiFetch<UsageSummary>(
-        `${scope.base}/summary?${params.toString()}`,
-        { signal: heavyReadSignal(signal) },
+      const summary = await scope.read<UsageSummary>(
+        `/summary?${params.toString()}`,
+        filters,
+        signal,
       )
       return { dimension, summary }
     },
@@ -804,31 +900,32 @@ export function useUsageLatency(
     groupBy?: BreakdownDimension
     rank?: { by: UsageBreakdownRankBy; order: UsageRankOrder }
     enabled?: boolean
-    usageScope?: UsageScope
+    usageScope?: TotalsScope
   } = {},
 ) {
-  const scope = useUsageScope(usageScope)
+  const scope = useTotalsScope(usageScope)
   const latencyFilters = withoutListOnly(filters)
   return useQuery({
     queryKey: [
       USAGE,
       "latency",
-      scope.base,
+      scope.keyBase,
       latencyFilters,
       groupBy ?? null,
       rank?.by ?? null,
       rank?.order ?? null,
     ],
     queryFn: ({ signal }) => {
-      const params = usageParams(latencyFilters)
+      const params = scope.params(latencyFilters)
       if (groupBy) params.set("group_by", groupBy)
       if (rank) {
         params.set("rank_by", rank.by)
         params.set("rank_order", rank.order)
       }
-      return apiFetch<UsageLatency>(
-        `${scope.base}/latency?${params.toString()}`,
-        { signal: heavyReadSignal(signal) },
+      return scope.read<UsageLatency>(
+        `/latency?${params.toString()}`,
+        latencyFilters,
+        signal,
       )
     },
     enabled: enabled && scope.isReady,
@@ -867,20 +964,29 @@ export function useUsageGroupedSeries(
   groupBy: UsageGroupBy,
   rankBy: UsageRankBy,
   enabled = true,
-  usageScope: UsageScope = "caller",
+  usageScope: TotalsScope = "caller",
 ) {
-  const scope = useUsageScope(usageScope)
+  const scope = useTotalsScope(usageScope)
   return useQuery({
     // The grouping ends the key, which is what the placeholder compares.
-    queryKey: [USAGE, "series", scope.base, filters, bucket, rankBy, groupBy],
+    queryKey: [
+      USAGE,
+      "series",
+      scope.keyBase,
+      filters,
+      bucket,
+      rankBy,
+      groupBy,
+    ],
     queryFn: ({ signal }) => {
-      const params = usageParams(filters)
+      const params = scope.params(filters)
       params.set("bucket", bucket)
       params.set("group_by", groupBy)
       params.set("rank_by", rankBy)
-      return apiFetch<UsageGroupedSeries>(
-        `${scope.base}/series?${params.toString()}`,
-        { signal: heavyReadSignal(signal) },
+      return scope.read<UsageGroupedSeries>(
+        `/series?${params.toString()}`,
+        filters,
+        signal,
       )
     },
     enabled: enabled && scope.isReady,

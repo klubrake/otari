@@ -17,7 +17,10 @@ import type {
 } from "@/client"
 import { OverviewIndex } from "@/features/overview/OverviewPage"
 import { API_ROOT } from "@/shared/api/client"
-import { SelectedWorkspaceProvider } from "@/shared/hooks/SelectedWorkspace"
+import {
+  SelectedWorkspaceProvider,
+  useSelectedWorkspace,
+} from "@/shared/hooks/SelectedWorkspace"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import {
   bootstrap,
@@ -161,6 +164,17 @@ interface Bodies {
   holdSummaryFrom?: { day: string; until: Promise<void> }
   /** Held open for the workspace's own month, read beside a manager's at You. */
   holdWorkspace?: Promise<void>
+  /** Held open for one workspace's overview, until it resolves. */
+  holdWorkspaceOverview?: { id: string; until: Promise<void> }
+  /** Whether each workspace shares its totals with members, over `overview`. */
+  totalsByWorkspace?: Record<string, boolean>
+  /**
+   * The managers turn the totals off before the page asks for them: that ask
+   * is refused, and the overview says they are hidden from then on.
+   */
+  revokesTotals?: boolean
+  /** Held open for every overview read after a refused ask, until it resolves. */
+  holdAfterRevoke?: Promise<void>
   /** Held open for the operator's provider list. */
   holdProviders?: Promise<void>
   /** The overview summary per scope asked for, over `overview`. */
@@ -180,6 +194,8 @@ interface Bodies {
   overview?: Partial<OverviewSummary>
   spend?: WorkspaceSpend | null
   failures?: UsageEntry[]
+  /** How many of the reader's own requests failed, from the count route. */
+  failureCount?: number
   health?: unknown
   providers?: unknown
   members?: unknown[]
@@ -230,10 +246,18 @@ function modelCatalog(ids: string[]) {
  */
 function mockApi(b: Bodies, { scoped = false } = {}): string[] {
   const requested: string[] = []
+  let isRevoked = false
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = String(input)
     requested.push(url)
     const params = new URL(url, "http://localhost").searchParams
+    if (b.revokesTotals && params.get("workspace_totals") === "true") {
+      isRevoked = true
+      return jsonResponse(
+        { detail: "Workspace totals are not shared with members" },
+        403,
+      )
+    }
     if (url.endsWith(`${API_ROOT}/organizations/me`)) {
       return jsonResponse(
         organizationContext({
@@ -264,7 +288,12 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
         await b.holdSummaryFrom.until
       }
       if (params.get("start_date")?.startsWith(b.monthStart ?? "2026-10-01")) {
-        if (b.workspace && !params.get("user_id")) {
+        // A manager reads the workspace by naming no one; a member asks for
+        // its totals, and otherwise is served their own.
+        const asksWorkspace =
+          params.get("workspace_totals") === "true" ||
+          (!scoped && !params.get("user_id"))
+        if (b.workspace && asksWorkspace) {
           if (b.holdWorkspace && !url.includes("/organizations/me/")) {
             await b.holdWorkspace
           }
@@ -278,14 +307,28 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
       if (b.holdOrganization && params.get("scope") === "organization") {
         await b.holdOrganization
       }
+      const named = params.get("workspace_id") ?? ""
+      if (b.holdWorkspaceOverview?.id === named)
+        await b.holdWorkspaceOverview.until
+      if (isRevoked) await b.holdAfterRevoke
       if (b.overviewFails) {
         return jsonResponse({ detail: "overview exploded" }, 500)
       }
-      // The scope asked for, unless a test says the server read another.
-      const scope = (params.get("scope") ??
+      // The scope asked for, unless a test says the server read another, or
+      // the member's Workspace is no longer theirs to read.
+      const asked = (params.get("scope") ??
         "workspace") as OverviewSummary["scope"]
+      const scope = isRevoked && asked === "workspace" ? "you" : asked
+      const shares = isRevoked ? false : b.totalsByWorkspace?.[named]
       return jsonResponse(
-        overviewBody({ scope, ...b.overview, ...b.overviewByScope?.[scope] }),
+        overviewBody({
+          scope,
+          ...b.overview,
+          ...b.overviewByScope?.[scope],
+          ...(shares === undefined
+            ? {}
+            : { visibility: { members_see_workspace_totals: shares } }),
+        }),
       )
     }
     if (url.match(/\/workspaces\/[^/]+\/budget/)) {
@@ -301,6 +344,9 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
       return jsonResponse({
         providers: b.providers ?? [{ provider: "openai" }],
       })
+    }
+    if (url.includes("/usage/count")) {
+      return jsonResponse({ total: b.failureCount ?? b.failures?.length ?? 0 })
     }
     if (url.includes("/usage")) return jsonResponse(b.failures ?? [])
     return scoped
@@ -386,6 +432,12 @@ const BUDGET: WorkspaceSpend = {
   period_start: "2026-10-01T00:00:00Z",
   period_end: "2026-11-01T00:00:00Z",
 }
+
+/** The budget as a member reads it while the workspace hides its totals. */
+const HIDDEN_BUDGET: WorkspaceSpend = { ...BUDGET, spent: null }
+
+/** The overview's word that the workspace keeps its totals from members. */
+const TOTALS_HIDDEN = { visibility: { members_see_workspace_totals: false } }
 
 function tile(label: string) {
   return screen.getByText(label).parentElement as HTMLElement
@@ -779,7 +831,7 @@ describe("the Overview's scope and month", () => {
 
   it("tells a member it is their own usage and asks the server for it", async () => {
     const requested = mockApi(
-      { context: MEMBER, spend: BUDGET },
+      { context: MEMBER, spend: BUDGET, overview: TOTALS_HIDDEN },
       { scoped: true },
     )
     renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
@@ -1263,8 +1315,14 @@ describe("the budget chart", () => {
 
 describe("a member's chart and a month that has ended", () => {
   it("draws a member's own total alone, with nothing measured against it", async () => {
-    mockApi(
-      { context: MEMBER, spend: BUDGET, series: daily(12, 5) },
+    const requested = mockApi(
+      {
+        context: MEMBER,
+        spend: HIDDEN_BUDGET,
+        series: daily(12, 5),
+        month: { cost: 60 },
+        overview: TOTALS_HIDDEN,
+      },
       { scoped: true },
     )
     const user = userEvent.setup()
@@ -1289,17 +1347,115 @@ describe("a member's chart and a month that has ended", () => {
     expect(screen.queryByText(/Over budget ~/)).toBeNull()
     expect(
       screen.getByText(
-        /Your spend alone, so there's no budget line: the Workspace budget tile measures the whole workspace against it\. Running total of billed spend\./,
+        /^Workspace totals are hidden by your admin, so there's no budget line: your spend alone can't show how close the workspace is\. Running total of billed spend\. Subscription usage isn.t included because it doesn.t count toward the budget\.$/,
       ),
     ).toBeInTheDocument()
     expect(screen.queryByText(/Projection uses/)).toBeNull()
-    // The budget tile keeps the figures a member can read.
-    expect(screen.getByText("$300.00 of $1,000")).toBeInTheDocument()
+    // No scope to switch to: the workspace's figures are not theirs to read.
+    expect(screen.queryByRole("radiogroup", { name: "Scope" })).toBeNull()
+    expect(screen.getByText("Your usage")).toBeInTheDocument()
+    // The budget tile gives the share used of the cap, and no dollars spent.
+    const budget = tile("Workspace budget")
+    expect(within(budget).getByText("30%")).toBeInTheDocument()
+    expect(within(budget).getByText("used of $1,000")).toBeInTheDocument()
+    expect(
+      within(budget).getByText(
+        "Workspace total hidden by your admin · yours $60.00",
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/\$300/)).toBeNull()
+    // Nothing asked for the workspace's totals, which the server would refuse.
+    expect(requested.filter((url) => url.includes("workspace_totals"))).toEqual(
+      [],
+    )
+  })
+
+  it("draws a member's own spend when the overview fails, and asks for no totals", async () => {
+    const requested = mockApi(
+      {
+        context: MEMBER,
+        spend: BUDGET,
+        series: daily(12, 5),
+        month: { cost: 60 },
+        workspace: { cost: 300 },
+        overviewFails: true,
+      },
+      { scoped: true },
+    )
+    renderPage(<OverviewIndex />, {
+      url: "/overview?scope=workspace",
+      workspace: WORKSPACE_A,
+    })
+
+    const chart = await screen.findByRole("slider", {
+      name: "Your billed spend in October, running total. Use the arrow keys to read a day.",
+    })
+    expect(chart).toHaveAttribute("aria-valuetext", "Oct 12: Yours $60.00")
+    expect(
+      screen.getByRole("region", { name: "Billed spend, October" }),
+    ).not.toHaveAttribute("aria-busy")
+    expect(screen.queryByRole("radiogroup", { name: "Scope" })).toBeNull()
+    // Not the admin's doing, so the caption does not say it is.
+    expect(screen.queryByText(/hidden by your admin/)).toBeNull()
+    expect(requested.filter((url) => url.includes("workspace_totals"))).toEqual(
+      [],
+    )
+  })
+
+  it("drops a member to their own spend when a read of the totals is refused", async () => {
+    // The overview read again after the refusal is held, so the page is seen
+    // between the two: the refusal is no error to report.
+    let release: () => void = () => {}
+    const requested = mockApi(
+      {
+        holdAfterRevoke: new Promise((resolve) => {
+          release = resolve
+        }),
+        context: MEMBER,
+        spend: BUDGET,
+        series: daily(12, 5),
+        month: { cost: 60 },
+        workspace: { cost: 300 },
+        workspaceSeries: daily(12, 25),
+        revokesTotals: true,
+      },
+      { scoped: true },
+    )
+    renderPage(<OverviewIndex />, {
+      url: "/overview?scope=workspace",
+      workspace: WORKSPACE_A,
+    })
+
+    // An overview read after the refused one: the re-read, held open.
+    await waitFor(() => {
+      const refused = requested.findIndex((url) =>
+        url.includes("workspace_totals=true"),
+      )
+      expect(refused).toBeGreaterThan(-1)
+      expect(
+        requested.slice(refused).some((url) => url.includes("/overview?")),
+      ).toBe(true)
+    })
+    expect(screen.queryByText(/not shared with members/)).toBeNull()
+    release()
+    expect(
+      await screen.findByText(/Workspace totals are hidden by your admin/),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("radiogroup", { name: "Scope" })).toBeNull()
+    expect(
+      await screen.findByRole("slider", { name: /^Your billed spend/ }),
+    ).toHaveAttribute("aria-valuetext", "Oct 12: Yours $60.00")
+    expect(screen.queryByText(/not shared with members/)).toBeNull()
   })
 
   it("tells a member with no workspace budget only that spend counts toward limits", async () => {
     mockApi(
-      { context: MEMBER, spend: null, series: daily(12, 5) },
+      {
+        context: MEMBER,
+        spend: null,
+        series: daily(12, 5),
+        overview: TOTALS_HIDDEN,
+      },
       { scoped: true },
     )
     renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
@@ -1310,6 +1466,7 @@ describe("a member's chart and a month that has ended", () => {
       ),
     ).toBeInTheDocument()
     expect(screen.queryByText(/no budget line/)).toBeNull()
+    expect(screen.queryByText(/Workspace totals are hidden/)).toBeNull()
   })
 
   it("draws a past month against today's budget and judges nothing", async () => {
@@ -1374,6 +1531,230 @@ describe("a member's chart and a month that has ended", () => {
     expect(within(rail).queryByText(/^Resets/)).toBeNull()
     expect(within(rail).queryByRole("progressbar")).toBeNull()
     expect(within(rail).queryByText(/\/ \$25/)).toBeNull()
+  })
+})
+
+/** A member of two workspaces, as the switcher would offer them. */
+const MEMBER_OF_TWO = {
+  role: "member" as const,
+  workspace_memberships: [
+    { workspace_id: WORKSPACE_A, name: "Research", role: "member" },
+    { workspace_id: WORKSPACE_B, name: "Staging", role: "member" },
+  ],
+}
+
+/** Stands in for the sidebar's switcher. */
+function SwitchToStaging() {
+  const { select } = useSelectedWorkspace()
+  return (
+    <button type="button" onClick={() => select(WORKSPACE_B)}>
+      Switch to Staging
+    </button>
+  )
+}
+
+describe("a member with no workspace on screen", () => {
+  it.each([
+    ["belongs to no workspace", { ...MEMBER, workspace_memberships: [] }],
+    ["has a workspace still unresolved", MEMBER],
+  ])(
+    "asks for no workspace totals when the member %s, and draws their own spend",
+    async (_, context) => {
+      // The overview still says the totals are shared, as a server would for
+      // the workspace once named: the page asks nothing until one is.
+      const requested = mockApi(
+        { context, series: daily(12, 5), month: { cost: 60 } },
+        { scoped: true },
+      )
+      renderPage(<OverviewIndex />)
+
+      const chart = await screen.findByRole("slider", {
+        name: "Your billed spend in October, running total. Use the arrow keys to read a day.",
+      })
+      expect(chart).toHaveAttribute("aria-valuetext", "Oct 12: Yours $60.00")
+      expect(
+        requested.filter((url) => url.includes("workspace_totals")),
+      ).toEqual([])
+    },
+  )
+})
+
+describe("a member while the workspace shares its totals", () => {
+  it("forgets the last workspace's setting when switching to one that hides its totals", async () => {
+    let release: () => void = () => {}
+    const requested = mockApi(
+      {
+        context: MEMBER_OF_TWO,
+        spend: BUDGET,
+        series: daily(12, 5),
+        month: { cost: 60 },
+        workspace: { cost: 300 },
+        workspaceSeries: daily(12, 25),
+        totalsByWorkspace: { [WORKSPACE_A]: true, [WORKSPACE_B]: false },
+        holdWorkspaceOverview: {
+          id: WORKSPACE_B,
+          until: new Promise((resolve) => {
+            release = resolve
+          }),
+        },
+      },
+      { scoped: true },
+    )
+    const user = userEvent.setup()
+    renderPage(
+      <>
+        <OverviewIndex />
+        <SwitchToStaging />
+      </>,
+      { workspace: WORKSPACE_A },
+    )
+
+    await screen.findByRole("radiogroup", { name: "Scope" })
+    await waitFor(() =>
+      expect(screen.getByText("Rest of workspace")).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole("button", { name: "Switch to Staging" }))
+
+    // While Staging's answer is on its way, Research's is no word on it.
+    await waitFor(() =>
+      expect(screen.queryByRole("radiogroup", { name: "Scope" })).toBeNull(),
+    )
+    expect(screen.queryByText("Rest of workspace")).toBeNull()
+    release()
+    expect(
+      await screen.findByText(/Workspace totals are hidden by your admin/),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("radiogroup", { name: "Scope" })).toBeNull()
+    expect(screen.queryByText("Rest of workspace")).toBeNull()
+    expect(
+      requested.filter(
+        (url) =>
+          url.includes("workspace_totals") &&
+          url.includes(`workspace_id=${WORKSPACE_B}`),
+      ),
+    ).toEqual([])
+  })
+
+  it("offers You and Workspace, and stacks their share under the rest at You", async () => {
+    const requested = mockApi(
+      {
+        context: MEMBER,
+        spend: BUDGET,
+        series: daily(12, 5),
+        month: { cost: 60 },
+        workspace: { cost: 300 },
+        workspaceSeries: daily(12, 25),
+      },
+      { scoped: true },
+    )
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    const scopes = await screen.findByRole("radiogroup", { name: "Scope" })
+    expect(
+      within(scopes)
+        .getAllByRole("radio")
+        .map(
+          (radio) => radio.closest("label")?.textContent ?? radio.textContent,
+        ),
+    ).toEqual(["You", "Workspace"])
+    const chart = await screen.findByRole("slider", { name: /Billed spend/ })
+    await waitFor(() =>
+      expect(chart).toHaveAttribute(
+        "aria-valuetext",
+        "Oct 12: Yours $60.00, Rest of workspace $240.00",
+      ),
+    )
+    expect(
+      screen.getByRole("heading", { name: "Billed spend vs budget, October" }),
+    ).toBeInTheDocument()
+    expect(screen.getByText("Rest of workspace")).toBeInTheDocument()
+    expect(screen.getByText("Projected")).toBeInTheDocument()
+    // Paced from the workspace's month, with the member's share beside it.
+    expect(
+      within(tile("Workspace budget")).getByText(
+        "On pace for $809 by Oct 31 · yours $60.00",
+      ),
+    ).toBeInTheDocument()
+    // The rest of the workspace came from its totals, asked for as such.
+    expect(
+      requested.some(
+        (url) =>
+          url.includes("/organizations/me/usage/summary") &&
+          url.includes("workspace_totals=true") &&
+          url.includes(`workspace_id=${WORKSPACE_A}`),
+      ),
+    ).toBe(true)
+  })
+
+  it("reads the workspace's totals at Workspace, and keeps the keys and failures their own", async () => {
+    const requested = mockApi(
+      {
+        context: MEMBER,
+        spend: BUDGET,
+        month: { cost: 12, request_count: 40, error_count: 1 },
+        workspace: { cost: 300, request_count: 500, error_count: 9 },
+        workspaceSeries: daily(12, 25),
+        failures: [failure()],
+        failureCount: 1,
+      },
+      { scoped: true },
+    )
+    renderPage(<OverviewIndex />, {
+      url: "/overview?scope=workspace",
+      workspace: WORKSPACE_A,
+    })
+
+    // The workspace's tiles.
+    expect(await screen.findByText("500")).toBeInTheDocument()
+    expect(
+      within(tile("Total at API prices")).getAllByText("$300.00")[0],
+    ).toBeInTheDocument()
+    // Its failures are counted but not opened: Activity lists the member's own.
+    expect(screen.getByText("9 failed")).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "9 failed" })).toBeNull()
+    // The rail says where the member's keys are instead of listing others'.
+    const rail = screen.getByRole("complementary")
+    expect(within(rail).getByRole("heading", { name: "Keys" })).toBeVisible()
+    expect(
+      within(rail).getByText(/Other members.\s*keys aren.t shown to members/),
+    ).toBeInTheDocument()
+    expect(within(rail).queryByRole("button")).toBeNull()
+    // The failures listed are the member's own, and the count says so too.
+    expect(
+      screen.getByRole("heading", { name: "Your recent failures" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/^Only your own requests: other members/),
+    ).toBeInTheDocument()
+    expect(
+      await screen.findByRole("link", { name: "View all 1 in Activity →" }),
+    ).toBeInTheDocument()
+    const summaries = requested.filter((url) => url.includes("/usage/summary"))
+    expect(summaries.length).toBeGreaterThan(0)
+    for (const url of summaries) {
+      expect(url).toContain("workspace_totals=true")
+      // Nothing beyond the workspace and the window, which is all a member's
+      // ask for the workspace's totals may narrow by.
+      const keys = new Set(new URL(url, "http://localhost").searchParams.keys())
+      expect([...keys].sort()).toEqual(
+        [
+          "bucket",
+          "dimensions",
+          "end_date",
+          "start_date",
+          "workspace_id",
+          "workspace_totals",
+        ].sort(),
+      )
+    }
+    // The list and its count take no such ask.
+    const rows = requested.filter(
+      (url) =>
+        url.includes("/organizations/me/usage?") ||
+        url.includes("/organizations/me/usage/count"),
+    )
+    expect(rows.length).toBeGreaterThan(0)
+    for (const url of rows) expect(url).not.toContain("workspace_totals")
   })
 })
 
@@ -1574,7 +1955,7 @@ describe("recent failures and the rail", () => {
   it("reads no provider health for a caller who does not operate the deployment", async () => {
     const requested = mockApi({ context: MEMBER }, { scoped: true })
     renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
-    await screen.findByText("Your usage")
+    await screen.findByRole("radiogroup", { name: "Scope" })
     expect(screen.queryByRole("heading", { name: "Providers" })).toBeNull()
     expect(requested.some((url) => url.includes("/providers"))).toBe(false)
   })

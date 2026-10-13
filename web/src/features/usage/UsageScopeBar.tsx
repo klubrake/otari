@@ -16,6 +16,7 @@ import { SCOPE_LABELS, type UsageScopeKey, WINDOWS } from "./usageQuery"
 export function UsageScopeBar({
   scopes,
   scope,
+  isAwaitingScope = false,
   onScope,
   range,
   onRange,
@@ -27,6 +28,8 @@ export function UsageScopeBar({
 }: {
   scopes: readonly UsageScopeKey[]
   scope: UsageScopeKey
+  /** Whether there is a choice of scope waits on the workspace's answer, so none is shown yet. */
+  isAwaitingScope?: boolean
   onScope: (scope: UsageScopeKey) => void
   range: string
   onRange: (range: string) => void
@@ -39,7 +42,11 @@ export function UsageScopeBar({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-3 border-t border-border py-3">
-      {scopes.length > 1 ? (
+      {isAwaitingScope ? (
+        // The scope control's footprint, held while the workspace's answer
+        // says whether there is a choice, so the row does not shift when it lands.
+        <span aria-hidden className="h-11 w-36 md:h-8" />
+      ) : scopes.length > 1 ? (
         <Segmented
           label="Scope"
           value={scope}

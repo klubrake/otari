@@ -228,6 +228,7 @@ export function UsagePage() {
         range={data.preset.key}
         onRange={(range) => url.patch({ range, start_date: "", end_date: "" })}
         bounds={bounds}
+        isAwaitingScope={data.isAwaitingScope || data.isScopePending}
         spend={data.scope === "organization" ? undefined : data.spend}
         onRefresh={data.refresh}
         isFetching={data.isFetching}
@@ -343,7 +344,8 @@ export function UsagePage() {
               <span className="text-caption text-subtle">
                 {formatNumber(data.rows.length)}{" "}
                 {data.rows.length === 1 ? "row" : "rows"} · hover or tap a row
-                to filter, click to open in Activity
+                to filter
+                {data.canOpenActivity ? ", click to open in Activity" : ""}
               </span>
             </div>
             <BreakdownTable

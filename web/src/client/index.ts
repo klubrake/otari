@@ -557,6 +557,10 @@ export type Workspace = Schemas["WorkspacePublic"]
 export type CreateWorkspaceRequest = Schemas["WorkspaceCreate"]
 export type UpdateWorkspaceRequest = Schemas["WorkspaceUpdate"]
 export type WorkspaceMember = Schemas["WorkspaceMemberPublic"]
+// What a workspace shows members who do not manage it.
+export type WorkspaceVisibility = Schemas["WorkspaceVisibility"]
+// A change to it: only the fields sent change.
+export type WorkspaceVisibilityUpdate = Schemas["WorkspaceVisibilityUpdate"]
 
 // Invitations: the emailed half of adding a member. `InviteOrganizationMemberRequest`
 // is `CreateOrganizationMemberRequest`'s twin (same fields, different result:

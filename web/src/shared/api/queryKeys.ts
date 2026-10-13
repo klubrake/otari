@@ -82,6 +82,12 @@ export const ORGANIZATION_PRICING = "organization-pricing"
 // admin and invalidate reads neither caller can make.
 export const ORGANIZATION_BUDGETS = "organization-budgets"
 export const ORGANIZATION_SPEND_CEILINGS = "organization-spend-ceilings"
+// One workspace's own spend ceiling, under the ceilings' head so every budget
+// or ceiling write refreshes it. Composed here because the usage reads address
+// it too: the setting that refuses a member's totals also withholds its dollars.
+export function workspaceSpendKey(workspaceId: string) {
+  return [ORGANIZATION_SPEND_CEILINGS, "workspace", workspaceId] as const
+}
 export const ORGANIZATION_GUARDRAILS = "organization-guardrails"
 // What each guardrail is, apart from where it runs. No mandate field changes
 // when a definition does, so a definition write leaves the mandates alone.
@@ -106,6 +112,14 @@ export const ORGANIZATION_PROVIDER_AVAILABLE_MODELS =
 // one page reads it, and claiming a domain has no bearing on anything else.
 export const ORGANIZATION_DOMAINS = "organization-domains"
 export const WORKSPACES = "workspaces"
+// What a workspace shows members who do not manage it. Composed here because
+// three modules address it: its own read and write, the overview, whose answer
+// carries the setting and seeds it, and the usage reads, whose refusal says it
+// has changed. Nested under WORKSPACES, so a roster write re-reads it too, which
+// is one small GET and keeps it beside the workspace it describes.
+export function workspaceVisibilityKey(workspaceId: string) {
+  return [WORKSPACES, workspaceId, "visibility"] as const
+}
 // The first-request setup guide's state. Its own key rather than a child of
 // WORKSPACES: the guide polls while it is on screen, and nesting it would make
 // every one of those ticks invalidate (or be invalidated by) the workspace list

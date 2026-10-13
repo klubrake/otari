@@ -14,6 +14,7 @@ import {
   costOnDay,
   daysUntil,
   describeAttention,
+  describeChartCaptionLead,
   describeMonthSoFar,
   groupAttention,
   paceFor,
@@ -270,6 +271,7 @@ describe("the budget", () => {
   const spend = {
     max_budget: 1000,
     spent: 638.2,
+    used_fraction: 0.6382,
     period_start: "2026-10-01T00:00:00Z",
     period_end: "2026-11-01T00:00:00Z",
   }
@@ -339,6 +341,34 @@ describe("the budget", () => {
       kind: "unknown",
       subline: "$1,000 budget",
       line: "Workspace spend by month is for managers · yours $71.25",
+    })
+  })
+
+  it("gives a member the share used, and no dollars, where the workspace hides its totals", () => {
+    const hidden = { ...spend, spent: undefined }
+    expect(
+      budgetView({ ...base, scope: "you", isManager: false, spend: hidden }),
+    ).toMatchObject({
+      kind: "budget",
+      fraction: 0.6382,
+      used: 0.6382,
+      cap: 1,
+      subline: "used of $1,000",
+      line: "Workspace total hidden by your admin · yours $71.25",
+    })
+    // A past month's share is not known at all.
+    expect(
+      budgetView({
+        ...base,
+        month: SEPTEMBER,
+        scope: "you",
+        isManager: false,
+        spend: hidden,
+      }),
+    ).toMatchObject({
+      kind: "unknown",
+      subline: "$1,000 budget",
+      line: "Workspace total hidden by your admin · yours $71.25",
     })
   })
 
@@ -419,6 +449,7 @@ describe("the budget from what the page read", () => {
     spend: {
       max_budget: 1000,
       spent: 640,
+      used_fraction: 0.64,
       period_start: "2026-10-01T00:00:00Z",
       period_end: "2026-11-01T00:00:00Z",
     },
@@ -440,6 +471,21 @@ describe("the budget from what the page read", () => {
         spend: { ...read.spend, period_start: "2026-10-05T00:00:00Z" },
       }),
     ).toMatchObject({ line: "Resets Nov 1 · yours $71.25" })
+  })
+
+  it("reads a withheld spend as the share of the cap, not as unknown", () => {
+    expect(
+      readBudget({
+        ...read,
+        isManager: false,
+        spend: { ...read.spend, spent: null, used_fraction: 0.64 },
+      }),
+    ).toMatchObject({
+      kind: "budget",
+      fraction: 0.64,
+      cap: 1,
+      subline: "used of $1,000",
+    })
   })
 
   it("is at risk on the server's pace item for this workspace only", () => {
@@ -666,5 +712,68 @@ describe("expiry", () => {
   it("counts whole days, at or below zero once it has passed", () => {
     expect(daysUntil("2026-10-15T00:00:00Z", NOW.getTime())).toBe(3)
     expect(daysUntil("2026-10-01T00:00:00Z", NOW.getTime())).toBeLessThan(1)
+  })
+})
+
+describe("describeChartCaptionLead", () => {
+  const base = {
+    isAwaitingTotals: false,
+    isOwnOnly: false,
+    hasBudget: true,
+    isHiddenFromMember: false,
+    showsBudget: true,
+    isCurrentMonth: true,
+  }
+
+  it("says nothing while a member's setting is unknown", () => {
+    expect(
+      describeChartCaptionLead({
+        ...base,
+        isAwaitingTotals: true,
+        isOwnOnly: true,
+      }),
+    ).toBe("")
+  })
+
+  it("names the admin where the totals are hidden from a member", () => {
+    expect(
+      describeChartCaptionLead({
+        ...base,
+        isOwnOnly: true,
+        isHiddenFromMember: true,
+        showsBudget: false,
+      }),
+    ).toMatch(
+      /^Workspace totals are hidden by your admin, so there's no budget line/,
+    )
+  })
+
+  it("explains a reader's own spend alone, this month and in a past one", () => {
+    const own = { ...base, isOwnOnly: true, showsBudget: false }
+    expect(describeChartCaptionLead(own)).toMatch(
+      /the Workspace budget tile measures/,
+    )
+    expect(describeChartCaptionLead({ ...own, isCurrentMonth: false })).toMatch(
+      /workspace spend by month is for managers/,
+    )
+  })
+
+  it("says nothing of a budget line where the workspace has no budget", () => {
+    expect(
+      describeChartCaptionLead({
+        ...base,
+        isOwnOnly: true,
+        hasBudget: false,
+        isHiddenFromMember: true,
+        showsBudget: false,
+      }),
+    ).toBe("")
+  })
+
+  it("says a past month's line is today's budget", () => {
+    expect(describeChartCaptionLead({ ...base, isCurrentMonth: false })).toBe(
+      "Past budgets aren't stored, so the line is today's budget. ",
+    )
+    expect(describeChartCaptionLead(base)).toBe("")
   })
 })

@@ -219,6 +219,22 @@ export function mockUsageApi(
     hasOwnUserId?: boolean
     /** Workspaces a read of one by id answers with. */
     workspaces?: Workspace[]
+    /**
+     * Whether the workspace shares its totals with members. Kept from them
+     * unless a test shares them, which keeps a member to their own usage.
+     */
+    membersSeeWorkspaceTotals?: boolean
+    /** Held open for the visibility read, until it resolves. */
+    holdVisibility?: Promise<void>
+    /** Held open for every visibility read after the first, until it resolves. */
+    holdReread?: Promise<void>
+    /** The visibility read fails. */
+    visibilityFails?: boolean
+    /**
+     * The managers turn the totals off before the page next asks for them:
+     * that ask is refused, and the setting reads as hidden from then on.
+     */
+    revokesTotals?: boolean
     /** A promise a read waits on before it answers, to hold one back. */
     hold?: (
       kind: "summary" | "series" | "latency" | "tools",
@@ -229,6 +245,8 @@ export function mockUsageApi(
   const viewer = opts.viewer ?? "owner"
   const summary = opts.summary ?? breakdownSummary()
   const calls: FetchCall[] = []
+  let isShared = opts.membersSeeWorkspaceTotals ?? false
+  let visibilityReads = 0
   const mock = vi
     .spyOn(globalThis, "fetch")
     .mockImplementation(async (input, init) => {
@@ -246,11 +264,34 @@ export function mockUsageApi(
       if (url.includes("/pricing") && method === "POST") {
         return jsonResponse({})
       }
+      if (url.includes(`/workspaces/${WORKSPACE_ID}/visibility`)) {
+        await opts.holdVisibility
+        if (opts.visibilityFails) {
+          return jsonResponse({ detail: "visibility exploded" }, 500)
+        }
+        visibilityReads += 1
+        if (visibilityReads > 1) await opts.holdReread
+        return jsonResponse({ members_see_workspace_totals: isShared })
+      }
+      if (params.get("workspace_totals") === "true" && opts.revokesTotals) {
+        isShared = false
+      }
+      if (params.get("workspace_totals") === "true" && !isShared) {
+        return jsonResponse(
+          { detail: "Workspace totals are not shared with members" },
+          403,
+        )
+      }
       if (url.includes(`/workspaces/${WORKSPACE_ID}/budget`)) {
+        // As the server answers: a member of a workspace that keeps its totals
+        // from members is given the share used, not the dollars.
+        const hidesSpend = viewer === "member" && !isShared
         return jsonResponse({
           workspace_id: WORKSPACE_ID,
           max_budget: 500,
-          spent: 412,
+          spent: hidesSpend ? null : 412,
+          // Rounded to a whole percent where the dollars are withheld.
+          used_fraction: hidesSpend ? 0.82 : 0.824,
           period_start: "2026-09-01T00:00:00Z",
           period_end: "2026-10-01T00:00:00Z",
         })
