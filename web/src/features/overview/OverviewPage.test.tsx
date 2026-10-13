@@ -161,6 +161,8 @@ interface Bodies {
   holdSummaryFrom?: { day: string; until: Promise<void> }
   /** Held open for the workspace's own month, read beside a manager's at You. */
   holdWorkspace?: Promise<void>
+  /** Held open for the operator's provider list. */
+  holdProviders?: Promise<void>
   /** The overview summary per scope asked for, over `overview`. */
   overviewByScope?: Partial<Record<string, Partial<OverviewSummary>>>
   /** The first day of the month the page reads, if not October. */
@@ -294,6 +296,7 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
       )
     }
     if (url.includes(`${API_ROOT}/providers`)) {
+      await b.holdProviders
       return jsonResponse({
         providers: b.providers ?? [{ provider: "openai" }],
       })
@@ -580,6 +583,69 @@ describe("the Overview's numbers", () => {
     expect(tile("Total at API prices")).toHaveAttribute("aria-busy", "true")
     expect(tile("Requests")).toHaveAttribute("aria-busy", "true")
     release()
+  })
+
+  it("asks for the month without waiting on the provider list", async () => {
+    let release = () => {}
+    const holdProviders = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const requested = mockApi({ holdProviders })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    await waitFor(() =>
+      expect(requested.some((url) => url.includes("/usage/summary"))).toBe(
+        true,
+      ),
+    )
+    expect(
+      screen.getByRole("heading", { name: "Overview" }),
+    ).toBeInTheDocument()
+    release()
+  })
+
+  it("adds the getting-started strip once a held, empty provider list answers", async () => {
+    let release = () => {}
+    const holdProviders = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const requested = mockApi({ providers: [], holdProviders })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    await waitFor(() =>
+      expect(requested.some((url) => url.includes("/usage/summary"))).toBe(
+        true,
+      ),
+    )
+    expect(screen.queryByText("Get started with Otari")).toBeNull()
+    release()
+    expect(
+      await screen.findByText("Get started with Otari"),
+    ).toBeInTheDocument()
+  })
+
+  it("offers the setup guide once a held provider list names a provider", async () => {
+    let release = () => {}
+    const holdProviders = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const requested = mockApi({
+      context: TWO_WORKSPACES,
+      activation: workspaceActivation(),
+      holdProviders,
+    })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+
+    await waitFor(() =>
+      expect(requested.some((url) => url.includes("/usage/summary"))).toBe(
+        true,
+      ),
+    )
+    expect(requested.some((url) => url.includes("/activation"))).toBe(false)
+    release()
+    expect(
+      await screen.findByRole("heading", { name: "Send your first request" }),
+    ).toBeInTheDocument()
   })
 
   it("shows a dash, not a zero, for a summary that failed", async () => {
