@@ -69,6 +69,7 @@ from gateway.services.inference import InferenceService
 from gateway.services.log_writer import LogWriter
 from gateway.services.master_key_service import hash_master_key, is_generated_master_key, load_master_key_hash
 from gateway.services.organization_pricing_service import OrganizationPricingService
+from gateway.services.organizations import WorkspaceVisibilityService
 from gateway.services.overview import OverviewService
 from gateway.services.playground_service import ForwardedToolOffer, LocalToolOffer, PlaygroundToolOffer
 from gateway.services.providers import OrgProviderModelService, ProviderEndpointService, refresh_provider_endpoint_cache
@@ -1140,6 +1141,20 @@ def get_workspace_service(
 WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
 
 
+def get_workspace_visibility_service(
+    uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> WorkspaceVisibilityService:
+    """Build the request's workspace-visibility service on the request's Unit of Work."""
+    organizations = OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener())
+    return WorkspaceVisibilityService(
+        uow, WorkspaceRepository(uow), WorkspaceAccess(db, organizations), DeploymentUserService(db)
+    )
+
+
+WorkspaceVisibilityServiceDep = Annotated[WorkspaceVisibilityService, Depends(get_workspace_visibility_service)]
+
+
 def get_overview_service(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -1147,6 +1162,7 @@ def get_overview_service(
     uow: UnitOfWorkDep,
     membership_listener: MembershipListenerDep,
     workspace_listener: WorkspaceListenerDep,
+    visibility: WorkspaceVisibilityServiceDep,
 ) -> OverviewService:
     """Build the dashboard overview's summary service on the request's session.
 
@@ -1160,6 +1176,7 @@ def get_overview_service(
         # The listener is for writes; this service only reads, and the same
         # pairing is what `routes/workspaces.py` builds.
         WorkspaceService(db, uow=uow, membership_listener=membership_listener, workspace_listener=workspace_listener),
+        visibility,
         config,
         uow,
         request.app.state.heavy_usage_reads,
@@ -1192,6 +1209,7 @@ def get_budget_service(
         organizations,
         ApiKeyService(ApiKeyRepository(uow)),
         WorkspaceAccess(db, organizations),
+        get_workspace_visibility_service(uow, db),
     )
 
 

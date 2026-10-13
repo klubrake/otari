@@ -169,11 +169,13 @@ the URL.
 
 A member sees no workspace spend by day, so their chart is their own running
 total alone, with no budget line or projection: their share cannot show how
-close the workspace is to its budget. The Budget tile still gives them the
-workspace budget's figures for the month running. A month that has ended is
-drawn against today's budget and today's limits, since past ones are not stored,
-so it carries no verdict: no crossing date, no severity, and limits named
-("Limit today") rather than measured against the month.
+close the workspace is to its budget. The Budget tile gives them the workspace
+budget's figures for the month running while the workspace shares its totals
+with members (see [Access control](access-control.md#workspace-scoped-spend)),
+and is left out otherwise. A month that has ended is drawn against today's
+budget and today's limits, since past ones are not stored, so it carries no
+verdict: no crossing date, no severity, and limits named ("Limit today") rather
+than measured against the month.
 
 Before anything has been sent, Overview opens with a getting-started strip. A
 deployment operator sees it on a gateway with no providers and no usage, with a
@@ -228,7 +230,12 @@ Whose requests they show follows workspace management. In a workspace you
 manage, as an owner or admin of the organization or of that workspace itself,
 you see everyone's requests and can narrow to your own; in any other workspace
 you belong to, you see only your own. Managing one workspace widens that
-workspace and no other.
+workspace and no other. While a workspace shares its totals with members (off
+until a manager turns it on), the organization usage API also gives a member its
+aggregates when asked (`workspace_totals=true`): totals, the time series and the
+p95 latency, split by model, provider or status code, never another person's
+requests, keys or sessions. See
+[Access control](access-control.md#workspace-scoped-spend).
 
 Filter Activity from the log itself: each column header sorts and holds that
 column's filters, a cell in any of the value columns can narrow the log to its

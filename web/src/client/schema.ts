@@ -3219,7 +3219,9 @@ export interface paths {
          *     aggregation over a narrower row set: the same bounded window, the same
          *     breakdowns, the same ``dimensions`` selector for paying only for the passes a
          *     caller reads. The breakdown by user names the people inside the caller's own
-         *     scope, which is the roster they can already read.
+         *     scope, which is the roster they can already read. A member reading a
+         *     workspace's totals (``workspace_totals``) gets the breakdowns by model,
+         *     provider and status code when ``dimensions`` is left out.
          */
         get: operations["organization-usage-organization_usage_summary"];
         put?: never;
@@ -3241,7 +3243,9 @@ export interface paths {
          * Organization Usage Tools
          * @description Spend and volume per gateway-run tool, for the caller's organization.
          *
-         *     The tenant-scoped counterpart of ``GET /api/v1/usage/tools``.
+         *     The tenant-scoped counterpart of ``GET /api/v1/usage/tools``. A member's
+         *     workspace-totals ask is a breakdown by tool, so it is refused while tools
+         *     are not among the dimensions a member may split by.
          */
         get: operations["organization-usage-organization_usage_tools"];
         put?: never;
@@ -6130,6 +6134,39 @@ export interface paths {
          * @description Rename, re-save or re-share one of the caller's own views.
          */
         patch: operations["saved-views-update_saved_view"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/visibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workspace Visibility
+         * @description Read what the workspace shows members who do not manage it.
+         *
+         *     Any member of the workspace may read it, because the dashboard picks a
+         *     member's layout from it; a workspace the caller cannot see is not found.
+         */
+        get: operations["workspaces-get_workspace_visibility"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Workspace Visibility
+         * @description Change what members who do not manage the workspace see; only the fields sent change.
+         *
+         *     An organization owner or admin, or an owner or admin of this workspace, may
+         *     change it. With totals shown, a member may read the workspace's aggregate
+         *     usage and its budget in dollars; hidden, only their own usage and the budget
+         *     as a share of its cap. Neither ever shows a member anyone else's requests,
+         *     keys or limits. Answers with every setting after the change.
+         */
+        patch: operations["workspaces-update_workspace_visibility"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/web-search": {
@@ -12274,7 +12311,7 @@ export interface components {
             subject_name: string | null;
             /**
              * Used
-             * @description USD spent against the limit in its current period.
+             * @description USD spent against the limit in its current period. Null on a workspace budget item for a member of a workspace that keeps its totals from members, which still carries `limit` and `fraction`.
              */
             used?: number | null;
         };
@@ -12334,7 +12371,8 @@ export interface components {
          * OverviewLimitsResponse
          * @description The rail: the caller's keys, a workspace's keys, or the organization's workspaces.
          *
-         *     At most eight, most billed first.
+         *     At most eight, most billed first. Empty for a member reading a workspace's
+         *     totals, because the workspace's keys are other people's.
          */
         OverviewLimitsResponse: {
             /**
@@ -12401,6 +12439,8 @@ export interface components {
              * @enum {string}
              */
             scope: "you" | "workspace" | "organization";
+            /** @description What the named workspace shows members who do not manage it; null when no workspace is named. A member reading the workspace scope of one that shares its totals sees them and an empty rail. */
+            visibility: components["schemas"]["WorkspaceVisibility"] | null;
         };
         /**
          * PasskeySessionResponse
@@ -16841,8 +16881,16 @@ export interface components {
             period_end: string | null;
             /** Period Start */
             period_start: string | null;
-            /** Spent */
-            spent: number;
+            /**
+             * Spent
+             * @description USD counted against the cap: settled spend plus holds in flight. Null for a member who does not manage the workspace when its managers keep its totals from members; `used_fraction` still says how much of the cap is used.
+             */
+            spent: number | null;
+            /**
+             * Used Fraction
+             * @description The share of `max_budget` used, 1.0 or more at or past it; null when the ceiling caps no dollars. A zero cap with anything counted against it reads 1.0. Rounded to a whole percent where `spent` is null.
+             */
+            used_fraction: number | null;
             /**
              * Workspace Id
              * Format: uuid
@@ -16855,6 +16903,31 @@ export interface components {
             description?: string | null;
             /** Name */
             name?: string | null;
+        };
+        /**
+         * WorkspaceVisibility
+         * @description What a workspace shows members who do not manage it.
+         */
+        WorkspaceVisibility: {
+            /**
+             * Members See Workspace Totals
+             * @description Whether members may read the workspace's aggregate usage (totals, series, and breakdowns by model, provider or status code) and its budget's dollar figures. Never anyone else's requests, keys or limits. When false, a member reads only their own usage and the budget as a percentage.
+             */
+            members_see_workspace_totals: boolean;
+        };
+        /**
+         * WorkspaceVisibilityUpdate
+         * @description A change to what a workspace shows its members: only the fields sent change.
+         *
+         *     An unknown field or a null is refused rather than ignored, so a manager is
+         *     never told a setting changed when it did not.
+         */
+        WorkspaceVisibilityUpdate: {
+            /**
+             * Members See Workspace Totals
+             * @description Whether members may read the workspace's aggregate usage (totals, series, and breakdowns by model, provider or status code) and its budget's dollar figures. Never anyone else's requests, keys or limits. When false, a member reads only their own usage and the budget as a percentage.
+             */
+            members_see_workspace_totals?: boolean | null;
         };
         /**
          * WorkspaceWebSearchConfigPublic
@@ -22232,6 +22305,8 @@ export interface operations {
                 order?: "recent" | "requests";
                 skip?: number;
                 limit?: number;
+                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment. */
+                workspace_totals?: boolean;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -22332,6 +22407,8 @@ export interface operations {
                 rank_by?: "cost" | "billed" | "tokens" | "requests" | "imported" | "errors" | "name" | "p95";
                 /** @description Which end of 'rank_by' the top N are taken from, and the order they are listed in: 'desc' (the default, largest first) or 'asc'. The 'other' fold stays last. */
                 rank_order?: "asc" | "desc";
+                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment. */
+                workspace_totals?: boolean;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -22432,6 +22509,8 @@ export interface operations {
                 bucket?: "hour" | "day";
                 /** @description What picks the groups that get a series of their own before the 'other' fold: 'cost' (all spend, the default), 'billed' (cost - imported_cost), 'tokens' (billed input plus output) or 'requests'. */
                 rank_by?: "cost" | "billed" | "tokens" | "requests";
+                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment. */
+                workspace_totals?: boolean;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -22542,6 +22621,8 @@ export interface operations {
                 rank_order?: "asc" | "desc";
                 /** @description A tag key to break spend down by, returned as `by_tag`. Rows that do not carry the tag group under a null key. */
                 group_by_tag?: string | null;
+                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment. */
+                workspace_totals?: boolean;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -22636,6 +22717,8 @@ export interface operations {
     "organization-usage-organization_usage_tools": {
         parameters: {
             query?: {
+                /** @description As a member of the workspace named by `workspace_id`, read its aggregate usage rather than only your own. Granted while the workspace's managers share its totals with members, split by model, provider or status code only, and narrowed only by the window, model, provider, outcome, status code and pricing: a user, key, source, channel, endpoint, session, policy, tag, budget or `q` filter is refused with 403. Needs `workspace_id`, whoever sends it; past that, changes nothing for someone who manages the workspace or operates the deployment. */
+                workspace_totals?: boolean;
                 /** @description Return logs with timestamp >= start_date (ISO 8601 or Unix epoch seconds) */
                 start_date?: string | null;
                 /** @description Return logs with timestamp < end_date (ISO 8601 or Unix epoch seconds) */
@@ -22960,7 +23043,7 @@ export interface operations {
                 workspace_id?: string | null;
                 /** @description The calendar month whose spend and error rate to report, `YYYY-MM` in UTC. Defaults to the current month; a month that has not started is refused. Limit and expiry items, and each row's `limit_spent`, describe now whichever month is asked for. */
                 month?: string | null;
-                /** @description Whose spend to read: the caller's own, the workspace's, or the organization's. A scope the caller may not read falls back to `you`; `scope` in the answer says which was used. */
+                /** @description Whose spend to read: the caller's own, the workspace's, or the organization's. A member may read the workspace's while its managers share its totals with members. A scope the caller may not read falls back to `you`; `scope` in the answer says which was used. */
                 scope?: "you" | "workspace" | "organization";
             };
             header?: never;
@@ -27833,6 +27916,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SavedViewPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "workspaces-get_workspace_visibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceVisibility"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "workspaces-update_workspace_visibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceVisibilityUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceVisibility"];
                 };
             };
             /** @description Validation Error */

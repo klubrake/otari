@@ -510,7 +510,12 @@ export function readBudget({
     now,
     isManager,
     canSetBudgets,
-    spend,
+    // A null `spent` is a figure this caller may not read: unknown, not zero.
+    // A null `spend` (no budget) stays null, apart from undefined (not read yet).
+    spend:
+      spend?.spent === null
+        ? undefined
+        : spend && { ...spend, spent: spend.spent },
     ownBilled: scope === "you" ? billed : undefined,
     workspaceBilled,
     billed,
