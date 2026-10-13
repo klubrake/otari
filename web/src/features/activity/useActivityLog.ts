@@ -1,3 +1,4 @@
+import { useState } from "react"
 import type {
   UsageActivityGroup,
   UsageActivityGroups,
@@ -17,6 +18,7 @@ import {
   useLiveUsageCount,
   useUsageBatches,
   useUsageCount,
+  useUsageLatency,
   useUsageLogs,
   useUsagePreviews,
   useUsageRow,
@@ -188,7 +190,11 @@ export function useActivityLog({
   const count = useUsageCount(filters, isReady && !isGrouping, sort)
   const totals = useActivityTotals(aggregateFilters, grain, {
     enabled: isReady,
-    withP95: true,
+  })
+  // The totals line's p95, read apart so the rest of the line is not held
+  // behind its sort. The phone's line has no latency figure.
+  const latency = useUsageLatency(aggregateFilters, {
+    enabled: isReady && !isPhone,
   })
   // With no span the chart and the totals read one window, so the totals'
   // series draws the bars; a span narrows the totals, and the chart keeps the
@@ -328,10 +334,34 @@ export function useActivityLog({
     }
     if (!aggregatesMove) {
       void totals.refetch()
+      if (!isPhone) void latency.refetch()
       if (isGrouping) void groups.refetch()
     }
     if (time.hasSpan && !isOpen) void chart.refetch()
   }
+
+  // Totals and p95 arrive apart, so a p95 is set beside totals only once both
+  // answer for the same window. A live tick moves the window by seconds, which
+  // is not a change the reader made, so the last p95 for the same view stays up
+  // through it rather than blinking to a placeholder every ten seconds.
+  const p95View = JSON.stringify([
+    time.range,
+    url.get("start_date"),
+    url.get("end_date"),
+    { ...aggregateFilters, start_date: undefined, end_date: undefined },
+  ])
+  const freshP95 =
+    latency.data && !latency.isPlaceholderData && !totals.isPlaceholderData
+      ? { view: p95View, value: latency.data.p95_latency_ms ?? null }
+      : undefined
+  const [lastP95, setLastP95] = useState(freshP95)
+  if (
+    freshP95 &&
+    (lastP95?.view !== freshP95.view || lastP95.value !== freshP95.value)
+  ) {
+    setLastP95(freshP95)
+  }
+  const shownP95 = freshP95 ?? (lastP95?.view === p95View ? lastP95 : undefined)
 
   return {
     viewer,
@@ -357,7 +387,13 @@ export function useActivityLog({
     isFetchingRows: logs.isFetching,
     rowsUpdatedAt: logs.dataUpdatedAt,
     total: count.isSuccess ? count.data.total : null,
-    totals: totals.data?.totals,
+    totals: totals.data && {
+      ...totals.data.totals,
+      p95_latency_ms: shownP95?.value ?? null,
+    },
+    isLoadingTotals: !totals.data && !totals.error,
+    isLoadingP95:
+      !isPhone && !totals.error && !latency.error && shownP95 === undefined,
     series: chartRead.data?.series ?? [],
     spend: spend.data ?? undefined,
     inFlight:
@@ -408,6 +444,7 @@ export function useActivityLog({
       rowsRead.error ??
       count.error ??
       totals.error ??
+      latency.error ??
       chartRead.error ??
       policies.error ??
       previews.find((preview) => preview.error)?.error ??

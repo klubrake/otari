@@ -172,7 +172,7 @@ export function UsagePage() {
   // read here says whether it does.
   const isWindowEmpty =
     summary !== undefined && summary.totals.request_count === 0 && !isFiltered
-  const toolRows = summary?.by_tool ?? []
+  const toolRows = data.tools
   const clearAll = () => url.patch(CLEAR_FILTERS)
 
   return (
@@ -259,6 +259,7 @@ export function UsagePage() {
               previous={data.previous}
               windowLabel={data.preset.label}
               unpricedSearch={unpricedSearch}
+              isLoading={data.isLoadingSummary}
             />
           </div>
 
@@ -360,6 +361,7 @@ export function UsagePage() {
               onOpen={(row) => open(rowSearch(row))}
               canOpen={(row) => rowSearch(row) !== undefined}
               isLoading={data.isLoading}
+              isLoadingP95={data.isLoadingP95}
               emptyContent={
                 isFiltered ? (
                   <>
@@ -400,7 +402,7 @@ export function UsagePage() {
                     ? (tool) => open({ ...pageSearch, tool })
                     : undefined
                 }
-                isLoading={data.isLoading}
+                isLoading={data.isFetchingTools}
               />
             </section>
           ) : null}
