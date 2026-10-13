@@ -37,6 +37,7 @@ import {
   nextSort,
   placeUnranked,
   shareFigures,
+  totalSeries,
   valueFormatter,
 } from "./usageModel"
 import {
@@ -97,12 +98,12 @@ export function UsagePage() {
     filters: [...data.filters, ...data.idleFilters],
     viewer,
   })
-  const folded = foldSeries(
-    data.grouped,
-    metric,
-    withSubscription,
-    names.labelOf,
-  )
+  // Until this breakdown's series arrives (a switch, a first load, a failed
+  // read), the summary's totals hold the bars.
+  const folded =
+    !data.grouped && summary
+      ? totalSeries(summary.series, metric, withSubscription)
+      : foldSeries(data.grouped, metric, withSubscription, names.labelOf)
 
   // ---------- into Activity ----------
   const open = (search: DashboardSearch | undefined) => {
