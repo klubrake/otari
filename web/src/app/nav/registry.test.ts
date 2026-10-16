@@ -16,6 +16,7 @@ import {
   navContextForPath,
   navItemForPath,
   ORG_NAV_SECTIONS,
+  pageLabelForPath,
   visibleNavSections,
 } from "./registry"
 import type {
@@ -88,6 +89,7 @@ describe("nav registry", () => {
       "Org settings",
       "Settings",
       "Accounts",
+      "Hosted providers",
     ])
   })
 
@@ -124,7 +126,12 @@ describe("nav registry", () => {
     // list, not a loosened gate.
     expect(
       NAV_ITEMS.filter((item) => item.operatorOnly).map((item) => item.to),
-    ).toEqual(["/providers", "/settings", "/admin/accounts"])
+    ).toEqual([
+      "/providers",
+      "/settings",
+      "/admin/accounts",
+      "/admin/hosted-providers",
+    ])
   })
 
   it("puts each destination on exactly one rail", () => {
@@ -139,7 +146,7 @@ describe("nav registry", () => {
       DEPLOYMENT_NAV_SECTIONS.flatMap((section) =>
         section.items.map((item) => item.to),
       ),
-    ).toEqual(["/settings", "/admin/accounts"])
+    ).toEqual(["/settings", "/admin/accounts", "/admin/hosted-providers"])
     // And on neither of the others. A destination drawn on two rails would
     // resolve to whichever came first in NAV_ITEMS and be gated by that one.
     const others = [...NAV_SECTIONS, ...ORG_NAV_SECTIONS].flatMap((section) =>
@@ -147,6 +154,7 @@ describe("nav registry", () => {
     )
     expect(others).not.toContain("/settings")
     expect(others).not.toContain("/admin/accounts")
+    expect(others).not.toContain("/admin/hosted-providers")
   })
 
   it("keeps a deployment destination registered, and therefore gated", () => {
@@ -159,6 +167,7 @@ describe("nav registry", () => {
     for (const [to, surface, operatorOnly] of [
       ["/settings", "settings", "refused"],
       ["/admin/accounts", "admin", "unlisted"],
+      ["/admin/hosted-providers", "hosted_providers", "unlisted"],
     ] as const) {
       const item = navItemForPath(to)
       expect(item?.to).toBe(to)
@@ -290,7 +299,7 @@ describe("nav registry", () => {
     expect(overview?.capability).toBeUndefined()
   })
 
-  it("names the usage surface on both observability pages", () => {
+  it("names the surface each observability page reads", () => {
     // Activity and Usage are two views over /v1/usage, so they gate together on
     // the surface rather than each on a name of its own.
     const observability = NAV_SECTIONS.find(
@@ -340,6 +349,7 @@ describe("nav registry", () => {
     const standalone = [
       "admin",
       "budgets",
+      "hosted_providers",
       "keys",
       "models",
       "organization_guardrails",
@@ -750,5 +760,28 @@ describe("composeNavItems", () => {
       "Billing",
       "Invoices",
     ])
+  })
+})
+
+describe("pageLabelForPath", () => {
+  it("names a rail page and a chrome page from one place", () => {
+    expect(pageLabelForPath("/usage")).toBe("Usage")
+    expect(pageLabelForPath("/invitations")).toBe("Invitations")
+    expect(pageLabelForPath("/account")).toBe("Account")
+    expect(pageLabelForPath("/nowhere")).toBeUndefined()
+  })
+})
+
+describe("reachableWithoutOrganization", () => {
+  it("is declared by Overview alone in the base registry", () => {
+    const optedIn = [
+      ...NAV_SECTIONS,
+      ...ORG_NAV_SECTIONS,
+      ...DEPLOYMENT_NAV_SECTIONS,
+    ]
+      .flatMap((section) => section.items)
+      .filter((item) => item.reachableWithoutOrganization)
+      .map((item) => item.to)
+    expect(optedIn).toEqual(["/"])
   })
 })

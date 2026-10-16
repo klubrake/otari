@@ -53,6 +53,7 @@ from gateway.services.tools import (
     ToolUseBudget,
     is_capped_call,
     native_rendering,
+    owning_backend,
 )
 
 if TYPE_CHECKING:
@@ -178,23 +179,24 @@ async def _execute_tool_uses(
     for block in blocks:
         arguments = dict(block.input or {})
         capped = is_capped_call(budget, pool, block.name)
-        if capped and budget is not None and budget.exhausted():
+        if capped and budget is not None and budget.exhausted(block.name):
             out.append(_max_uses_exceeded_result(NativeCall(block.name, block.id, arguments), native))
             continue
+        owner = owning_backend(pool, block.name)
         try:
-            text = await pool.call_tool(block.name, arguments)
+            text = await owner.call_tool(block.name, arguments)
         except MaxToolIterationsExceeded:
             raise
         except Exception as exc:  # noqa: BLE001 — see docstring
-            detail = tool_failure_detail(pool, block.name)
+            detail = tool_failure_detail(owner, block.name)
             log_tool_failure(block.name, detail, exc)
             text = f"[tool error] {detail}"
         else:
             if capped and budget is not None:
-                budget.record(text)
+                budget.record(block.name, text)
         if native is not None and native.wants(block.name):
             call = NativeCall(block.name, block.id, arguments, failed=is_tool_error(text))
-            native.extend(_native_blocks_for_call(pool, call))
+            native.extend(_native_blocks_for_call(owner, call))
         out.append({"type": "tool_result", "tool_use_id": block.id, "content": text})
     return out
 
@@ -401,10 +403,11 @@ async def _execute_stream_owned_events(
         name = str(spec["name"])
         parsed_input = _parsed_stream_input(state, spec)
         capped = is_capped_call(budget, pool, name)
-        if capped and budget is not None and budget.exhausted():
+        if capped and budget is not None and budget.exhausted(name):
             results.append(_max_uses_exceeded_result(NativeCall(name, spec["id"], parsed_input), native))
             continue
-        mcp_backend = _as_mcp_tool_backend(pool)
+        owner = owning_backend(pool, name)
+        mcp_backend = _as_mcp_tool_backend(owner)
         server_name = _mcp_server_name(mcp_backend, name)
         activity_id: str | None = None
         if emit_mcp_activity and server_name is not None:
@@ -420,16 +423,16 @@ async def _execute_stream_owned_events(
                 yield event
 
         text, activity_content, is_error, transport_error = await _call_stream_tool(
-            pool,
+            owner,
             name,
             parsed_input,
             mcp_backend=mcp_backend if server_name is not None else None,
         )
         if capped and budget is not None:
-            budget.record(text)
+            budget.record(name, text)
         if native is not None and native.wants(name):
             call = NativeCall(name, spec["id"], parsed_input, failed=is_error)
-            native.extend(_native_blocks_for_call(pool, call))
+            native.extend(_native_blocks_for_call(owner, call))
         results.append({"type": "tool_result", "tool_use_id": spec["id"], "content": text})
 
         if activity_id is not None:

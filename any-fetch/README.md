@@ -48,7 +48,9 @@ A `FetchedPage`: the `url` asked for, the `final_url` after redirects, the `titl
 text hit its own, and the provider's own response as `raw`, which is left out of `repr`.
 
 A failed call raises `ProviderError` with the provider's name, a `tag` and the HTTP `status` when
-there is one. A missing key raises `MissingCredentialError`. All errors derive from
+there is one. A successful answer that lacks a field the provider documents, or carries one of
+the wrong type, raises it with the tag `unexpected_response`, so a change on the provider's side
+fails the call rather than degrading it. A missing key raises `MissingCredentialError`. All errors derive from
 `AnyFetchError`, and none carries a response body, a URL or a key.
 
 `ProviderMetadata` says what a host needs before calling: where the key comes from, the provider's
@@ -95,12 +97,15 @@ install_log_filter()
 any-fetch fake https://www.python.org/downloads/ --max-chars 200
 any-fetch fake https://www.python.org/downloads/ --json
 any-fetch fake https://www.python.org/downloads/ -o error=http_status -o error_status=404
+any-fetch --describe exa
 ```
 
 Keys come from the environment. `-o NAME=VALUE` passes a native option, its value read as JSON
 when it parses. `--json` prints the page as JSON without `raw`, `--raw` prints the provider's own
-response, and both together print the page with `raw` kept. `builtin` needs a host, so it fails
-from the command line.
+response, and both together print the page with `raw` kept. `--describe PROVIDER` prints the
+provider's metadata and each native option with its type, allowed values, default and
+description, then exits without fetching. `builtin` needs a host, so it fails from the command
+line, though `--describe builtin` works.
 
 ## Exa
 
@@ -119,9 +124,54 @@ only, so `text.maxCharacters` is refused. The other native options are `highligh
 
 A page Exa could not fetch comes back as `FetchedPage.error`, with Exa's tag, such as
 `CRAWL_NOT_FOUND`, and the page's HTTP status. A page with no text, which Exa reports as
-`CRAWL_EMPTY_CONTENT`, comes back empty rather than as an error. An answer with no page and no
-reason comes back as the error `no_result`. A failed call raises
+`CRAWL_EMPTY_CONTENT`, comes back empty rather than as an error. A failed call raises
 `ProviderError` with Exa's HTTP status and its `tag`, such as `INVALID_API_KEY`.
+
+Every field read from a successful answer is checked, so a change on Exa's side fails the call
+rather than degrading it. An answer without `results`, a `statuses` list without an entry for the
+URL whose `status` is `success` or `error`, a success without its page's `url` and `title`, any of these,
+`text` or `costDollars.total` of the wrong type, or a `publishedDate` that does not parse, raises
+`ProviderError` with the tag `unexpected_response`. So does an answer with no page and no reason.
+Exa documents `statuses` and a page's `text` as optional: without `statuses` the page in
+`results` is the answer, and a success without `text` is an empty page.
+Exa documents its cost as optional, so an answer without one reports none; the live tests check
+that it reports one.
+Fields the adapter does not read are ignored, so a field Exa adds breaks nothing.
+
+## Tabstack
+
+`tabstack` calls the [`POST /extract/markdown`](https://docs.tabstack.ai/api/resources/extract/methods/markdown)
+endpoint of Tabstack, Mozilla's web API for agents, with the key in a bearer header, read from
+`TABSTACK_API_KEY` when not passed. Its base URL is `https://api.tabstack.ai/v1`, or
+`TABSTACK_BASE_URL` when set, the variable Tabstack's own SDKs read.
+
+It fetches one page per call and returns its text as markdown. It always asks for the page's
+metadata as a field of its own, which is where `title` comes from, so the text carries no YAML
+front matter; `metadata` is therefore not an option. Tabstack has no length cap, so `max_chars`
+cuts the text it returns and sets `text_truncated`, and without `max_chars` the whole page comes
+back. The native options are `content` (`main`, the default, or `full`), `effort` (`min`,
+`standard`, the default, or `max`), `geo_target` (`{"country": "GB"}`) and `nocache`. Tabstack
+documents up to 15 seconds for a fetch at `standard` effort, the default `timeout`, and 15 to 60
+at `max`, which renders the page in a browser, so pass a `timeout` to match.
+
+`final_url` is the `url` Tabstack answered for, which is the URL as asked even after a redirect.
+`content_type` is empty and `published` is `None`: Tabstack does not say what the page was
+served as, and its `created_at` is not a date to rely on, since for a PDF it carries the PDF's
+own date format rather than the ISO 8601 it documents. The metadata stays in `raw`. Tabstack
+reports no cost, so `cost_source` is `none`.
+
+A failed call raises `ProviderError` with Tabstack's HTTP status and the tag `http_error`: its
+error body is a sentence that can quote the URL, so it is not read. Tabstack reports no error
+inside a successful answer. A page it cannot fetch fails the call, as does a URL it refuses, one
+whose host does not resolve (422) or that points at a private address (403). A page whose site
+answered with an error status, such as a 404, comes back as the text of that error page, since
+Tabstack does not say what status the site answered with.
+
+Every field read from a successful answer is checked. An answer whose `content` is not a string,
+or whose `url` is not a non-empty string, raises `ProviderError` with the tag
+`unexpected_response`, and so does a `metadata` that is not an object or a `metadata.title` that
+is not a string. Tabstack documents those two as optional, and without them the title is empty.
+Fields the adapter does not read are ignored, so a field Tabstack adds breaks nothing.
 
 ## The fake provider
 
@@ -158,3 +208,8 @@ skipped unless `ANY_FETCH_LIVE=1`:
 ```bash
 ANY_FETCH_LIVE=1 uv run pytest any-fetch/tests/test_live.py
 ```
+
+It checks the data as well as the call, against what its `EXPECTED` table says each provider must
+return, which a production provider joins as it joins the conformance scenarios. CI runs it weekly,
+on demand, and on a pull request that changes either library
+(`.github/workflows/otari-libs-live.yml`), with the keys from repository secrets.

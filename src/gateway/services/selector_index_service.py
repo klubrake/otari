@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import GatewayConfig
-from gateway.core.database import create_session
+from gateway.core.unit_of_work import UnitOfWork, create_unit_of_work_with_session
 from gateway.log_config import logger
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.services.catalog import (
@@ -111,6 +111,10 @@ def _identities(grouped: Iterable[ModelIdentity]) -> Identities:
     return {identity.id: (identity.key, identity.selectors) for identity in grouped}
 
 
+def _names(grouped: Iterable[ModelIdentity]) -> dict[str, str]:
+    return {identity.id: identity.name for identity in grouped}
+
+
 def _organization_rate(
     overrides: dict[str, list[OverridePeriod]],
     selector: str,
@@ -191,7 +195,7 @@ async def _organization_views(
             _row(seed, instance, rate(seed.selector, instance, seed.model_id)) for seed, instance in own_seeds
         ]
         views[organization_id] = build_organization_selectors(
-            deployment_rows, organization_rows, _identities(union.values())
+            deployment_rows, organization_rows, _identities(union.values()), _names(union.values())
         )
     return views
 
@@ -239,7 +243,8 @@ async def rebuild_selector_index(
         seed, _metadata, instance, _model_id, _provider_type = offering_seed(config, catalog, obj)
         seeds.append(seed)
         rows.append(_row(seed, instance, obj.pricing.input_price_per_million if obj.pricing is not None else None))
-    identities = _identities(group_offerings(seeds).values())
+    grouped = group_offerings(seeds).values()
+    identities = _identities(grouped)
     organizations = await _organization_views(db, config, catalog, rows, seeds)
     set_selector_index(
         build_selector_index(
@@ -247,6 +252,7 @@ async def rebuild_selector_index(
             identities,
             organizations=organizations,
             workspace_organization=await workspace_organizations(db) if organizations else {},
+            names=_names(grouped),
         )
     )
 
@@ -256,7 +262,7 @@ SELECTOR_INDEX_INTERVAL_SECONDS = 60.0
 
 async def run_selector_index_refresher(
     config: GatewayConfig,
-    resolve_model_provider: Callable[[AsyncSession], ModelProviderPort] | None = None,
+    resolve_model_provider: Callable[[AsyncSession, UnitOfWork], ModelProviderPort] | None = None,
     interval: float | None = None,
 ) -> None:
     """Keep the selector index current with discovery, pricing and providers.
@@ -266,13 +272,14 @@ async def run_selector_index_refresher(
     build is one catalog read, and a spelling that lags a minute behind a
     change is a far smaller hazard than one hook missed.
 
-    ``resolve_model_provider`` hands each tick the hosted port for its session,
-    the way a request resolves it; the composition root is not named here.
+    ``resolve_model_provider`` hands each tick the hosted port for its session
+    and Unit of Work, the way a request resolves it; the composition root is
+    not named here.
     """
     while True:
         try:
-            async with create_session() as session:
-                model_provider = None if resolve_model_provider is None else resolve_model_provider(session)
+            async with create_unit_of_work_with_session() as (session, uow):
+                model_provider = None if resolve_model_provider is None else resolve_model_provider(session, uow)
                 await rebuild_selector_index(session, config, model_provider=model_provider)
         except asyncio.CancelledError:
             raise

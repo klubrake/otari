@@ -138,7 +138,6 @@ export function pricingResponse(
     output_price_per_million: 0,
     cache_read_price_per_million: null,
     cache_write_price_per_million: null,
-    cache_write_1h_price_per_million: null,
     pricing_tiers: [],
     unit: "tokens",
     origin: "api",
@@ -151,9 +150,10 @@ export function pricingResponse(
 // The surface names a standalone gateway hosts, kept in step with
 // STANDALONE_SURFACES in src/gateway/api/routes/bootstrap.py. A test that wants
 // a surface hidden overrides `surfaces` rather than editing this.
-const STANDALONE_SURFACES = [
+export const STANDALONE_SURFACES = [
   "admin",
   "budgets",
+  "hosted_providers",
   "keys",
   "models",
   "organization_guardrails",
@@ -723,7 +723,6 @@ export function organizationPricingOverride(
     output_price_per_million: 10,
     cache_read_price_per_million: null,
     cache_write_price_per_million: null,
-    cache_write_1h_price_per_million: null,
     pricing_tiers: [],
     unit: "tokens",
     effective_from: "2026-01-01T00:00:00Z",
@@ -753,7 +752,6 @@ export function orgProviderModel(
     output_price_per_million: 10,
     cache_read_price_per_million: null,
     cache_write_price_per_million: null,
-    cache_write_1h_price_per_million: null,
     price_source: "defaults",
     pricing_id: null,
     unit: "tokens",
@@ -820,6 +818,8 @@ export function workspaceCodeExecutionPolicy(
     // policy: nothing configured, nothing narrowed.
     configured: false,
     sandbox_configured: true,
+    // What no policy means on this deployment: on, as on a default one.
+    default_enabled: true,
     // The default deployment has curated no images, so a workspace may pin
     // none. `available_tools` is what this deployment's sandbox serves, which
     // is one tool today, not the wider vocabulary a policy may be written in.
@@ -847,6 +847,8 @@ export function workspaceWebSearchConfig(
     // one: nothing configured, nothing narrowed.
     configured: false,
     web_search_configured: true,
+    // What no row means on this deployment: on, as on a default one.
+    default_enabled: true,
     enabled: true,
     max_results: null,
     purpose_hint: null,

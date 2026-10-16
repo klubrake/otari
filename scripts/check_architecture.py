@@ -494,7 +494,6 @@ ROUTE_DATABASE_IMPORT_BASELINE = (
     "gateway/api/routes/health.py",
     "gateway/api/routes/hooks.py",
     "gateway/api/routes/images.py",
-    "gateway/api/routes/invitations.py",
     "gateway/api/routes/keys.py",
     "gateway/api/routes/maintenance_mode.py",
     "gateway/api/routes/mcp.py",
@@ -507,7 +506,6 @@ ROUTE_DATABASE_IMPORT_BASELINE = (
     "gateway/api/routes/organization_pricing.py",
     "gateway/api/routes/organization_routing.py",
     "gateway/api/routes/organization_usage.py",
-    "gateway/api/routes/organizations.py",
     "gateway/api/routes/otlp.py",
     "gateway/api/routes/playground.py",
     "gateway/api/routes/pricing.py",
@@ -525,7 +523,6 @@ ROUTE_DATABASE_IMPORT_BASELINE = (
     "gateway/api/routes/users.py",
     "gateway/api/routes/workspace_activation.py",
     "gateway/api/routes/workspace_mcp_servers.py",
-    "gateway/api/routes/workspace_web_search.py",
 )
 
 
@@ -1530,6 +1527,10 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
         "repository": None,
         "baseline": ("gateway/services/tenancy/organization_guardrail_service.py",),
     },
+    "gateway.models.identity.OAuthIdentityLink": {
+        "repository": "gateway/repositories/identity/oauth_identity_link_repository.py",
+        "baseline": (),
+    },
     "gateway.models.inference.BatchRecord": {
         "repository": None,
         "baseline": (
@@ -1539,7 +1540,7 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
     },
     "gateway.models.inference.IdempotencyRecord": {
         "repository": "gateway/repositories/inference/idempotency_repository.py",
-        "baseline": (),
+        "baseline": ("gateway/repositories/tenancy/user_merge_repository.py",),
     },
     "gateway.models.platform.RuntimeSetting": {
         "repository": None,
@@ -1573,7 +1574,7 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
         "baseline": ("gateway/services/playground_service.py",),
     },
     "gateway.models.pricing.ModelPricing": {
-        "repository": None,
+        "repository": "gateway/repositories/pricing/model_pricing_repository.py",
         "baseline": (
             "gateway/api/routes/models.py",
             "gateway/api/routes/pricing.py",
@@ -1619,6 +1620,14 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
     "gateway.models.provider_keys.WorkspaceProviderModelRestriction": {
         "repository": "gateway/repositories/tenancy/org_provider_key_repository.py",
         "baseline": ("gateway/services/tenancy/org_provider_key_service.py",),
+    },
+    "gateway.models.providers.HostedProvider": {
+        "repository": "gateway/repositories/providers/hosted_provider_repository.py",
+        "baseline": (),
+    },
+    "gateway.models.providers.HostedProviderModel": {
+        "repository": "gateway/repositories/providers/hosted_provider_repository.py",
+        "baseline": (),
     },
     "gateway.models.providers.ModelAlias": {
         "repository": None,
@@ -1666,7 +1675,7 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
         ),
     },
     "gateway.models.tenancy.DashboardSession": {
-        "repository": None,
+        "repository": "gateway/repositories/identity/dashboard_session_repository.py",
         "baseline": ("gateway/services/dashboard_session_service.py",),
     },
     "gateway.models.tenancy.Invitation": {
@@ -1723,7 +1732,7 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
         "baseline": ("gateway/services/tenancy/webauthn_service.py",),
     },
     "gateway.models.tenancy.WebAuthnCredential": {
-        "repository": None,
+        "repository": "gateway/repositories/identity/webauthn_credential_repository.py",
         "baseline": ("gateway/services/tenancy/webauthn_service.py",),
     },
     "gateway.models.tenancy.Workspace": {
@@ -1793,6 +1802,14 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
         "repository": "gateway/repositories/tools/web_search_key_repository.py",
         "baseline": (),
     },
+    "gateway.models.traces.Trace": {
+        "repository": "gateway/repositories/traces/trace_repository.py",
+        "baseline": ("gateway/repositories/tenancy/user_merge_repository.py",),
+    },
+    "gateway.models.traces.TraceSpan": {
+        "repository": "gateway/repositories/traces/span_repository.py",
+        "baseline": (),
+    },
     "gateway.models.usage.AgentTelemetry": {
         "repository": None,
         "baseline": (
@@ -1809,7 +1826,7 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
         "baseline": (),
     },
     "gateway.models.usage.UsageLog": {
-        "repository": None,
+        "repository": "gateway/repositories/usage_and_telemetry/usage_log_repository.py",
         "baseline": (
             "gateway/api/routes/_passthrough.py",
             "gateway/api/routes/_pipeline.py",

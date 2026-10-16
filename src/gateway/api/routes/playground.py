@@ -76,8 +76,9 @@ from gateway.api.deps import (
     ApiKeyFormatPortDep,
     CurrentIdentity,
     FileServiceDep,
-    ModelProviderPortDep,
     PlaygroundToolOfferDep,
+    RequestSessionBillingPortDep,
+    RequestSessionModelProviderPortDep,
     ToolPortsDep,
     WorkspaceCodeExecutionPoliciesDep,
     get_config,
@@ -201,9 +202,10 @@ async def playground_chat_completions(
     files: FileServiceDep,
     config: Annotated[GatewayConfig, Depends(get_config)],
     log_writer: Annotated[LogWriter, Depends(get_log_writer)],
-    model_provider: ModelProviderPortDep,
+    model_provider: RequestSessionModelProviderPortDep,
     tool_ports: ToolPortsDep,
     key_format: ApiKeyFormatPortDep,
+    billing: RequestSessionBillingPortDep,
     workspace_id: Annotated[uuid.UUID | None, _WORKSPACE_QUERY] = None,
 ) -> ChatCompletion | Response:
     """Run one chat completion for the signed-in caller.
@@ -255,6 +257,9 @@ async def playground_chat_completions(
         config=config,
         log_writer=log_writer,
         model_provider=model_provider,
+        # On this route's own ``get_db`` session, which ``BillingPortDep`` is not:
+        # a deployment-paid charge has to land in the commit that settles on ``db``.
+        billing=billing,
         session_principal=principal,
     )
 
@@ -281,12 +286,12 @@ async def _dispatch_to_data_plane(
     a forward and which key; this is the request-shaped part: resolve the key,
     release the session, and forward.
 
-    The body is re-sent as validated, with ``exclude_unset`` so a default the data
-    plane would have chosen is not overridden by one chosen here. A field
-    ``ChatCompletionRequest`` does not model is dropped, exactly as it is dropped
-    on the standalone path, which runs the same validated object through the same
-    pipeline. Forwarding the raw body instead would make this deployment accept
-    what a standalone one refuses, and the two must answer alike.
+    The body is re-sent as validated, with ``exclude_unset``
+    so a default the data plane would have chosen is not overridden by one chosen
+    here. A field ``ChatCompletionRequest`` does not model is dropped, exactly as
+    it is dropped on the standalone path, which runs the same validated object
+    through the same pipeline. Forwarding the raw body instead would make this
+    deployment accept what a standalone one refuses, and the two must answer alike.
 
     The answer is streamed back whatever its shape. A non-streaming completion is
     one chunk of JSON carrying the upstream's own content type, so the page reads

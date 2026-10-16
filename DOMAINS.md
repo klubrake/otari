@@ -81,7 +81,8 @@ Who a person is and how they sign in: passwords, passkeys, OAuth, dashboard
 sessions, email verification and reset, the profile, and deployment-wide
 account administration.
 
-Its tables sit in `models/tenancy.py` today, which organizations holds.
+Its tables sit in `models/tenancy.py` today, which organizations holds, except
+`oauth_identity_link` in `models/identity.py`.
 
 ### organizations
 
@@ -126,15 +127,21 @@ them from there.
 ### pricing
 
 The deployment price list, organization rate overrides and upstream price
-snapshots.
+snapshots, and the rule that says what a rate bills: its unit chooses the meter
+it prices (`price_usage` in `services/pricing/`). Standalone settlement and a
+hybrid gateway's control plane both price through it.
 
-It also owns `models/pricing_schemas.py`.
+`services/pricing/` also holds the deployment price list's service, which is how
+another domain reads a current rate or stores one. It also owns
+`models/pricing_schemas.py`, and `UNIT_METERS` in `models/pricing.py`, the
+meters a count is reported under.
 
 ### providers
 
 Provider credentials: instances configured at runtime, organization-scoped
-provider keys, endpoints a workspace or a user owns, their health, and what a
-dispatch needs to reach a provider.
+provider keys, endpoints a workspace or a user owns, the hosted providers the
+deployment serves on its own credentials with the models it offers on them,
+their health, and what a dispatch needs to reach a provider.
 
 `tenancy/org_provider_key_service.py` has three divider sections (organization
 keys, workspace overrides, model restrictions) and splits along them.
@@ -249,6 +256,20 @@ workspace.
 Usage rows, the usage log writer, OTLP ingest and coding-agent telemetry.
 
 It also owns the route helper `api/routes/_billing_schemas.py`.
+
+### traces
+
+Agent traces: one agent session, its turns, and the spans inside them (each
+request, LLM round, routing attempt, guardrail check, MCP connection and tool
+call), as the gateway observed them or an instrumented agent sent them. Its
+records live in `types/traces.py`, and `TraceService` is its one service.
+
+A trace is a projection, written best-effort after accounting, and never a
+billing source: usage-and-telemetry keeps the usage rows and their cost.
+Inference, tools and usage-and-telemetry depend on traces; traces depends on
+none of them.
+
+Built in the target shape from the start.
 
 ### inference
 

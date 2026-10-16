@@ -39,7 +39,6 @@ from typing import Annotated, Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
@@ -51,6 +50,7 @@ from gateway.api.deps import (
     get_db,
     verify_master_key,
 )
+from gateway.api.routes._helpers import database_error
 from gateway.api.routes.keys import (
     _KEY_EXCEEDS_USER_DETAIL,
     KEY_SEARCH_DESC,
@@ -63,6 +63,7 @@ from gateway.api.routes.keys import (
 )
 from gateway.auth.models import hash_key, key_suffix
 from gateway.core.config import GatewayConfig
+from gateway.core.database import DATABASE_ERRORS
 from gateway.exceptions.organizations_exceptions import WorkspaceNotFoundError
 from gateway.models.api_keys import APIKey
 from gateway.models.tenancy import User as TenancyUser
@@ -148,8 +149,9 @@ async def _caller_context(db: AsyncSession, identity: TenancyUser) -> tuple[uuid
     """The organization this request acts in, and the owner id it acts as.
 
     The organization is the caller's own ``active_organization_id``, resolved
-    through ``get_active_organization_for_user`` so a pointer with no live
-    membership behind it refuses rather than resolving; moving between
+    through ``get_active_organization_for_user``: a pointer with no live
+    membership behind it falls back to the caller's oldest live membership, and
+    refuses when there is none; moving between
     organizations is ``POST /api/v1/organizations/me/switch``. The owner id is the
     identity's UUID rendered as a string, the attribution convention
     ``get_or_create_attribution_user`` documents.
@@ -274,12 +276,9 @@ async def create_own_key(
     db.add(db_key)
     try:
         await db.commit()
-    except SQLAlchemyError:
+    except DATABASE_ERRORS as exc:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error",
-        ) from None
+        raise database_error("create own key", exc) from None
     await db.refresh(db_key)
 
     if first_key and identity.email is not None:
@@ -384,12 +383,9 @@ async def update_own_key(
 
     try:
         await db.commit()
-    except SQLAlchemyError:
+    except DATABASE_ERRORS as exc:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error",
-        ) from None
+        raise database_error("update own key", exc) from None
     await db.refresh(key)
 
     return KeyInfo.from_model(key)
@@ -419,12 +415,9 @@ async def rotate_own_key(
 
     try:
         await db.commit()
-    except SQLAlchemyError:
+    except DATABASE_ERRORS as exc:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error",
-        ) from None
+        raise database_error("rotate own key", exc) from None
     await db.refresh(key)
 
     key_info = KeyInfo.from_model(key)
@@ -447,9 +440,6 @@ async def delete_own_key(
     await db.delete(key)
     try:
         await db.commit()
-    except SQLAlchemyError:
+    except DATABASE_ERRORS as exc:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error",
-        ) from None
+        raise database_error("delete own key", exc) from None

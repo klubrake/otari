@@ -61,6 +61,7 @@ from gateway.core.error_codes import PROVIDER_NOT_CONFIGURED
 from gateway.core.provider_params import FORBIDDEN_ENDPOINT_DEFAULTS
 from gateway.log_config import logger
 from gateway.services.alias_service import resolve_effective_alias
+from gateway.services.bedrock_gateway_auth import with_bedrock_read_timeout
 from gateway.services.catalog import resolve_catalog_offerings, resolve_catalog_selector, resolve_undated_selector
 from gateway.services.policy_store import resolve_effective_policy
 from gateway.services.tenancy.org_provider_key_service import cached_org_provider_kwargs
@@ -305,6 +306,50 @@ def otari_gateway_origin(api_base: Any) -> Any:
     return api_base
 
 
+def credential_ladder_empty(provider: LLMProvider, kwargs: dict[str, Any]) -> bool:
+    """Whether neither the ladder nor the provider's own variable produced anything for ``provider``.
+
+    :func:`credential_ladder_exhausted` without its **was needed** half: it also
+    holds for a provider any-llm calls with no key (vLLM, Ollama, Vertex AI,
+    Bedrock), which still goes out with nothing the deployment configured for
+    it, such as an endpoint or a region. The hosted-provider rung asks on this,
+    so a keyless hosted provider serves the request rather than any-llm's
+    default endpoint. The routing and error paths keep the narrower question.
+    """
+    return not _kwargs_carry_a_credential(kwargs) and not _provider_env_key_present(provider)
+
+
+@dataclass(frozen=True, slots=True)
+class HostedLookup:
+    """How a candidate may be served by the deployment's hosted providers.
+
+    ``own_name_only`` marks a provider any-llm calls with no key: it already
+    works as it stands, so only the hosted provider of its own name may serve
+    it, and a refusal, a failure or no answer leaves it as it was.
+    """
+
+    own_name_only: bool
+
+    def accepts(self, response_provider: str, instance: str) -> bool:
+        """Whether a hosted answer for ``response_provider`` may serve the ``instance`` candidate."""
+        return not self.own_name_only or response_provider == instance
+
+
+def hosted_lookup(provider: LLMProvider, kwargs: dict[str, Any], *, configured: bool) -> HostedLookup | None:
+    """Whether the hosted providers may serve a candidate the ladder resolved, or ``None``.
+
+    A candidate the ladder found a credential for is never asked about, so BYO
+    precedence holds. A keyless provider is asked only when nothing configures
+    it: a ``providers:`` entry keeps its own connection even when all it sets is
+    an SDK option such as Bedrock's region, which carries no credential.
+    """
+    if credential_ladder_exhausted(provider, kwargs):
+        return HostedLookup(own_name_only=False)
+    if configured or not credential_ladder_empty(provider, kwargs):
+        return None
+    return HostedLookup(own_name_only=True)
+
+
 # Instances already reported as ignored, so the warning is logged once per
 # instance per process rather than on every overlay refresh.
 _uncredentialed_warned: set[str] = set()
@@ -471,6 +516,9 @@ def get_provider_kwargs(
                 kwargs["client_args"] = {"region_name": region}
             elif isinstance(client_args, dict) and "region_name" not in client_args:
                 kwargs["client_args"] = {**client_args, "region_name": region}
+        client_args = kwargs.get("client_args")
+        if client_args is None or isinstance(client_args, Mapping):
+            kwargs["client_args"] = with_bedrock_read_timeout(client_args)
 
     max_retries = raw_config.get("max_retries") if raw_config is not None else None
     if max_retries is None:
@@ -629,13 +677,20 @@ class ResolvedProvider:
     """Display name the caller used when the selector was a configured alias.
 
     ``None`` for an ordinary selector. When set, response ``model`` fields are
-    relabeled to this so the underlying provider/model stays hidden; pricing,
-    budgets, and usage logs still key on the resolved target.
+    relabeled to this rather than naming the target; pricing, budgets, and usage
+    logs still key on the resolved target.
     """
     owned_endpoint: "OwnedEndpoint | None" = None
     """The caller's own endpoint when the selector named one, else ``None``.
 
     Its owner pays the upstream, so such a request never counts toward a budget.
+    """
+    deployment_paid: bool = False
+    """Whether ``kwargs`` carry a credential ``ModelProviderPort`` served.
+
+    The deployment owes the upstream bill for such a request, so it is gated on
+    and charged to its organization's funds through ``BillingPort``. Only the
+    hosted rung of the credential ladder sets it.
     """
 
     @property

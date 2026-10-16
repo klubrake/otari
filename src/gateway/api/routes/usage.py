@@ -1,7 +1,7 @@
 """Bulk usage log endpoint.
 
-Provides a single query interface over all usage logs with optional
-time range and user filters, ordered newest-first. Intended for
+Provides a single query interface over the usage logs of the caller's
+organization with optional time range and user filters, ordered newest-first. Intended for
 external systems that need to sync usage data (billing, analytics).
 """
 
@@ -16,6 +16,8 @@ from sqlalchemy import ColumnElement, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import (
+    CallerUsageScope,
+    CallerWorkspaceQuery,
     UsageReadServiceDep,
     get_config,
     get_db,
@@ -24,6 +26,7 @@ from gateway.api.deps import (
 )
 from gateway.api.routes._billing_schemas import ChargeLine, MeterMap
 from gateway.api.routes._disconnect import CancelOnDisconnectRoute
+from gateway.api.routes._helpers import retryable_on_database_outage
 from gateway.api.routes._usage_common import (
     COUNT_SORT_DESC,
     DIMENSIONS_DESC,
@@ -94,8 +97,8 @@ from gateway.services.usage_admin_service import (
 )
 
 # Two routers under one prefix, because the two planes that meet here
-# authenticate differently. Reading or amending every tenant's usage rows is
-# deployment-wide, so that gate is declared on the router and a route added later
+# authenticate differently. Reading or amending usage rows across an
+# organization is an operator's job, so that gate is declared on the router and a route added later
 # inherits it; ``POST /external-events`` files rows on behalf of the API key that
 # holds them, and ``GET /requests/{request_id}`` reads a key's own request back,
 # so both sit on a router of their own rather than a route-level override, and
@@ -289,6 +292,7 @@ class InFlightResponse(BaseModel):
 @operator_router.get("")
 async def list_usage(
     reads: UsageReadServiceDep,
+    usage_scope: CallerUsageScope,
     filters: Annotated[UsageListFilters, Depends()],
     sort: Annotated[UsageSort, Query(description=SORT_DESC)] = "timestamp",
     order: Annotated[SortOrder, Query(description=ORDER_DESC)] = "desc",
@@ -311,8 +315,8 @@ async def list_usage(
     Unix epoch seconds (numeric).
     """
     start_date, end_date = list_window(filters.start_date, filters.end_date, q=filters.q, sort=sort)
-    conditions = filters.conditions(start_date=start_date, end_date=end_date, scope=None)
-    rows = await reads.page(conditions, scope=None, sort=sort, order=order, skip=skip, limit=limit)
+    conditions = filters.conditions(start_date=start_date, end_date=end_date, scope=usage_scope)
+    rows = await reads.page(conditions, scope=usage_scope, sort=sort, order=order, skip=skip, limit=limit)
     return [UsageEntry.from_page_row(row) for row in rows]
 
 
@@ -336,13 +340,14 @@ async def ingest_external_usage(
     prompt/completion/tool field is rejected (422), not stored.
     """
     api_key, is_master_key = auth_result
-    return await ingest_external_events(
-        db,
-        request,
-        api_key=api_key,
-        is_master_key=is_master_key,
-        reject_user_mismatch=config.reject_user_mismatch,
-    )
+    with retryable_on_database_outage("external usage ingest"):
+        return await ingest_external_events(
+            db,
+            request,
+            api_key=api_key,
+            is_master_key=is_master_key,
+            reject_user_mismatch=config.reject_user_mismatch,
+        )
 
 
 class RequestSettlement(BaseModel):
@@ -420,6 +425,7 @@ async def get_request_settlement(
 @operator_router.get("/count")
 async def count_usage(
     db: Annotated[AsyncSession, Depends(get_db)],
+    usage_scope: CallerUsageScope,
     filters: Annotated[UsageCountFilters, Depends()],
     sort: Annotated[UsageSort, Query(description=COUNT_SORT_DESC)] = "timestamp",
 ) -> UsageCount:
@@ -437,7 +443,7 @@ async def count_usage(
     budget-exempt gateway rows it omits.
     """
     start_date, end_date = list_window(filters.start_date, filters.end_date, q=filters.q, sort=sort)
-    conditions = filters.conditions(start_date=start_date, end_date=end_date, scope=None)
+    conditions = filters.conditions(start_date=start_date, end_date=end_date, scope=usage_scope)
     if filters.counts_toward_budget is False:
         # counts_toward_budget alone does not say "imported": gateway traffic on an
         # exclude_from_budget key is also False, so without this the count would
@@ -492,6 +498,7 @@ async def list_in_flight(raw_request: Request) -> InFlightResponse:
 async def delete_usage_rows(
     request: UsageDeleteRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_ids: CallerWorkspaceQuery,
 ) -> UsageDeleteResult:
     """Delete imported usage rows by explicit ids or by filter (standalone).
 
@@ -502,13 +509,14 @@ async def delete_usage_rows(
     the spend ledger (``users.spend``) are untouched, so a delete can never desync a
     budget. Master-key only.
     """
-    return await delete_usage(db, request)
+    return await delete_usage(db, request, workspace_ids=workspace_ids)
 
 
 @operator_router.post("/set-price")
 async def set_usage_price_rows(
     request: UsageSetPriceRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_ids: CallerWorkspaceQuery,
 ) -> UsageSetPriceResult:
     """Set the cost of imported usage rows from manual per-1M rates (standalone).
 
@@ -519,12 +527,13 @@ async def set_usage_price_rows(
     configured pricing). Only imported rows (``counts_toward_budget = false``) are
     touched, so ``users.spend`` is never affected. Master-key only.
     """
-    return await set_usage_price(db, request)
+    return await set_usage_price(db, request, workspace_ids=workspace_ids)
 
 
 @operator_router.get("/summary")
 async def usage_summary(
     reads: UsageReadServiceDep,
+    usage_scope: CallerUsageScope,
     filters: Annotated[UsageReadFilters, Depends()],
     bucket: UsageBucketGrain = Query(default="day", description=SUMMARY_BUCKET_DESC),
     dimensions: list[SummaryDimension] | None = Query(default=None, description=DIMENSIONS_DESC),
@@ -562,7 +571,7 @@ async def usage_summary(
     return await reads.summary(
         start=start,
         end=end,
-        conditions=filters.conditions(start_date=start, end_date=end, scope=None),
+        conditions=filters.conditions(start_date=start, end_date=end, scope=usage_scope),
         status=filters.status,
         bucket=bucket,
         dimensions=dimensions,
@@ -578,6 +587,7 @@ async def usage_summary(
 @operator_router.get("/latency")
 async def usage_latency(
     reads: UsageReadServiceDep,
+    usage_scope: CallerUsageScope,
     filters: Annotated[UsageReadFilters, Depends()],
     group_by: Annotated[BreakdownDimension | None, Query(description=LATENCY_GROUP_BY_DESC)] = None,
     rank_by: Annotated[UsageBreakdownRankBy, Query(description=RANK_BY_DESC)] = "cost",
@@ -593,7 +603,7 @@ async def usage_latency(
     return await reads.latency(
         start=start,
         end=end,
-        conditions=filters.conditions(start_date=start, end_date=end, scope=None),
+        conditions=filters.conditions(start_date=start, end_date=end, scope=usage_scope),
         status=filters.status,
         group_by=group_by,
         rank_by=rank_by,
@@ -604,6 +614,7 @@ async def usage_latency(
 @operator_router.get("/tools")
 async def usage_tools(
     reads: UsageReadServiceDep,
+    usage_scope: CallerUsageScope,
     filters: Annotated[UsageReadFilters, Depends()],
 ) -> UsageTools:
     """Calls, failures, spend and requests per gateway-run tool over the window.
@@ -614,13 +625,14 @@ async def usage_tools(
     """
     start, end = summary_window(filters, grid=None)
     return await reads.tools(
-        start=start, end=end, conditions=filters.conditions(start_date=start, end_date=end, scope=None)
+        start=start, end=end, conditions=filters.conditions(start_date=start, end_date=end, scope=usage_scope)
     )
 
 
 @operator_router.get("/series")
 async def usage_series(
     reads: UsageReadServiceDep,
+    usage_scope: CallerUsageScope,
     filters: Annotated[UsageReadFilters, Depends()],
     group_by: SeriesGroupBy = Query(description=SERIES_GROUP_BY_DESC),
     bucket: Bucket = Query(default="day", description="Time-series granularity: 'hour' or 'day'"),
@@ -642,7 +654,7 @@ async def usage_series(
     return await reads.grouped_series(
         start=start,
         end=end,
-        conditions=filters.conditions(start_date=start, end_date=end, scope=None),
+        conditions=filters.conditions(start_date=start, end_date=end, scope=usage_scope),
         status=filters.status,
         bucket=bucket,
         group_by=group_by,
@@ -653,6 +665,7 @@ async def usage_series(
 @operator_router.get("/groups")
 async def usage_activity_groups(
     reads: UsageReadServiceDep,
+    usage_scope: CallerUsageScope,
     filters: Annotated[UsageReadFilters, Depends()],
     group_by: ActivityGroupBy = Query(description=GROUP_BY_DESC),
     search: Annotated[str | None, Query(max_length=MAX_SEARCH_LENGTH, description=GROUP_SEARCH_DESC)] = None,
@@ -671,7 +684,7 @@ async def usage_activity_groups(
     ``include_absorbed=false`` to match ``requests``.
     """
     start, end = resolve_window(filters.start_date, filters.end_date)
-    conditions = filters.conditions(start_date=start, end_date=end, scope=None)
+    conditions = filters.conditions(start_date=start, end_date=end, scope=usage_scope)
     return await reads.activity_groups(
         group_by=group_by,
         start=start,

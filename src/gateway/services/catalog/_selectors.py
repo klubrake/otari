@@ -92,6 +92,8 @@ class OrganizationSelectors:
     undated: dict[str, str] = field(default_factory=dict)
     """``instance:<name>`` to the one dated build of it the organization serves, matched case-sensitively."""
 
+    names: dict[str, str] = field(default_factory=dict)
+
 
 @dataclass(frozen=True)
 class SelectorIndex:
@@ -111,6 +113,9 @@ class SelectorIndex:
 
     model_selectors: dict[str, str] = field(default_factory=dict)
     """Full selector to the pinned spelling the catalog shows for it, where it is the offering that spelling reaches."""
+
+    names: dict[str, str] = field(default_factory=dict)
+    """Catalog ID, lowercased, to the model's display name."""
 
     organizations: dict[uuid.UUID, OrganizationSelectors] = field(default_factory=dict)
     """Each organization's own view, keyed by organization."""
@@ -190,6 +195,34 @@ def resolve_undated_selector(model_selector: str, *, workspace_id: uuid.UUID | N
     return view.undated.get(model_selector)
 
 
+@dataclass(frozen=True)
+class CatalogModel:
+    """One model a catalog ID reaches, with its offerings in the order a request tries them."""
+
+    id: str
+    name: str
+    offerings: tuple[str, ...]
+
+
+def catalog_models(*, organization_id: uuid.UUID | None = None) -> list[CatalogModel]:
+    """Every model a catalog ID reaches for this organization's callers, by ID.
+
+    Its offerings are :func:`resolve_catalog_offerings`'s answer for the ID, so
+    they are the order a request sent by catalog ID tries them in.
+    """
+    index = _index
+    view = _organization_view(index, None, organization_id)
+    slugs = set(index.offerings) | (set(view.offerings) if view is not None else set())
+    models: list[CatalogModel] = []
+    for slug in sorted(slugs):
+        offerings = resolve_catalog_offerings(slug, organization_id=organization_id)
+        if not offerings:
+            continue
+        name = (view.names.get(slug) if view is not None else None) or index.names.get(slug) or slug
+        models.append(CatalogModel(id=slug, name=name, offerings=offerings))
+    return models
+
+
 def resolve_catalog_offerings(
     model_selector: str,
     *,
@@ -198,29 +231,49 @@ def resolve_catalog_offerings(
 ) -> tuple[str, ...]:
     """Every offering a catalog ID stands for, best first, or an empty tuple.
 
-    The first is the one :func:`resolve_catalog_selector` answers.
-    Empty for a pinned spelling, for a selector that already names an offering, and for one the index does not know.
+    A catalog ID spelled like the legacy ``provider/model`` of one of its own offerings
+    (``openai/gpt-4o`` while ``openai:gpt-4o`` is served) lists that offering first,
+    then the others in their usual order.
+    Empty for a pinned spelling, for a full selector, for a legacy spelling of an offering of another model,
+    and for a selector the index does not know.
     """
     index = _index
     view = _organization_view(index, workspace_id, organization_id)
-    if _names_an_offering(index, view, model_selector):
+    if _names_verbatim(index, view, model_selector):
         return ()
     spelling = model_selector.lower()
-    if view is not None and (offerings := view.offerings.get(spelling)) is not None:
+    offerings = view.offerings.get(spelling) if view is not None else None
+    if offerings is None:
+        offerings = index.offerings.get(spelling, ())
+    named = _legacy_offering(index, view, model_selector)
+    if named is None:
         return offerings
-    return index.offerings.get(spelling, ())
+    if named not in offerings:
+        return ()
+    return (named, *(offering for offering in offerings if offering != named))
+
+
+def _names_verbatim(index: SelectorIndex, view: OrganizationSelectors | None, model_selector: str) -> bool:
+    return model_selector in index.full or (view is not None and model_selector in view.full)
+
+
+def _legacy_offering(index: SelectorIndex, view: OrganizationSelectors | None, model_selector: str) -> str | None:
+    """The offering ``prefix/rest`` names in the legacy spelling, ``prefix:rest``, where it is served."""
+    prefix, slash, rest = model_selector.partition("/")
+    if not slash:
+        return None
+    named = f"{prefix}:{rest}"
+    return named if _names_verbatim(index, view, named) else None
 
 
 def _names_an_offering(index: SelectorIndex, view: OrganizationSelectors | None, model_selector: str) -> bool:
-    """Whether ``model_selector`` already names an offering, so no catalog spelling applies to it."""
-    org_full = view.full if view is not None else frozenset()
-    if model_selector in index.full or model_selector in org_full:
-        return True
-    # ``openai/gpt-4o`` is both the legacy spelling of an offering on the
-    # ``openai`` instance and, read as vendor/model, a catalog id. Where the
-    # instance really serves that id, the caller meant the offering.
-    prefix, slash, rest = model_selector.partition("/")
-    return bool(slash) and (f"{prefix}:{rest}" in index.full or f"{prefix}:{rest}" in org_full)
+    """Whether ``model_selector`` already names an offering, so no catalog spelling rewrites it.
+
+    ``openai/gpt-4o`` is both the legacy spelling of an offering on the ``openai`` instance and,
+    read as vendor/model, a catalog id. Where the instance serves that id, the name resolves to the offering,
+    and only a failover plan (:func:`resolve_catalog_offerings`) reaches the model's other offerings.
+    """
+    return _names_verbatim(index, view, model_selector) or _legacy_offering(index, view, model_selector) is not None
 
 
 def short_selector_for(full_selector: str, *, organization_id: uuid.UUID | None = None) -> str | None:
@@ -297,6 +350,7 @@ def build_selector_index(
     *,
     organizations: Mapping[uuid.UUID, OrganizationSelectors] | None = None,
     workspace_organization: Mapping[uuid.UUID, uuid.UUID] | None = None,
+    names: Mapping[str, str] | None = None,
 ) -> SelectorIndex:
     """Fold the deployment's offerings and the grouped identities into an index.
 
@@ -307,6 +361,7 @@ def build_selector_index(
 
     A catalog ID whose vendor is also a provider (``openai/gpt-4o``) lists that provider's priced offerings first,
     because the caller who names OpenAI's model while OpenAI serves it means OpenAI's price.
+    ``names`` gives each catalog ID its display name.
     """
     maps = _build_maps(offerings, identities)
     return SelectorIndex(
@@ -315,6 +370,7 @@ def build_selector_index(
         models=maps.models,
         offerings=maps.offerings,
         model_selectors=maps.model_selectors,
+        names={slug: name for slug, name in (names or {}).items() if slug in maps.offerings},
         organizations=dict(organizations or {}),
         workspace_organization=dict(workspace_organization or {}),
     )
@@ -324,6 +380,7 @@ def build_organization_selectors(
     deployment: Sequence[OfferingRow],
     organization: Sequence[OfferingRow],
     identities: Identities,
+    names: Mapping[str, str] | None = None,
 ) -> OrganizationSelectors:
     """One organization's view: the union of both offering sets, kept where the organization's touch it.
 
@@ -349,4 +406,5 @@ def build_organization_selectors(
             selector: spelling for selector, spelling in maps.model_selectors.items() if selector in touched_selectors
         },
         undated=undated_spellings(own),
+        names={slug: name for slug, name in (names or {}).items() if slug in touched},
     )

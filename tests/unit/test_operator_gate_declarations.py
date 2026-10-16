@@ -27,17 +27,21 @@ from fastapi.routing import APIRoute
 import gateway.api.routes
 from gateway.api.deps import (
     require_deployment_operator,
+    require_deployment_operator_or_absent,
     verify_api_key_or_master_key,
     verify_catalog_reader,
     verify_catalog_reader_or_public,
     verify_master_key,
+    verify_service_key,
 )
 from gateway.api.routes import (
     agent_telemetry,
     aliases,
     budgets,
     catalog,
+    end_users,
     hooks,
+    hosted_providers,
     keys,
     mail,
     maintenance_mode,
@@ -89,6 +93,8 @@ _DEPLOYMENT_WIDE_ROUTERS: list[tuple[str, APIRouter]] = [
 # to be added by hand.
 _NON_OPERATOR_ROUTERS: list[tuple[str, APIRouter, Callable[..., Any]]] = [
     ("catalog", catalog.router, verify_catalog_reader_or_public),
+    ("end_users", end_users.router, verify_service_key),
+    ("end_users.budgets", end_users.budgets_router, verify_service_key),
     ("models.catalog", models.catalog_router, verify_catalog_reader),
     ("pricing.catalog", pricing.catalog_router, verify_catalog_reader),
     ("providers.catalog", providers.catalog_router, verify_catalog_reader),
@@ -98,6 +104,9 @@ _NON_OPERATOR_ROUTERS: list[tuple[str, APIRouter, Callable[..., Any]]] = [
     ("tools", tools.router, verify_catalog_reader),
     ("usage.key", usage.key_router, verify_api_key_or_master_key),
     ("hooks", hooks.router, hooks.verify_hook_caller),
+    # Operator-only, with the 404 the admin surface answers rather than the 403:
+    # the deployment's own credentials are not a surface to confirm to a member.
+    ("hosted_providers", hosted_providers.router, require_deployment_operator_or_absent),
 ]
 
 
@@ -131,6 +140,7 @@ _UNGATED_ROUTERS: dict[str, str] = {
     "auth_session.router": _PUBLIC_AUTH,
     "auth_signup.router": _PUBLIC_AUTH,
     "auth_webauthn.router": _PUBLIC_AUTH,
+    "identity.router": _PUBLIC_AUTH,
     "invitations.router": "the invitation token is the credential, and the invitee has no account yet",
     "bootstrap.router": "unauthenticated on purpose: how a browser learns which mode it reached",
     "health.router": "unauthenticated liveness and readiness",
@@ -154,6 +164,7 @@ _ROUTER_LEVEL_GATES: frozenset[Callable[..., Any]] = frozenset(
         verify_catalog_reader,
         verify_catalog_reader_or_public,
         verify_master_key,
+        verify_service_key,
     }
 )
 

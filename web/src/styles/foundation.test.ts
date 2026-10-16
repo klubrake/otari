@@ -735,6 +735,7 @@ describe("a table is a region, not a card", () => {
     "otari-provider-keys-table",
     "otari-providers-table",
     "otari-routing-table",
+    "otari-sessions-table",
     "otari-workspaces-table",
   ]
 
@@ -795,6 +796,17 @@ describe("a table is a region, not a card", () => {
     expect(
       offenders,
       "delete the declaration; `.otari-table` is what decides these three",
+    ).toEqual([])
+  })
+
+  it("names a body cell's column by data-column, never by data-key", () => {
+    // A body cell's `data-key` is a generated collection key (`react-aria-5`),
+    // so a rule keyed on it matches nothing and a pinned header leaves its
+    // cells to scroll away underneath it.
+    const bare = CSS.replace(/\/\*[\s\S]*?\*\//g, "")
+    expect(
+      bare.match(/\.table__cell\[data-key=[^\]]*\]/g) ?? [],
+      "use `.table__cell[data-column=…]`, which DataTable stamps on every cell",
     ).toEqual([])
   })
 })
@@ -1197,15 +1209,6 @@ describe("content text wears a type role", () => {
     [
       "features/invitations/AcceptInvitationPage.tsx",
       "the centered next-step prose, page-referent",
-    ],
-    // The named edge: a note about what an action will do, in the row with
-    // the button, rather than about how to operate a control. Two entries for
-    // one ruling, because the form moved to its own module and took four of the
-    // five notes with it; the page kept the candidate cap.
-    ["features/routing/PolicyForm.tsx", "consequence notes in the button row"],
-    [
-      "features/routing/RoutingPage.tsx",
-      "the candidate cap, a consequence note in the button row",
     ],
   ]
   const RULED = new Map(CAPTION_SIZE_IS_RULED)

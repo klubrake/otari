@@ -3,21 +3,23 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import (
     CallerOrganization,
     TelemetryStoragePortDep,
+    TraceServiceDep,
     get_config,
     get_db,
     get_unit_of_work,
     require_deployment_operator,
 )
+from gateway.api.routes._helpers import database_error
 from gateway.core.config import GatewayConfig
+from gateway.core.database import DATABASE_ERRORS
 from gateway.core.surface import Surface
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.log_config import logger
@@ -34,6 +36,7 @@ from gateway.services.model_access import validate_allowed_models
 from gateway.services.policy_store import refresh_policy_cache
 from gateway.services.providers import refresh_provider_endpoint_cache
 from gateway.services.tenancy.user_merge import SameUserMergeError, UserMergeError, merge_users
+from gateway.services.traces import TraceWriter
 
 router = APIRouter(
     prefix="/users",
@@ -279,12 +282,9 @@ async def create_user(
 
     try:
         await db.commit()
-    except SQLAlchemyError:
+    except DATABASE_ERRORS as exc:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error",
-        ) from None
+        raise database_error("create user", exc) from None
     await db.refresh(user)
 
     return UserResponse.from_model(user)
@@ -389,12 +389,9 @@ async def update_user(
 
     try:
         await db.commit()
-    except SQLAlchemyError:
+    except DATABASE_ERRORS as exc:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error",
-        ) from None
+        raise database_error("update user", exc) from None
     await db.refresh(user)
 
     return UserResponse.from_model(user)
@@ -402,12 +399,14 @@ async def update_user(
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(
+    request: Request,
     user_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
     storage: TelemetryStoragePortDep,
+    traces: TraceServiceDep,
     organization_id: CallerOrganization,
 ) -> None:
-    """Delete a user in the caller's organization, and erase their telemetry."""
+    """Delete a user in the caller's organization, and erase their telemetry and agent traces."""
     user = await _load_user_in_organization(db, user_id, organization_id)
 
     # Explicit erasure, not a database ON DELETE cascade: this endpoint
@@ -437,6 +436,19 @@ async def delete_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not erase this user's telemetry; the user was not deleted",
         ) from None
+    # Agent traces follow the same rule, for the same reason. The trace writer
+    # stops writing the user's traces first, or it would write some after the purge.
+    trace_writer: TraceWriter | None = getattr(request.app.state, "trace_writer", None)
+    if trace_writer is not None:
+        await trace_writer.erase_user(user_id)
+    try:
+        await traces.purge_user(user_id)
+    except Exception:
+        logger.exception("Trace erasure failed for user %s; user was not deleted", user_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not erase this user's agent traces; the user was not deleted",
+        ) from None
 
     await db.execute(
         update(APIKey)
@@ -448,12 +460,9 @@ async def delete_user(
 
     try:
         await db.commit()
-    except SQLAlchemyError:
+    except DATABASE_ERRORS as exc:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error",
-        ) from None
+        raise database_error("delete user", exc) from None
 
 
 @router.post("/{user_id}/merge")
@@ -484,11 +493,8 @@ async def merge_user(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
     except UserMergeError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error",
-        ) from None
+    except DATABASE_ERRORS as exc:
+        raise database_error("merge users", exc) from None
     await _refresh_caches_after_merge(db, uow, moved)
     return MergeUserResponse(user=UserResponse.from_model(target), moved=moved)
 
@@ -506,7 +512,7 @@ async def _refresh_caches_after_merge(db: AsyncSession, uow: UnitOfWork, moved: 
             await refresh_policy_cache(db)
         if moved.get("provider_endpoints"):
             await refresh_provider_endpoint_cache(uow)
-    except SQLAlchemyError:
+    except DATABASE_ERRORS:
         logger.warning("Cache refresh failed after merging users; converges on the next background refresh")
 
 

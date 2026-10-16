@@ -10,7 +10,7 @@ No hold takes a row lock, so a refusal releases the holds already taken.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -104,17 +104,6 @@ class ApplicableBudget:
         return _SCOPE_SUBJECT.get(self.scope_type, "Budget")
 
 
-def _as_utc(value: datetime | None) -> datetime | None:
-    """Read a stored timestamp as UTC.
-
-    SQLite hands datetimes back naive, and comparing one to an aware ``now``
-    raises. A stored value is always the UTC it was written as, so say so.
-    """
-    if value is None or value.tzinfo is not None:
-        return value
-    return value.replace(tzinfo=UTC)
-
-
 def _identity_uuid(user_id: str) -> uuid.UUID | None:
     """The tenancy identity behind a billed user, when there is one.
 
@@ -204,7 +193,7 @@ async def roll_ended_windows(
     current window with fresh counters, not in each window it slept through.
     """
     for ceiling in ceilings:
-        if (period_end := _as_utc(ceiling.period_end)) is None or now < period_end:
+        if ceiling.period_end is None or now < ceiling.period_end:
             continue
         budget_id, alignment = ceiling.scoped_budget_id, ceiling.reset_alignment
         try:
@@ -223,29 +212,12 @@ async def roll_ended_windows(
         await ceilings_repository.roll_period(budget_id, now=now, period_start=period_start, period_end=next_period_end)
 
 
-async def applicable_budgets(
-    db: AsyncSession,
-    *,
-    user_id: str,
-    scope: BudgetScopeRequest,
-) -> tuple[ApplicableBudget, ...]:
-    """Every ceiling this request must pass, in reservation order.
-
-    A ceiling applies when its identity is one the request bills to AND it is
-    either aggregate (no provider) or narrowed to this request's provider. A
-    window that has run out is rolled here, before the reservation reads the
-    counters, so a request at the boundary is gated on the new period.
-    """
-    ceilings = await get_scope_ceilings(db, user_id=user_id, scope=scope)
-    return await roll_and_list_applicable(db, get_provider_ceilings(ceilings, scope.provider_instance))
-
-
 async def roll_and_list_applicable(
     db: AsyncSession, ceilings: Sequence[ApplicableCeiling]
 ) -> tuple[ApplicableBudget, ...]:
     """Return ``ceilings`` as the budgets a request must pass, in order, after rolling any window that has ended."""
     now = datetime.now(UTC)
-    if any((period_end := _as_utc(ceiling.period_end)) is not None and now >= period_end for ceiling in ceilings):
+    if any(ceiling.period_end is not None and now >= ceiling.period_end for ceiling in ceilings):
         await roll_ended_windows(ScopedBudgetRepository(db), ceilings, now)
         await db.commit()
     return tuple(to_applicable_budget(ceiling) for ceiling in ceilings)
@@ -421,7 +393,7 @@ def refused_axis(
             new_request=new_request,
         )
         if blocked is not None:
-            return blocked
+            return replace(blocked, resets_at=usage.period_end)
     return BlockedAxis("budget")
 
 
@@ -472,7 +444,6 @@ async def settle(
 __all__ = [
     "ApplicableBudget",
     "BudgetScopeRequest",
-    "applicable_budgets",
     "blocked_axis",
     "get_provider_ceilings",
     "get_scope_ceilings",

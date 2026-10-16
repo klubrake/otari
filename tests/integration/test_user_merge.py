@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from sqlmodel import col
 
@@ -28,6 +28,7 @@ from gateway.models.tenancy import OrganizationMember, Workspace
 from gateway.models.tenancy import User as Identity
 from gateway.models.usage import UsageLog
 from gateway.models.users import User
+from gateway.repositories.tenancy.user_merge_repository import REFERENCING
 from gateway.services.tenancy.provisioning_service import DEFAULT_WORKSPACE_NAME
 
 LEGACY = "klubrake"
@@ -302,3 +303,20 @@ def test_a_merge_moves_a_users_own_provider_endpoint(
     assert response.status_code == status.HTTP_200_OK, response.text
     assert response.json()["moved"]["provider_endpoints"] == 1
     assert _owners(db_session_factory, ProviderEndpoint) == [world.account]
+
+
+def test_every_table_that_references_a_user_is_moved(db_session: Session) -> None:
+    """A table that gains a foreign key to ``users`` is moved by a merge, or this fails."""
+    referencing = {
+        f"{table}.{column}"
+        for table, column in db_session.execute(
+            text(
+                "SELECT conrelid::regclass::text, a.attname FROM pg_constraint c "
+                "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) "
+                "WHERE c.contype = 'f' AND c.confrelid = 'users'::regclass"
+            )
+        )
+    }
+    moved = {f"{model.__tablename__}.user_id" for model in REFERENCING}
+    # End users point at the user who bills them; reassign moves that column itself.
+    assert referencing - moved == {"users.parent_user_id"}

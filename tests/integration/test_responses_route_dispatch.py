@@ -535,10 +535,10 @@ def test_web_search_max_uses_reaches_the_responses_tool_loop(
     budget = budgets_seen[0]
     assert budget is not None, "the cap never reached the loop"
     # Arrived by value, not just as "some budget": spending it exactly twice exhausts it.
-    budget.record("results")
-    assert not budget.exhausted()
-    budget.record("results")
-    assert budget.exhausted()
+    budget.record("web_search", "results")
+    assert not budget.exhausted("web_search")
+    budget.record("web_search", "results")
+    assert budget.exhausted("web_search")
 
 
 def test_invalid_web_search_max_uses_is_rejected_by_this_format(
@@ -648,49 +648,6 @@ def test_code_execution_without_sandbox_env_returns_400(
     )
     assert resp.status_code == 400
     assert "OTARI_SANDBOX_URL" in resp.json()["detail"]
-
-
-def test_code_execution_combined_with_mcp_servers_returns_400(
-    client: TestClient,
-    api_key_header: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("OTARI_SANDBOX_URL", "http://127.0.0.1:9999/sandbox")
-    resp = client.post(
-        f"{API_ROOT}/responses",
-        json={
-            "model": _MODEL,
-            "input": "hi",
-            "tools": [{"type": "otari_code_execution"}],
-            "mcp_servers": [{"name": "x", "url": "http://127.0.0.1:9999/mcp"}],
-        },
-        headers=api_key_header,
-    )
-    assert resp.status_code == 400
-    assert "otari_code_execution and mcp_servers" in resp.json()["detail"]
-
-
-def test_web_search_combined_with_sandbox_returns_400(
-    client: TestClient,
-    api_key_header: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("OTARI_SANDBOX_URL", "http://127.0.0.1:9999/sandbox")
-    monkeypatch.setenv("OTARI_WEB_SEARCH_URL", "http://127.0.0.1:9999/search")
-    resp = client.post(
-        f"{API_ROOT}/responses",
-        json={
-            "model": _MODEL,
-            "input": "hi",
-            "tools": [
-                {"type": "otari_code_execution"},
-                {"type": "otari_web_search"},
-            ],
-        },
-        headers=api_key_header,
-    )
-    assert resp.status_code == 400
-    assert "cannot be combined with otari_code_execution" in resp.json()["detail"]
 
 
 # ---------- gateway-side runtime errors ----------

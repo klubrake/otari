@@ -1,6 +1,13 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  useIsFetching,
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import type {
   AliasResponse,
+  AutomaticFallbacksResponse,
   CreateAliasRequest,
   RouterStatus,
   RoutingPolicyResponse,
@@ -10,10 +17,12 @@ import { apiFetch } from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
 import {
   ALIASES,
+  AUTOMATIC_FALLBACKS,
   CATALOG,
   MODELS,
   ROUTER_STATUS,
   ROUTING_POLICIES,
+  workspaceMeta,
 } from "@/shared/api/queryKeys"
 
 // Which of the two routing surfaces this caller may read, the `useKeysScope`
@@ -68,6 +77,7 @@ export function useAliases(workspaceId?: string) {
   const scope = useRoutingScope()
   return useQuery({
     queryKey: [ALIASES, scope.aliases, workspaceId ?? null],
+    meta: workspaceMeta(workspaceId),
     queryFn: () =>
       apiFetch<AliasResponse[]>(inWorkspace(scope.aliases, workspaceId)),
     staleTime: 60_000,
@@ -79,6 +89,7 @@ export function useRoutingPolicies(workspaceId?: string) {
   const scope = useRoutingScope()
   return useQuery({
     queryKey: [ROUTING_POLICIES, scope.policies, workspaceId ?? null],
+    meta: workspaceMeta(workspaceId),
     queryFn: () =>
       apiFetch<RoutingPolicyResponse[]>(
         inWorkspace(scope.policies, workspaceId),
@@ -88,9 +99,36 @@ export function useRoutingPolicies(workspaceId?: string) {
   })
 }
 
+// The models the caller's organization used in the last 30 days, each with the
+// offerings its catalog ID tries in order. One endpoint for every caller: the
+// server scopes the traffic to the workspaces the caller may see.
+export function useAutomaticFallbacks() {
+  return useQuery({
+    queryKey: [AUTOMATIC_FALLBACKS],
+    queryFn: () =>
+      apiFetch<AutomaticFallbacksResponse>(
+        "/organizations/me/automatic-fallbacks",
+      ),
+    staleTime: 60_000,
+  })
+}
+
+// Whether a routing write or a refetch of the routing lists is in flight, so a
+// form that writes a whole policy from the cached copy can wait for it.
+export function useRoutingSyncing(): boolean {
+  const writing =
+    useIsMutating({ mutationKey: [ROUTING_POLICIES] }) +
+    useIsMutating({ mutationKey: [ALIASES] })
+  const refetching =
+    useIsFetching({ queryKey: [ROUTING_POLICIES] }) +
+    useIsFetching({ queryKey: [ALIASES] })
+  return writing + refetching > 0
+}
+
 export function useSetRoutingPolicy() {
   const queryClient = useQueryClient()
   return useMutation({
+    mutationKey: [ROUTING_POLICIES],
     mutationFn: (body: SetRoutingPolicyRequest) =>
       apiFetch<RoutingPolicyResponse>("/routing/policies", {
         method: "POST",
@@ -159,6 +197,7 @@ function invalidateRoutingLists(
 export function useSetOrganizationRoutingPolicy() {
   const queryClient = useQueryClient()
   return useMutation({
+    mutationKey: [ROUTING_POLICIES],
     mutationFn: (body: SetRoutingPolicyRequest & { workspace_id: string }) =>
       apiFetch<RoutingPolicyResponse>("/organizations/me/routing-policies", {
         method: "POST",
@@ -189,6 +228,7 @@ export function useDeleteOrganizationRoutingPolicy() {
 export function useCreateOrganizationAlias() {
   const queryClient = useQueryClient()
   return useMutation({
+    mutationKey: [ALIASES],
     mutationFn: (body: CreateAliasRequest & { workspace_id: string }) =>
       apiFetch<AliasResponse>("/organizations/me/aliases", {
         method: "POST",
@@ -240,6 +280,7 @@ export function useRouterStatus(userId: string | null) {
 export function useCreateAlias() {
   const queryClient = useQueryClient()
   return useMutation({
+    mutationKey: [ALIASES],
     mutationFn: (body: CreateAliasRequest) =>
       apiFetch<AliasResponse>("/aliases", {
         method: "POST",

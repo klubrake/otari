@@ -103,6 +103,7 @@ def test_standalone_reports_a_local_operator_and_the_full_surface_set(tmp_path: 
     assert response.json() == {
         "deployment_type": "standalone",
         "session_type": "local_operator",
+        # The trace explorer is published only while trace capture is on, which this fork leaves off by default.
         "surfaces": sorted(STANDALONE_SURFACES),
         "sign_in_methods": ["master_key"],
         "management_url": None,
@@ -300,6 +301,7 @@ def test_open_signup_is_published_only_with_mail_to_carry_the_verification(tmp_p
 # check is for is a surface whose API went away, and a name that reaches one
 # mounted route has not.
 SURFACE_ROUTE_PREFIXES = {
+    "hosted_providers": f"{API_ROOT}/hosted-providers",
     "organization_guardrails": f"{API_ROOT}/organizations/me/guardrails",
     "organization_providers": f"{API_ROOT}/organizations/me/provider-keys",
     "organization_usage": f"{API_ROOT}/organizations/me/usage",

@@ -103,6 +103,17 @@
 :root,
 .light,
 [data-theme="light"] {
+  /* Trace timeline bar fills (features/traces only): each type's chart slot hue
+     at one lightness, light enough for the one dark ink of the in-bar duration. */
+  --color-trace-bar-tool: #c67f4d;
+  --color-trace-bar-agent: #a280c8;
+  --color-trace-bar-generation: #20a3bc;
+  --color-trace-bar-span: #899499;
+  --color-trace-bar-guardrail: #65a467;
+  --color-trace-bar-mcp: #c77595;
+  --color-trace-bar-ink: #08090a;
+  --trace-switch-track: var(--color-surface-subtle);
+  --trace-switch-thumb: var(--color-surface);
   /* ── Surfaces — four levels, two families, staggered ──────────────────
      Four neutral levels, with the surface family sitting one rung ABOVE
      the background family rather than sharing rungs with it. Two pairs
@@ -472,6 +483,19 @@
 
 .dark,
 [data-theme="dark"] {
+  --color-trace-bar-tool: #e89960;
+  --color-trace-bar-agent: #c09aeb;
+  --color-trace-bar-generation: #37c1de;
+  --color-trace-bar-span: #a5b0b5;
+  --color-trace-bar-guardrail: #7ec27c;
+  --color-trace-bar-mcp: #ea8db2;
+  --color-trace-bar-ink: #08090a;
+  --trace-switch-track: var(--color-surface-alt);
+  --trace-switch-thumb: color-mix(
+    in oklab,
+    var(--color-foreground) 20%,
+    var(--color-surface)
+  );
   /* ── Surfaces — the light block's stagger, mirrored ─────────────────────
      The same four levels and the same one-rung offset between the two
      families, read the other way up:
@@ -802,6 +826,14 @@
   --color-chart-ramp-2: var(--color-chart-ramp-2);
   --color-chart-ramp-3: var(--color-chart-ramp-3);
   --color-chart-ramp-4: var(--color-chart-ramp-4);
+  /* The trace timeline's bar fills, one per span type, and the ink drawn on them. */
+  --color-trace-bar-tool: var(--color-trace-bar-tool);
+  --color-trace-bar-agent: var(--color-trace-bar-agent);
+  --color-trace-bar-generation: var(--color-trace-bar-generation);
+  --color-trace-bar-span: var(--color-trace-bar-span);
+  --color-trace-bar-guardrail: var(--color-trace-bar-guardrail);
+  --color-trace-bar-mcp: var(--color-trace-bar-mcp);
+  --color-trace-bar-ink: var(--color-trace-bar-ink);
   /* Registered so a status dot can be `bg-text-subtle`. Same latent shape as
      the tier above: it has been a plain `:root` variable, reachable from this
      stylesheet and from the `text-subtle` utility, and from nowhere else. A dot
@@ -2492,27 +2524,40 @@ main {
 .otari-budgets-table .table__column[data-key="default-for"] {
   min-width: 11.25rem;
 }
-/* The selection box travels with the row it acts on, and the identity beside
-   it, for the reason the activity table pins both. */
+/* The identity pins so the lanes scroll under it. */
 .otari-budgets-table .table__column:first-child,
 .otari-budgets-table .table__row .table__cell:first-child {
   position: sticky;
   left: 0;
   z-index: 1;
   background-color: var(--color-background);
+  width: 14rem;
+  min-width: 14rem;
 }
-.otari-budgets-table .table__column[data-key="budget"],
-.otari-budgets-table .table__cell[data-key="budget"] {
-  position: sticky;
-  left: 3rem;
-  z-index: 1;
-  background-color: var(--color-background);
-  width: 16.25rem;
-  min-width: 16.25rem;
-}
-.otari-budgets-table[data-scrolled="true"] .table__column[data-key="budget"],
-.otari-budgets-table[data-scrolled="true"] .table__cell[data-key="budget"] {
+.otari-budgets-table[data-scrolled="true"] .table__column:first-child,
+.otari-budgets-table[data-scrolled="true"]
+  .table__row
+  .table__cell:first-child {
   border-right: 1px solid var(--color-control-border);
+}
+.otari-budgets-table .table__column[data-key="owner"] {
+  width: 8.75rem;
+  min-width: 8.75rem;
+}
+.otari-budgets-table .table__column[data-key="id"] {
+  width: 8.75rem;
+  min-width: 8.75rem;
+}
+.otari-budgets-table .table__column[data-key="limit"] {
+  width: 8.75rem;
+  min-width: 8.75rem;
+}
+.otari-budgets-table .table__column[data-key="reset"] {
+  width: 6.25rem;
+  min-width: 6.25rem;
+}
+.otari-budgets-table .table__cell {
+  white-space: nowrap;
 }
 .otari-accounts-table .table__row .table__cell {
   height: 3.625rem;
@@ -2539,7 +2584,7 @@ main {
   min-width: 12.5rem;
 }
 .otari-accounts-table .table__column[data-key="account"],
-.otari-accounts-table .table__cell[data-key="account"] {
+.otari-accounts-table .table__cell[data-column="account"] {
   position: sticky;
   left: 0;
   z-index: 1;
@@ -2548,7 +2593,8 @@ main {
   min-width: 18.75rem;
 }
 .otari-accounts-table[data-scrolled="true"] .table__column[data-key="account"],
-.otari-accounts-table[data-scrolled="true"] .table__cell[data-key="account"] {
+.otari-accounts-table[data-scrolled="true"]
+  .table__cell[data-column="account"] {
   border-right: 1px solid var(--color-control-border);
 }
 .otari-workspaces-table .table__row .table__cell {
@@ -2570,7 +2616,7 @@ main {
   min-width: 6rem;
 }
 .otari-workspaces-table .table__column[data-key="name"],
-.otari-workspaces-table .table__cell[data-key="name"] {
+.otari-workspaces-table .table__cell[data-column="name"] {
   position: sticky;
   left: 0;
   z-index: 1;
@@ -2579,7 +2625,7 @@ main {
   min-width: 27.5rem;
 }
 .otari-workspaces-table[data-scrolled="true"] .table__column[data-key="name"],
-.otari-workspaces-table[data-scrolled="true"] .table__cell[data-key="name"] {
+.otari-workspaces-table[data-scrolled="true"] .table__cell[data-column="name"] {
   border-right: 1px solid var(--color-control-border);
 }
 .otari-provider-keys-table .table__row .table__cell {
@@ -2616,7 +2662,7 @@ main {
   min-width: 18rem;
 }
 .otari-provider-keys-table .table__column[data-key="name"],
-.otari-provider-keys-table .table__cell[data-key="name"] {
+.otari-provider-keys-table .table__cell[data-column="name"] {
   position: sticky;
   left: 0;
   z-index: 1;
@@ -2624,7 +2670,8 @@ main {
 }
 .otari-provider-keys-table[data-scrolled="true"]
   .table__column[data-key="name"],
-.otari-provider-keys-table[data-scrolled="true"] .table__cell[data-key="name"] {
+.otari-provider-keys-table[data-scrolled="true"]
+  .table__cell[data-column="name"] {
   border-right: 1px solid var(--color-control-border);
 }
 /* The organization's guardrail definitions. Name, guardrail and checks absorb
@@ -2678,7 +2725,7 @@ main {
   width: 12rem;
   min-width: 12rem;
 }
-.otari-guardrail-mandates-table .table__cell[data-key="on_unavailable"] {
+.otari-guardrail-mandates-table .table__cell[data-column="on_unavailable"] {
   white-space: nowrap;
 }
 .otari-guardrail-mandates-table .table__column[data-key="actions"] {
@@ -2743,7 +2790,7 @@ main {
   min-width: 9rem;
 }
 .otari-members-table .table__column[data-key="member"],
-.otari-members-table .table__cell[data-key="member"] {
+.otari-members-table .table__cell[data-column="member"] {
   position: sticky;
   left: 0;
   z-index: 1;
@@ -2752,7 +2799,7 @@ main {
 /* One boundary, at the edge of the held lane, and only while it is holding
    something back. */
 .otari-members-table[data-scrolled="true"] .table__column[data-key="member"],
-.otari-members-table[data-scrolled="true"] .table__cell[data-key="member"] {
+.otari-members-table[data-scrolled="true"] .table__cell[data-column="member"] {
   border-right: 1px solid var(--color-control-border);
 }
 /* The pinned lanes above, body cells only. They were filled with the page
@@ -2765,22 +2812,22 @@ main {
 .otari-providers-table .table__row .table__cell:first-child,
 .otari-routing-table .table__row .table__cell:first-child,
 .otari-budgets-table .table__row .table__cell:first-child,
-.otari-budgets-table .table__cell[data-key="budget"],
-.otari-accounts-table .table__cell[data-key="account"],
-.otari-workspaces-table .table__cell[data-key="name"],
-.otari-provider-keys-table .table__cell[data-key="name"],
-.otari-members-table .table__cell[data-key="member"] {
+.otari-budgets-table .table__cell[data-column="budget"],
+.otari-accounts-table .table__cell[data-column="account"],
+.otari-workspaces-table .table__cell[data-column="name"],
+.otari-provider-keys-table .table__cell[data-column="name"],
+.otari-members-table .table__cell[data-column="member"] {
   background-color: var(--color-surface);
 }
 .otari-breakdown .table__row:hover .table__cell:first-child,
 .otari-providers-table .table__row:hover .table__cell:first-child,
 .otari-routing-table .table__row:hover .table__cell:first-child,
 .otari-budgets-table .table__row:hover .table__cell:first-child,
-.otari-budgets-table .table__row:hover .table__cell[data-key="budget"],
-.otari-accounts-table .table__row:hover .table__cell[data-key="account"],
-.otari-workspaces-table .table__row:hover .table__cell[data-key="name"],
-.otari-provider-keys-table .table__row:hover .table__cell[data-key="name"],
-.otari-members-table .table__row:hover .table__cell[data-key="member"] {
+.otari-budgets-table .table__row:hover .table__cell[data-column="budget"],
+.otari-accounts-table .table__row:hover .table__cell[data-column="account"],
+.otari-workspaces-table .table__row:hover .table__cell[data-column="name"],
+.otari-provider-keys-table .table__row:hover .table__cell[data-column="name"],
+.otari-members-table .table__row:hover .table__cell[data-column="member"] {
   background-color: var(--color-surface-muted);
 }
 /* A held lane narrower than the phone it is held on. Two were sized for a
@@ -2788,9 +2835,9 @@ main {
    reveal: the other columns slid under a lane as wide as the table's window. */
 @media (max-width: 767px) {
   .otari-accounts-table .table__column[data-key="account"],
-  .otari-accounts-table .table__cell[data-key="account"],
+  .otari-accounts-table .table__cell[data-column="account"],
   .otari-workspaces-table .table__column[data-key="name"],
-  .otari-workspaces-table .table__cell[data-key="name"] {
+  .otari-workspaces-table .table__cell[data-column="name"] {
     width: 11.25rem;
     min-width: 11.25rem;
   }
@@ -2817,10 +2864,9 @@ main {
 .otari-keys-table .table__column[data-key="owner"] {
   width: 10.625rem;
 }
-.otari-keys-table .table__column[data-key="key"] {
-  width: 11.25rem;
+.otari-keys-table .table__column[data-key="budget"] {
+  width: 10rem;
 }
-.otari-keys-table .table__column[data-key="created"],
 .otari-keys-table .table__column[data-key="expires"] {
   width: 6.875rem;
 }
@@ -2910,8 +2956,7 @@ main {
 /* A relative time is short but wraps at this lane width ("4 minutes ago" is
    three words), and a wrapped cell is the one thing that can break the row
    pitch below. */
-.otari-overview-activity .table__cell[data-key="time"],
-.otari-overview-activity .table__row .table__cell:first-child {
+.otari-overview-activity .table__cell[data-column="time"] {
   white-space: nowrap;
 }
 /* Fixed lanes, so a long error message truncates in its lane rather than

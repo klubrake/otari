@@ -13,10 +13,12 @@ member's reader in :meth:`WorkspaceReader.of` and nowhere else: the usage reads,
 the budget surface and the overview only ask the reader.
 """
 
+from __future__ import annotations
+
 import uuid
 from collections.abc import Collection
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.organizations_exceptions import (
@@ -27,8 +29,11 @@ from gateway.models.tenancy import User, Workspace
 from gateway.repositories.tenancy import WorkspaceRepository
 from gateway.schemas.organizations import WorkspaceVisibility, WorkspaceVisibilityUpdate
 from gateway.schemas.usage import SummaryDimension
-from gateway.services.tenancy.authorization import WorkspaceAccess
-from gateway.services.tenancy.deployment_user_service import DeploymentUserService
+
+if TYPE_CHECKING:
+    # Type-only: the tenancy services import this package, so a runtime import is a cycle.
+    from gateway.services.tenancy.authorization import WorkspaceAccess
+    from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 
 # The breakdowns a member may split shared workspace totals by. A failure's
 # status code names no one, so the summary's error breakdown is among them.

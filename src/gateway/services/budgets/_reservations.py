@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import contextlib
 import uuid
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from math import ceil
 from typing import Any, Literal
 
 from any_llm import AnyLLM
@@ -27,7 +29,7 @@ from gateway.models.budgets import (
     BudgetResetLog,
 )
 from gateway.models.money import to_usd
-from gateway.models.pricing import ModelPricing
+from gateway.models.pricing import MAX_REPORTED_UNITS, ModelPricing
 from gateway.models.users import User
 from gateway.repositories.budgets import ApplicableCeiling, HeldAmounts
 from gateway.repositories.users_repository import get_active_user
@@ -45,6 +47,7 @@ from gateway.services.budgets._scoped_enforcement import (
 from gateway.services.budgets._scoped_enforcement import release as release_scoped
 from gateway.services.budgets._scoped_enforcement import reserve as reserve_scoped
 from gateway.services.budgets._scoped_enforcement import settle as settle_scoped
+from gateway.services.pricing import price_usage
 from gateway.services.pricing_service import find_model_pricing, is_free_pricing, search_unit_cost
 from gateway.services.provider_kwargs import provider_key
 from gateway.types.budget_state import BudgetState
@@ -231,8 +234,9 @@ def _blocked_axis(
     held_tokens: int,
     held_requests: int,
     new_request: bool,
+    resets_at: datetime | None,
 ) -> BlockedAxis:
-    """Which capped axis had no room, for the refusal message.
+    """Which capped axis had no room, for the refusal message, and when the user's window ends.
 
     The gate is one conditional UPDATE that matches no row, so nothing in its
     result says which of three caps bound. Recomputed here from the counters, on
@@ -285,11 +289,24 @@ def _blocked_axis(
             new_request=new_request,
         )
         if blocked is not None:
-            return blocked
+            return replace(blocked, resets_at=resets_at)
     # Every capped axis has room, so the row moved under this request between the
     # gate and here, or the user was deleted. Neither is an axis, and naming one
     # would be a guess.
     return BlockedAxis("budget")
+
+
+def _budget_exceeded(detail: str, blocked: BlockedAxis, *, budget_scope: str) -> HTTPException:
+    """The 403 for a budget with no room, with ``Retry-After`` when its window ending would let the request in."""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=detail,
+        headers=error_codes.error_headers(
+            error_codes.BUDGET_EXCEEDED,
+            budget_scope=budget_scope,
+            retry_after=blocked.retry_after(datetime.now(UTC)),
+        ),
+    )
 
 
 def _normalize_strategy(strategy: str | None) -> str:
@@ -423,16 +440,32 @@ def estimate_cost(
     )
 
 
-def rerank_estimate(pricing: ModelPricing | None, *, prompt_chars: int) -> Decimal:
+# A search unit is one query over up to this many documents, and a document
+# longer than ``_SEARCH_CHUNK_TOKENS`` with the query is split into chunks that
+# each count as a document (Cohere's rule, the provider that bills per unit).
+_DOCUMENTS_PER_SEARCH_UNIT = 100
+_SEARCH_CHUNK_TOKENS = 500
+
+
+def rerank_estimate(pricing: ModelPricing | None, *, query_chars: int, document_chars: Sequence[int]) -> Decimal:
     """Upper bound a rerank request holds against its budgets before dispatch.
 
-    A per-request rate holds one search unit: the provider decides how many a
-    query bills, one is the floor, and settlement reconciles the rest. A
+    A per-request rate holds the search units the documents imply, so a request
+    over many or long documents cannot settle at several times what it held. A
     per-token rate holds the input tokens estimated from the query and documents.
     """
     if priced_per_request(pricing):
-        return search_unit_cost(1, pricing)
+        chunks = sum(max(1, ceil((query_chars + chars) / 4 / _SEARCH_CHUNK_TOKENS)) for chars in document_chars)
+        return search_unit_cost(max(1, ceil(chunks / _DOCUMENTS_PER_SEARCH_UNIT)), pricing)
+    prompt_chars = query_chars + sum(document_chars)
     return estimate_cost(pricing, prompt_chars=prompt_chars, max_output_tokens=None, default_output_tokens=0)
+
+
+def count_estimate(pricing: ModelPricing | None, *, meter: str, count: int) -> Decimal:
+    """What a request billed by ``count`` under ``meter`` holds: exactly what that count settles at."""
+    clamped = min(max(count, 0), MAX_REPORTED_UNITS)
+    charge = price_usage(pricing, tokens=None, units={meter: clamped}, legacy_unit_reading=True)
+    return charge.cost if charge is not None else ZERO
 
 
 def _ceiling_held(scoped: tuple[ApplicableBudget, ...], usd: Decimal | None, tokens: int, requests: int) -> HeldAmounts:
@@ -741,15 +774,15 @@ async def reserve_budget(
                 requests=held_requests,
                 new_request=new_request,
             )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=refusal_detail(
+            raise _budget_exceeded(
+                refusal_detail(
                     refused.subject,
                     blocked,
                     new_request=new_request,
                     reserved_output_tokens=reserved_output_tokens,
                 ),
-                headers=error_codes.error_headers(error_codes.BUDGET_EXCEEDED, budget_scope=refused.scope_type),
+                blocked,
+                budget_scope=refused.scope_type,
             )
 
     if budget is None:
@@ -864,19 +897,20 @@ async def reserve_budget(
                 held_tokens=held_tokens,
                 held_requests=held_requests,
                 new_request=new_request,
+                resets_at=refused_on.next_budget_reset_at,
             )
             if refused_on is not None
             else BlockedAxis("budget")
         )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=refusal_detail(
+        raise _budget_exceeded(
+            refusal_detail(
                 f"User '{user_id}'",
                 blocked,
                 new_request=new_request,
                 reserved_output_tokens=reserved_output_tokens,
             ),
-            headers=error_codes.error_headers(error_codes.BUDGET_EXCEEDED, budget_scope="user"),
+            blocked,
+            budget_scope="user",
         )
 
     return await _held_handle(
@@ -893,11 +927,6 @@ async def reserve_budget(
         ttl_seconds=reservation_ttl_sec,
         record_reservation=record_reservation,
     )
-
-
-def _release_reserved(estimate: Decimal) -> object:
-    """Return the column expression that subtracts ``estimate`` from reserved, clamped at 0."""
-    return ledger.release_reserved_expression(estimate)
 
 
 async def reconcile_reservation(
@@ -989,7 +1018,7 @@ async def reconcile_reservation(
     # Nothing to give back when the reclaim already did it: subtracting a second
     # time is the double release the ledger exists to prevent.
     if handle.reserved and not reclaimed_early:
-        values["reserved"] = _release_reserved(handle.estimate)
+        values["reserved"] = ledger.release_reserved_expression(handle.estimate)
         if handle.token_estimate:
             values["reserved_tokens"] = ledger.release_reserved_count_expression(
                 User.reserved_tokens, handle.token_estimate
@@ -1071,7 +1100,7 @@ async def refund_reservation(db: AsyncSession, handle: ReservationHandle) -> Non
         return
     # The user's row first, the ceilings last; see :func:`reconcile_reservation`.
     if handle.reserved:
-        values: dict[str, object] = {"reserved": _release_reserved(handle.estimate)}
+        values: dict[str, object] = {"reserved": ledger.release_reserved_expression(handle.estimate)}
         if handle.token_estimate:
             values["reserved_tokens"] = ledger.release_reserved_count_expression(
                 User.reserved_tokens, handle.token_estimate
@@ -1166,10 +1195,8 @@ async def increase_reservation(
                 requests=0,
                 new_request=False,
             )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=refusal_detail(refused.subject, blocked, new_request=False),
-                headers=error_codes.error_headers(error_codes.BUDGET_EXCEEDED, budget_scope=refused.scope_type),
+            raise _budget_exceeded(
+                refusal_detail(refused.subject, blocked, new_request=False), blocked, budget_scope=refused.scope_type
             )
         # Recorded here, next to the hold it describes, and before the per-user
         # call below can refuse: what the caller's refund releases is what the
@@ -1235,7 +1262,7 @@ async def increase_reservation(
             handle.scoped_estimate -= additional
             handle.scoped_token_estimate -= grown_tokens
         if delta is not None:
-            values: dict[str, object] = {"reserved": _release_reserved(delta.estimate)}
+            values: dict[str, object] = {"reserved": ledger.release_reserved_expression(delta.estimate)}
             if delta.token_estimate:
                 values["reserved_tokens"] = ledger.release_reserved_count_expression(
                     User.reserved_tokens, delta.token_estimate

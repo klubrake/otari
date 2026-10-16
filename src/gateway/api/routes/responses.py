@@ -14,6 +14,7 @@ from pydantic import ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import (
+    BillingPortDep,
     ModelProviderPortDep,
     OptionalFileServiceDep,
     ToolPortsDep,
@@ -32,6 +33,7 @@ from gateway.api.routes._pipeline import (
     DeclaredTools,
     ErrorKind,
     ToolBackends,
+    ToolContext,
     _flush_pending_usage_reports,
     _PendingUsageReport,
     classify_provider_error,
@@ -50,7 +52,14 @@ from gateway.api.routes._pipeline import (
     stream_error_code,
     stream_error_message,
 )
-from gateway.api.routes._platform import ResolvedAttempt, SettledCost, build_attempt_client_args, with_retry_hint
+from gateway.api.routes._platform import (
+    ResolvedAttempt,
+    SettledCost,
+    UnsupportedAttemptProviderError,
+    attempt_provider,
+    build_attempt_client_args,
+    with_retry_hint,
+)
 from gateway.api.routes._request_tags import RequestMetadata, forwarded_metadata, request_tags
 from gateway.api.routes._schema_derive import SESSION_LABEL_DESC, SESSION_LABEL_MAX_LENGTH, derive_request_base
 from gateway.api.routes._tools import _strip_gateway_fields
@@ -60,7 +69,14 @@ from gateway.core.usage import GatewayUsage
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import MAX_MCP_SERVER_IDS, McpServerConfig
 from gateway.services.files import StagedFile
-from gateway.services.inference import call_responses, serves_responses, strip_gateway_minted_items
+from gateway.services.inference import (
+    bind_upstream_user,
+    call_responses,
+    responses_user_fields,
+    serves_responses,
+    strip_gateway_minted_items,
+    with_upstream_user,
+)
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import ToolBackend
 from gateway.services.mcp_loop_responses import (
@@ -73,10 +89,12 @@ from gateway.services.providers import aresponses
 from gateway.services.tool_format import inject_purpose_hints_responses, openai_to_responses_tools
 from gateway.services.tools import (
     CODE_EXECUTION_HEADER,
+    WEB_FETCH_HEADER,
     WEB_SEARCH_HEADER,
     Dialect,
     ToolUseBudget,
 )
+from gateway.services.traces import read_turn
 from gateway.streaming import RESPONSES_STREAM_FORMAT, StreamFormat, openai_error_event
 from gateway.types.attempt import Attempt
 from gateway.types.normalization_target import NormalizationTarget
@@ -325,10 +343,10 @@ class _ResponsesAdapter:
         )
 
     async def call_provider(self, kwargs: dict[str, Any]) -> ResponsesResponse:
-        return await call_responses(aresponses, kwargs)  # type: ignore[no-any-return]
+        return await call_responses(aresponses, _with_upstream_user(kwargs))  # type: ignore[no-any-return]
 
     async def open_provider_stream(self, kwargs: dict[str, Any]) -> AsyncIterator[ResponseStreamEvent]:
-        return await call_responses(aresponses, kwargs)  # type: ignore[no-any-return]
+        return await call_responses(aresponses, _with_upstream_user(kwargs))  # type: ignore[no-any-return]
 
     def prepare_stream_kwargs(
         self,
@@ -360,7 +378,7 @@ class _ResponsesAdapter:
         if native_tools:
             extra["native_tools"] = native_tools
         return await responses_tool_loop(
-            completion_kwargs=kwargs,
+            completion_kwargs=_with_upstream_user(kwargs),
             pool=pool,
             max_iterations=max_iterations,
             **extra,
@@ -381,7 +399,7 @@ class _ResponsesAdapter:
         if native_tools:
             extra["native_tools"] = native_tools
         return responses_tool_loop_stream(
-            completion_kwargs=kwargs,
+            completion_kwargs=_with_upstream_user(kwargs),
             pool=pool,
             max_iterations=max_iterations,
             **extra,
@@ -407,12 +425,12 @@ class _ResponsesAdapter:
         kwargs: dict[str, Any] = {"api_key": attempt.api_key}
         if attempt.api_base:
             kwargs["api_base"] = attempt.api_base
-        request_fields = _with_codex_extra_body(base_request_fields, LLMProvider(attempt.provider))
+        request_fields = _with_codex_extra_body(base_request_fields, attempt_provider(attempt))
         merged = {
             **kwargs,
             **{k: v for k, v in request_fields.items() if k != "provider"},
             "model": attempt.model,
-            "provider": LLMProvider(attempt.provider),
+            "provider": attempt_provider(attempt),
         }
         # client_args (built from extra_params, e.g. Bedrock's region_name) is
         # platform-trusted, so it's merged in last: it can never be shadowed
@@ -452,6 +470,11 @@ class _ResponsesAdapter:
         return _with_codex_extra_body(kwargs, provider)
 
 
+def _with_upstream_user(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Put the carried end-user identifier in the field this call's provider reads."""
+    return with_upstream_user(kwargs, lambda out, identifier: responses_user_fields(out.get("provider"), identifier))
+
+
 _ADAPTER = _ResponsesAdapter()
 
 
@@ -467,6 +490,7 @@ async def create_response(
     config: Annotated[GatewayConfig, Depends(get_config)],
     log_writer: Annotated[LogWriter, Depends(get_log_writer)],
     model_provider: ModelProviderPortDep,
+    billing: BillingPortDep,
     tool_ports: ToolPortsDep,
     idempotency: IdempotencyGuardDep,
 ) -> dict[str, Any] | FastAPIResponse:
@@ -504,7 +528,7 @@ async def create_response(
             sandbox_requested=sandbox_requested(
                 request_body.tools,
                 config=config,
-                provider=target.provider,
+                providers=target.candidate_providers,
                 dialect=_ADAPTER.name,
                 code_execution_header=raw_request.headers.get(CODE_EXECUTION_HEADER),
                 workspace_executor=target.workspace_executor,
@@ -539,6 +563,8 @@ async def create_response(
             model_provider=model_provider,
             idempotency=None if bool(request_body.stream) else idempotency,
             tags=request_tags(request_body.metadata),
+            turn=read_turn("responses", request_body.input),
+            session_label=request_body.session_label,
         )
     except IdempotentReplay as replay:
         return replay.response()
@@ -554,7 +580,11 @@ async def create_response(
         assert route is not None  # guaranteed by the hybrid-mode preamble
         try:
             for attempt in route.attempts:
-                _ensure_provider_supports_responses(LLMProvider(attempt.provider))
+                try:
+                    provider = attempt_provider(attempt)
+                except UnsupportedAttemptProviderError as exc:
+                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from None
+                _ensure_provider_supports_responses(provider)
         except HTTPException:
             if route.attempts:
                 # No provider call ran, so attach the preflight rejection to
@@ -577,7 +607,7 @@ async def create_response(
             raise
     else:
         resolved = await resolve_dispatch_provider(
-            ctx, config, request_body.model, adapter=_ADAPTER, model_provider=model_provider
+            ctx, config, request_body.model, adapter=_ADAPTER, model_provider=model_provider, billing=billing
         )
         # ``provider`` is the underlying implementation handed to any-llm;
         # ``billing_instance`` is the otari routing key pricing/usage key on.
@@ -605,6 +635,7 @@ async def create_response(
             max_tool_iterations=request_body.max_tool_iterations,
             tools_header=request_body.tools_header,
             code_execution_header=raw_request.headers.get(CODE_EXECUTION_HEADER),
+            web_fetch_header=raw_request.headers.get(WEB_FETCH_HEADER),
             web_search_header=raw_request.headers.get(WEB_SEARCH_HEADER),
         ),
         backends=ToolBackends(
@@ -627,40 +658,43 @@ async def create_response(
         ),
     )
 
-    # Strip gateway-internal fields, flatten any caller-supplied function tools
-    # to the Responses shape.
-    request_fields = _strip_gateway_fields(
-        request_body.model_dump(exclude_none=True),
-        tools_extracted=tool_ctx.tools_extracted,
-        remaining_user_tools=tool_ctx.remaining_user_tools,
-        web_search_declared_name=tool_ctx.web_search_declared_name,
-    )
-    forwarded_metadata(request_fields)
-    scope_prompt_cache_key(request_fields, ctx)
-    # This is an internal handoff populated below, never a client request field.
-    # ``ResponsesRequest`` permits extra fields for OpenAI compatibility, so
-    # remove a caller-supplied value before constructing the provider kwargs.
-    request_fields.pop(_CODEX_EXTRA_BODY_FIELD, None)
-    client_metadata = request_fields.pop(_CODEX_CLIENT_METADATA_FIELD, None)
-    if request_fields.get("tools"):
-        request_fields["tools"] = openai_to_responses_tools(request_fields["tools"])
+    def _request_fields(tools: ToolContext) -> dict[str, Any]:
+        # Strip gateway-internal fields, flatten any caller-supplied function tools
+        # to the Responses shape.
+        request_fields = _strip_gateway_fields(
+            request_body.model_dump(exclude_none=True),
+            tools_extracted=tools.tools_extracted,
+            remaining_user_tools=tools.remaining_user_tools,
+            web_search_declared_name=tools.web_search_declared_name,
+        )
+        forwarded_metadata(request_fields)
+        scope_prompt_cache_key(request_fields, ctx)
+        # This is an internal handoff populated below, never a client request field.
+        # ``ResponsesRequest`` permits extra fields for OpenAI compatibility, so
+        # remove a caller-supplied value before constructing the provider kwargs.
+        request_fields.pop(_CODEX_EXTRA_BODY_FIELD, None)
+        client_metadata = request_fields.pop(_CODEX_CLIENT_METADATA_FIELD, None)
+        if request_fields.get("tools"):
+            request_fields["tools"] = openai_to_responses_tools(request_fields["tools"])
 
-    input_payload, codex_extra_body = _codex_extra_body(request_fields.pop("input"), client_metadata)
-    stream = bool(request_fields.pop("stream", False))
-    request_fields.pop("model", None)
-    # The billed user is the gateway's attribution, as on Chat Completions, and
-    # some providers (Cohere) refuse the field.
-    request_fields.pop("user", None)
+        input_payload, codex_extra_body = _codex_extra_body(request_fields.pop("input"), client_metadata)
+        request_fields.pop("stream", None)
+        request_fields.pop("model", None)
+        request_fields.pop("safety_identifier", None)
+        bind_upstream_user(request_fields, ctx.upstream_user)
 
-    # base_request_fields is what gets merged with per-attempt creds; it
-    # includes ``provider`` and ``input_data`` so each attempt has the full
-    # call shape.
-    base_request_fields = {**request_fields}
-    if not ctx.hybrid_mode:
-        base_request_fields["provider"] = provider
-    base_request_fields["input_data"] = input_payload
-    if codex_extra_body is not None:
-        base_request_fields[_CODEX_EXTRA_BODY_FIELD] = codex_extra_body
+        # What gets merged with per-attempt creds; it includes ``provider`` and
+        # ``input_data`` so each attempt has the full call shape.
+        base_request_fields = {**request_fields}
+        if not ctx.hybrid_mode:
+            base_request_fields["provider"] = provider
+        base_request_fields["input_data"] = input_payload
+        if codex_extra_body is not None:
+            base_request_fields[_CODEX_EXTRA_BODY_FIELD] = codex_extra_body
+        return base_request_fields
+
+    base_request_fields = tool_ctx.build_request_fields(_request_fields)
+    stream = bool(request_body.stream)
 
     # ------------------------------------------------------------------
     # Streaming path

@@ -13,6 +13,7 @@ from pydantic import Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import (
+    BillingPortDep,
     ModelProviderPortDep,
     OptionalFileServiceDep,
     ToolPorts,
@@ -32,6 +33,7 @@ from gateway.api.routes._pipeline import (
     DeclaredTools,
     ErrorKind,
     ToolBackends,
+    ToolContext,
     classify_provider_error,
     default_attempt_kwargs,
     log_usage,
@@ -61,10 +63,17 @@ from gateway.log_config import logger
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import MAX_MCP_SERVER_IDS, McpServerConfig
 from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT
+from gateway.ports.billing_port import BillingPort
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.provider_fields import surface_provider_fields
 from gateway.services.files import FileService, StagedFile
-from gateway.services.inference import is_chat_stream_cost_carrier
+from gateway.services.inference import (
+    bind_upstream_user,
+    chat_user_fields,
+    is_chat_stream_cost_carrier,
+    require_choices,
+    with_upstream_user,
+)
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import (
     MAX_TOOL_ITERATIONS_CAP,
@@ -72,10 +81,19 @@ from gateway.services.mcp_loop import (
     inject_purpose_hints,
     mcp_tool_loop,
     mcp_tool_loop_stream,
+    reports_tool_activity,
 )
 from gateway.services.provider_kwargs import apply_endpoint_defaults
 from gateway.services.providers import acompletion
-from gateway.services.tools import CODE_EXECUTION_HEADER, WEB_SEARCH_HEADER, Dialect, ToolUseBudget
+from gateway.services.tools import (
+    CODE_EXECUTION_HEADER,
+    WEB_FETCH_HEADER,
+    WEB_SEARCH_HEADER,
+    Dialect,
+    ToolUseBudget,
+    without_otari_tool_calls,
+)
+from gateway.services.traces import read_turn
 from gateway.streaming import OPENAI_STREAM_FORMAT, StreamFormat, openai_error_event
 from gateway.types.attempt import Attempt
 from gateway.types.normalization_target import NormalizationTarget
@@ -288,10 +306,11 @@ class _ChatAdapter:
         return is_chat_stream_cost_carrier(chunk)
 
     async def call_provider(self, kwargs: dict[str, Any]) -> ChatCompletion:
-        return await acompletion(**kwargs)  # type: ignore[return-value]
+        completion: ChatCompletion = await acompletion(**_with_upstream_user(kwargs))  # type: ignore[assignment]
+        return require_choices(completion)
 
     async def open_provider_stream(self, kwargs: dict[str, Any]) -> AsyncIterator[ChatCompletionChunk]:
-        return await acompletion(**kwargs)  # type: ignore[return-value]
+        return await acompletion(**_with_upstream_user(kwargs))  # type: ignore[return-value]
 
     def prepare_stream_kwargs(
         self,
@@ -316,21 +335,19 @@ class _ChatAdapter:
         native_tools: frozenset[str] = frozenset(),
         use_budget: ToolUseBudget | None = None,
     ) -> ChatCompletion:
-        # ``native_tools`` is accepted for interface parity and always empty: this
-        # format has no native vocabulary for a server-side tool call, so a
-        # gateway-run search or execution stays invisible on the wire (see
-        # docs/tools.md).
-        # ``use_budget`` is not: the cap bounds what the caller is billed
-        # for, which every format owes whether or not it can describe the search.
-        # Standalone dispatch has no lock-in callback; only pass the kwarg on
-        # the platform-attempt path so test fakes can mirror each call shape.
+        # ``native_tools`` names the web tools whose calls the answer reports in
+        # ``otari_tool_calls``; ``use_budget`` caps what the caller is billed for.
+        # Standalone dispatch has no lock-in callback; each kwarg is passed only when
+        # set, so test fakes can mirror each call shape.
         extra: dict[str, Any] = {}
         if on_first_response is not None:
             extra["on_first_response"] = on_first_response
         if use_budget is not None:
             extra["use_budget"] = use_budget
+        if native_tools:
+            extra["native_tools"] = native_tools
         return await mcp_tool_loop(
-            completion_kwargs=kwargs,
+            completion_kwargs=_with_upstream_user(kwargs),
             pool=pool,
             max_iterations=max_iterations,
             **extra,
@@ -348,8 +365,12 @@ class _ChatAdapter:
         extra: dict[str, Any] = {}
         if use_budget is not None:
             extra["use_budget"] = use_budget
+        if native_tools:
+            extra["native_tools"] = native_tools
+        if reports_tool_activity(self.endpoint):
+            extra["emit_activity"] = True
         return mcp_tool_loop_stream(
-            completion_kwargs=kwargs,
+            completion_kwargs=_with_upstream_user(kwargs),
             pool=pool,
             max_iterations=max_iterations,
             **extra,
@@ -383,6 +404,16 @@ class _ChatAdapter:
 
     def prepare_platform_call_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         return kwargs
+
+
+def _user_fields(kwargs: dict[str, Any], identifier: str) -> dict[str, Any]:
+    implementation, _, _ = str(kwargs.get("model", "")).partition(":")
+    return chat_user_fields(implementation, identifier)
+
+
+def _with_upstream_user(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Put the carried end-user identifier in the field this call's provider reads."""
+    return with_upstream_user(kwargs, _user_fields)
 
 
 _ADAPTER = _ChatAdapter()
@@ -436,6 +467,7 @@ async def chat_completions(
     config: Annotated[GatewayConfig, Depends(get_config)],
     log_writer: Annotated[LogWriter, Depends(get_log_writer)],
     model_provider: ModelProviderPortDep,
+    billing: BillingPortDep,
     tool_ports: ToolPortsDep,
     idempotency: IdempotencyGuardDep,
 ) -> ChatCompletion | Response:
@@ -460,6 +492,7 @@ async def chat_completions(
         config=config,
         log_writer=log_writer,
         model_provider=model_provider,
+        billing=billing,
         tool_ports=tool_ports,
         idempotency=idempotency,
     )
@@ -477,6 +510,7 @@ async def run_chat_completion(
     config: GatewayConfig,
     log_writer: LogWriter,
     model_provider: ModelProviderPort,
+    billing: BillingPort,
     tool_ports: ToolPorts,
     session_principal: SessionPrincipal | None = None,
     idempotency: IdempotencyGuard | None = None,
@@ -504,6 +538,11 @@ async def run_chat_completion(
             detail="Invalid request: model is required",
         )
 
+    # A client may store the gateway's report of its web tool calls on the assistant
+    # message it sends back. A provider rejects the field, so it goes before
+    # admission sizes the prompt.
+    request.messages = without_otari_tool_calls(request.messages)
+
     # Uploads the normalizer found for the code-execution sandbox, handed to the
     # sandbox session once the billed user and workspace are resolved.
     sandbox_inputs: list[StagedFile] = []
@@ -526,7 +565,7 @@ async def run_chat_completion(
             sandbox_requested=sandbox_requested(
                 request.tools,
                 config=config,
-                provider=target.provider,
+                providers=target.candidate_providers,
                 dialect=adapter.name,
                 code_execution_header=raw_request.headers.get(CODE_EXECUTION_HEADER),
                 workspace_executor=target.workspace_executor,
@@ -562,6 +601,8 @@ async def run_chat_completion(
             model_provider=model_provider,
             idempotency=None if request.stream else idempotency,
             tags=request_tags(request.metadata),
+            turn=read_turn("chat", request.messages),
+            session_label=request.session_label,
         )
     except IdempotentReplay as replay:
         return replay.response()
@@ -579,6 +620,7 @@ async def run_chat_completion(
             max_tool_iterations=request.max_tool_iterations,
             tools_header=request.tools_header,
             code_execution_header=raw_request.headers.get(CODE_EXECUTION_HEADER),
+            web_fetch_header=raw_request.headers.get(WEB_FETCH_HEADER),
             web_search_header=raw_request.headers.get(WEB_SEARCH_HEADER),
         ),
         backends=ToolBackends(
@@ -601,21 +643,26 @@ async def run_chat_completion(
         ),
     )
 
-    request_fields = _strip_gateway_fields(
-        request.model_dump(exclude_unset=True),
-        tools_extracted=tool_ctx.tools_extracted,
-        remaining_user_tools=tool_ctx.remaining_user_tools,
-        web_search_declared_name=tool_ctx.web_search_declared_name,
-    )
-    request_fields.pop("metadata", None)
-    scope_prompt_cache_key(request_fields, ctx)
-    # Dispatch one cap, under the name any-llm understands and knows how to map to
-    # any provider (via BaseOpenAIProvider._convert_completion_params). Popped
-    # unconditionally so exactly one spelling reaches the provider call, whether
-    # the caller sent a value or an explicit null.
-    request_fields.pop("max_completion_tokens", None)
-    if output_cap is not None:
-        request_fields["max_tokens"] = output_cap
+    def _request_fields(tools: ToolContext) -> dict[str, Any]:
+        fields = _strip_gateway_fields(
+            request.model_dump(exclude_unset=True),
+            tools_extracted=tools.tools_extracted,
+            remaining_user_tools=tools.remaining_user_tools,
+            web_search_declared_name=tools.web_search_declared_name,
+        )
+        fields.pop("metadata", None)
+        scope_prompt_cache_key(fields, ctx)
+        bind_upstream_user(fields, ctx.upstream_user)
+        # Dispatch one cap, under the name any-llm understands and knows how to map to
+        # any provider (via BaseOpenAIProvider._convert_completion_params). Popped
+        # unconditionally so exactly one spelling reaches the provider call, whether
+        # the caller sent a value or an explicit null.
+        fields.pop("max_completion_tokens", None)
+        if output_cap is not None:
+            fields["max_tokens"] = output_cap
+        return fields
+
+    request_fields = tool_ctx.build_request_fields(_request_fields)
 
     # ------------------------------------------------------------------
     # Streaming path: in hybrid mode, iterate `route.attempts` before any
@@ -659,7 +706,7 @@ async def run_chat_completion(
         # Resolve the instance to its implementation; dispatch any-llm against
         # ``implementation:model`` while billing/logging key on the instance.
         resolved = await resolve_dispatch_provider(
-            ctx, config, request.model, adapter=adapter, model_provider=model_provider
+            ctx, config, request.model, adapter=adapter, model_provider=model_provider, billing=billing
         )
         call_kwargs = apply_endpoint_defaults(
             {**resolved.kwargs, **request_fields, "model": resolved.dispatch_model}, resolved
@@ -702,7 +749,7 @@ async def run_chat_completion(
         return surface_provider_fields(platform_result)
 
     resolved = await resolve_dispatch_provider(
-        ctx, config, request.model, adapter=adapter, model_provider=model_provider
+        ctx, config, request.model, adapter=adapter, model_provider=model_provider, billing=billing
     )
     call_kwargs = apply_endpoint_defaults(
         {**resolved.kwargs, **request_fields, "model": resolved.dispatch_model}, resolved

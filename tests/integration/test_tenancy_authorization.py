@@ -17,6 +17,7 @@ from gateway.core.config import GatewayConfig
 from gateway.exceptions.organizations_exceptions import (
     InvitationAlreadyPendingError,
     MembershipUpdateError,
+    NoActiveOrganizationError,
     NotAuthorizedError,
     OrganizationNameRequiredError,
     OrganizationNotFoundError,
@@ -47,7 +48,7 @@ from gateway.services.tenancy.authorization import resolve_visible_workspace_sco
 from gateway.services.tenancy.provisioning_service import DEFAULT_WORKSPACE_NAME
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 
-from .tenancy_helpers import membership_writes
+from .tenancy_helpers import NO_MAIL_LIMIT, NO_TERMS, membership_writes
 
 _TEST_CONFIG = GatewayConfig()
 
@@ -359,10 +360,34 @@ async def test_a_suspended_member_has_no_access_at_all(async_db: AsyncSession) -
 
 
 async def test_membership_in_another_organization_grants_nothing(async_db: AsyncSession) -> None:
-    """An owner of one organization is a stranger to the next."""
+    """An owner of one organization is a stranger to the next.
+
+    A pointer at the other organization resolves to the caller's own, never to
+    the one it names.
+    """
     organization = await _organization(async_db, slug="acme")
     other_organization = await _organization(async_db, slug="globex")
     outsider = await _member(async_db, other_organization, role="owner", full_name="Outsider")
+    await UserRepository(async_db).set_active_organization(outsider, organization.id)
+
+    resolved = await OrganizationService(
+        async_db, membership_listener=None, workspace_listener=NullWorkspaceListener()
+    ).get_active_organization_for_user(outsider)
+
+    assert resolved.id == other_organization.id
+    # A read stages nothing: the pointer is repaired where a session is minted, not by every page.
+    assert outsider.active_organization_id == organization.id
+    assert not async_db.dirty
+
+
+async def test_an_identity_with_no_membership_anywhere_is_refused(async_db: AsyncSession) -> None:
+    organization = await _organization(async_db, slug="acme")
+    other_organization = await _organization(async_db, slug="globex")
+    outsider = await _member(async_db, other_organization, role="member", full_name="Outsider")
+    members = OrganizationMemberRepository(async_db)
+    membership = await members.get_active_by_organization_and_user(other_organization.id, outsider.id)
+    assert membership is not None
+    await members.update_membership(membership, {"status": "suspended"})
     await UserRepository(async_db).set_active_organization(outsider, organization.id)
 
     with pytest.raises(NotAuthorizedError):
@@ -403,7 +428,7 @@ async def test_an_identity_with_no_live_membership_has_no_context(async_db: Asyn
     assert membership is not None
     await members.update_membership(membership, {"status": "suspended"})
 
-    with pytest.raises(OrganizationNotFoundError):
+    with pytest.raises(NoActiveOrganizationError):
         await OrganizationService(
             async_db, membership_listener=None, workspace_listener=NullWorkspaceListener()
         ).get_active_membership_context_for_user(user)
@@ -430,6 +455,7 @@ async def test_anyone_may_create_an_organization_and_owns_the_one_they_create(
     created = await service.create_organization_for_user(
         user=viewer,
         request=OrganizationCreateRequest(name="Theirs"),
+        config=GatewayConfig(),
     )
 
     memberships, count = await service.members.get_by_user_with_organizations(viewer.id, status="active")
@@ -539,9 +565,10 @@ async def test_accepting_an_invitation_into_a_second_organization_is_no_longer_a
         user=admin,
         request=InviteOrganizationMemberRequest(email="invitee@example.com"),
         config=_TEST_CONFIG,
+        mail_limit=NO_MAIL_LIMIT,
     )
     assert invitation.accept_link is not None
-    await service.accept_invitation(invitation.accept_link.split("token=")[1])
+    await service.accept_invitation(invitation.accept_link.split("token=")[1], claims=NO_TERMS)
 
     memberships = await service.list_organization_memberships_for_user(user=invitee)
     assert memberships.count == 2
@@ -858,6 +885,7 @@ async def test_a_plain_member_cannot_invite(async_db: AsyncSession) -> None:
             user=member,
             request=InviteOrganizationMemberRequest(email="ada@example.com"),
             config=_TEST_CONFIG,
+            mail_limit=NO_MAIL_LIMIT,
         )
 
 
@@ -871,6 +899,7 @@ async def test_an_admin_can_invite(async_db: AsyncSession) -> None:
         user=admin,
         request=InviteOrganizationMemberRequest(email="ada@example.com", role="member"),
         config=_TEST_CONFIG,
+        mail_limit=NO_MAIL_LIMIT,
     )
 
     assert result.status == "invited"
@@ -888,6 +917,7 @@ async def test_an_admin_cannot_invite_an_owner(async_db: AsyncSession) -> None:
             user=admin,
             request=InviteOrganizationMemberRequest(email="ada@example.com", role="owner"),
             config=_TEST_CONFIG,
+            mail_limit=NO_MAIL_LIMIT,
         )
 
 
@@ -900,6 +930,7 @@ async def test_a_viewer_cannot_revoke_an_invitation(async_db: AsyncSession) -> N
         user=admin,
         request=InviteOrganizationMemberRequest(email="ada@example.com"),
         config=_TEST_CONFIG,
+        mail_limit=NO_MAIL_LIMIT,
     )
 
     with pytest.raises(NotAuthorizedError):
@@ -919,6 +950,7 @@ async def test_an_admin_cannot_revoke_a_pending_owner_invitation(async_db: Async
         user=owner,
         request=InviteOrganizationMemberRequest(email="ada@example.com", role="owner"),
         config=_TEST_CONFIG,
+        mail_limit=NO_MAIL_LIMIT,
     )
 
     with pytest.raises(MembershipUpdateError, match="owners"):
@@ -936,6 +968,7 @@ async def test_inviting_an_address_with_a_pending_invitation_conflicts(async_db:
         user=admin,
         request=InviteOrganizationMemberRequest(email="ada@example.com"),
         config=_TEST_CONFIG,
+        mail_limit=NO_MAIL_LIMIT,
     )
 
     with pytest.raises(InvitationAlreadyPendingError):
@@ -943,4 +976,5 @@ async def test_inviting_an_address_with_a_pending_invitation_conflicts(async_db:
             user=admin,
             request=InviteOrganizationMemberRequest(email="ada@example.com"),
             config=_TEST_CONFIG,
+            mail_limit=NO_MAIL_LIMIT,
         )

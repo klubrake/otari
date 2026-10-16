@@ -70,9 +70,10 @@ export type PasswordResponse = Schemas["PasswordResponse"]
 
 // ---------------------------------------------------------------------------
 // The one thing about itself an identity may change that is not a credential:
-// the name it goes by. `PATCH /v1/auth/profile` answers with the same
+// the name it goes by. `GET` and `PATCH /v1/auth/profile` answer with the same
 // `CallerIdentity` the membership context carries, so the account page can seat
-// the new name where the shell read the old one.
+// the new name where the shell read the old one, and a caller with no
+// organization can still be named.
 // ---------------------------------------------------------------------------
 export type UpdateProfileRequest = Schemas["UpdateProfileRequest"]
 
@@ -92,11 +93,17 @@ export type SignupRequest = Defaulted<
   "terms_accepted"
 >
 export type SignupResponse = Schemas["SignupResponse"]
+export type VerifyEmailRequest = Schemas["VerifyEmailRequest"]
 export type VerifyEmailResponse = Schemas["VerifyEmailResponse"]
 export type ResendVerificationResponse = Schemas["ResendVerificationResponse"]
 export type RequestPasswordResetResponse =
   Schemas["RequestPasswordResetResponse"]
-export type ResetPasswordRequest = Schemas["ResetPasswordRequest"]
+export type ResetPasswordRequest = Defaulted<
+  Schemas["ResetPasswordRequest"],
+  "terms_accepted"
+>
+export type MailedLinkStatus = Schemas["MailedLinkStatusResponse"]["status"]
+export type MailedLinkStatusResponse = Schemas["MailedLinkStatusResponse"]
 
 // ---------------------------------------------------------------------------
 // Passkeys (otari#652)
@@ -115,6 +122,13 @@ export type RenamePasskeyRequest = Schemas["WebAuthnCredentialUpdate"]
 // Usage and analytics
 // ---------------------------------------------------------------------------
 export type UsageEntry = Schemas["UsageEntry"]
+export type TraceSummary = Schemas["TraceSummaryPublic"]
+export type TraceList = Schemas["TraceListPublic"]
+export type TraceCount = Schemas["TraceCountPublic"]
+export type TraceSeries = Schemas["TraceSeriesPublic"]
+export type TraceDetail = Schemas["TraceDetailPublic"]
+export type TraceSpan = Schemas["SpanPublic"]
+export type TraceTurn = Schemas["TurnPublic"]
 export type UsageCount = Schemas["UsageCount"]
 export type UsageTotals = Schemas["UsageTotals"]
 export type UsageSummary = Schemas["UsageSummary"]
@@ -260,12 +274,6 @@ export type ScopedBudget = Schemas["ScopedBudgetResponse"]
 export type WorkspaceSpend = Schemas["WorkspaceSpendPublic"]
 export type CreateScopedBudgetRequest = Schemas["CreateScopedBudgetRequest"]
 export type UpdateScopedBudgetRequest = Schemas["UpdateScopedBudgetRequest"]
-export type BudgetScopeType = CreateScopedBudgetRequest["scope_type"]
-// The cadence moved onto the budget with the limit, so it is derived from the
-// budget request now rather than from the ceiling's.
-export type BudgetResetAlignment = NonNullable<
-  CreateBudgetRequest["reset_alignment"]
->
 
 // ---------------------------------------------------------------------------
 // Models, pricing and providers
@@ -301,7 +309,6 @@ export type CatalogModelDetail = Schemas["CatalogModelDetail"]
 export type CatalogOffering = Schemas["CatalogOffering"]
 export type CatalogCapabilities = Schemas["CatalogCapabilities"]
 export type CatalogElsewhere = Schemas["CatalogElsewhere"]
-export type CatalogOfferingUsage = Schemas["OfferingUsage"]
 // `unit` carries a schema default, so the generator emits it as required; the
 // callers that price a model omit it and the gateway reads tokens.
 export type SetPricingRequest = Defaulted<Schemas["SetPricingRequest"], "unit">
@@ -334,12 +341,8 @@ export type CreateOrganizationSpendCeiling =
   Schemas["OrganizationScopedBudgetCreate"]
 export type UpdateOrganizationSpendCeiling =
   Schemas["OrganizationScopedBudgetUpdate"]
-export type PricingRefreshChange = Schemas["PricingRefreshChangeResponse"]
-export type PricingRefreshPreview = Schemas["PricingRefreshPreviewResponse"]
-export type AcceptedPricingSnapshot = Schemas["AcceptedSnapshotResponse"]
 export type PricingDriftRow = Schemas["PricingDriftRow"]
 export type ProviderInfo = Schemas["ProviderInfoSchema"]
-export type ProviderCapabilities = Schemas["ProviderCapabilitiesSchema"]
 export type ProvidersResponse = Schemas["ProvidersResponse"]
 export type ProviderHealth = Schemas["ProviderHealthSchema"]
 export type ProviderHealthResponse = Schemas["ProviderHealthResponse"]
@@ -387,9 +390,35 @@ export type CreateOrganizationDomainRequest =
 export type UpdateOrganizationDomainRequest =
   Schemas["OrganizationDomainUpdateRequest"]
 
+// The providers this deployment serves on its own keys, for a request that
+// brings no credential of its own. Deployment-wide and operator-only, and keyed
+// on the provider (one row each), so every path names the provider rather than
+// a row id. A stored key is known by its last four characters and nothing else.
+// `enabled` defaults to true on a create, so the dashboard may omit it.
+export type HostedProvider = Schemas["HostedProviderPublic"]
+export type HostedProviders = Schemas["HostedProvidersPublic"]
+export type CreateHostedProviderRequest = Defaulted<
+  Schemas["HostedProviderCreateRequest"],
+  "enabled"
+>
+export type UpdateHostedProviderRequest = Schemas["HostedProviderUpdateRequest"]
+export type HostedModel = Schemas["HostedModelPublic"]
+export type HostedModels = Schemas["HostedModelsPublic"]
+export type CreateHostedModelRequest = Schemas["HostedModelCreateRequest"]
+export type UpdateHostedModelRequest = Schemas["HostedModelUpdateRequest"]
+export type HostedModelsRefresh = Schemas["HostedModelsRefreshPublic"]
+export type HostedAvailableModels = Schemas["HostedAvailableModelsPublic"]
+export type HostedCatalogRefresh = Schemas["HostedCatalogRefreshPublic"]
+export type HostedCatalogProviderRefresh =
+  Schemas["HostedCatalogProviderRefreshPublic"]
+
 // ---------------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------------
+export type AutomaticFallbacksResponse = Schemas["AutomaticFallbacksResponse"]
+export type AutomaticFallback = Schemas["AutomaticFallbackPublic"]
+export type FallbackOffering = Schemas["FallbackOfferingPublic"]
+
 // `spec` is the one field taken from ./local rather than the generator: the wire
 // contract declares it a free-form object, so the generated type is
 // `Record<string, unknown>` and the Routing page reads its internals. Everything
@@ -403,7 +432,6 @@ export type SetRoutingPolicyRequest = Omit<Schemas["PolicyRequest"], "spec"> & {
 export type AliasResponse = Schemas["AliasResponse"]
 export type CreateAliasRequest = Schemas["AliasRequest"]
 export type RouterStatus = Schemas["RouterStatus"]
-export type RouterPool = Schemas["PoolStatus"]
 export type LearnedPolicy = Schemas["LearnedPolicy"]
 export type RecordedPool = Schemas["RecordedPool"]
 export type ScoredExample = Schemas["ScoredExample"]
@@ -414,7 +442,6 @@ export type ScoredExample = Schemas["ScoredExample"]
 export type GatewaySettings = Schemas["GatewaySettings"]
 export type UpdateSettingsRequest = Schemas["UpdateSettingsRequest"]
 export type ConfigField = Schemas["ConfigField"]
-export type ConfigFieldType = ConfigField["type"]
 export type RotateMasterKeyResponse = Schemas["RotateMasterKeyResponse"]
 export type MailSettings = Schemas["MailSettings"]
 export type SendTestMailRequest = Schemas["SendTestMailRequest"]
@@ -425,7 +452,6 @@ export type UpdateMaintenanceModeRequest =
 export type ManagedTool = Schemas["ManagedTool"]
 export type ToolsResponse = Schemas["ToolsResponse"]
 export type ToolSettingField = Schemas["ToolSettingField"]
-export type ToolSettingType = ToolSettingField["type"]
 export type ToolSettingsResponse = Schemas["ToolSettingsResponse"]
 export type UpdateToolSettingsRequest = Schemas["UpdateToolSettingsRequest"]
 export type TestServiceResponse = Schemas["TestServiceResponse"]
@@ -436,7 +462,6 @@ export type TestServiceResponse = Schemas["TestServiceResponse"]
 export type GuardrailCatalog = Schemas["GuardrailCatalog"]
 export type GuardrailProfileSpec = Schemas["GuardrailProfileSpec"]
 export type GuardrailParameterSpec = Schemas["GuardrailParameterSpec"]
-export type GuardrailParameterType = GuardrailParameterSpec["type"]
 
 // The guardrails this gateway can build itself, as the installed any-guardrail
 // library describes them. A property of the deployment, not of a service; see
@@ -463,12 +488,6 @@ export type ConfigSearchTool = Schemas["ConfigSearchToolSchema"]
 export type SearchToolsResponse = Schemas["SearchToolsResponse"]
 export type CreateSearchToolRequest = Schemas["CreateSearchToolRequest"]
 export type UpdateSearchToolRequest = Schemas["UpdateSearchToolRequest"]
-export type StreamMissingUsagePolicy = NonNullable<
-  UpdateSettingsRequest["stream_missing_usage_policy"]
->
-export type VisionStrategy = NonNullable<
-  UpdateSettingsRequest["vision_strategy"]
->
 
 // ---------------------------------------------------------------------------
 // Tenancy: organizations, workspaces, and the memberships joining them
@@ -501,17 +520,10 @@ export type UpdateOrganizationRequest =
   Schemas["ActiveOrganizationUpdateRequest"]
 export type OrganizationMember = Schemas["ActiveOrganizationMemberPublic"]
 export type OrganizationMembers = Schemas["ActiveOrganizationMembersPublic"]
-export type MemberWorkspacePlacement = Schemas["MemberWorkspacePlacementPublic"]
 export type MemberCeiling = Schemas["MemberCeilingPublic"]
 export type MemberAttribution = Schemas["MemberAttributionPublic"]
 export type UpdateOrganizationMemberRequest =
   Schemas["ActiveOrganizationMemberUpdateRequest"]
-export type CreateOrganizationMemberRequest = Defaulted<
-  Schemas["ActiveOrganizationMemberCreateRequest"],
-  "role"
->
-export type CreateOrganizationMemberResult =
-  Schemas["ActiveOrganizationMemberCreateResultPublic"]
 // Not `Defaulted`: the form states the role it grants rather than leaving it to
 // the server, and `Defaulted` is for the fields the dashboard actually omits.
 export type WorkspaceAssignment = Schemas["WorkspaceAssignmentRequest"]
@@ -543,15 +555,16 @@ export type WorkspaceMemberRole = NonNullable<
 export type DeploymentAdminAccess = Schemas["DeploymentAdminAccessPublic"]
 /** One account on the deployment, with every organization it belongs to. */
 export type DeploymentUser = Schemas["DeploymentUserPublic"]
-/** One organization an account belongs to, at whatever standing. */
-export type DeploymentUserOrganization =
-  Schemas["DeploymentUserOrganizationPublic"]
+/** One page of the deployment's accounts, with the total the search matched. */
+export type DeploymentUsers = Schemas["DeploymentUsersPublic"]
 export type UpdateDeploymentUserRequest = Schemas["DeploymentUserUpdateRequest"]
 /** A generated password, returned once: only its hash is stored. */
 export type DeploymentUserPassword = Schemas["DeploymentUserPasswordPublic"]
 /** Fold one request-plane user into another: keys, usage and per-user state. */
 export type MergeUserRequest = Schemas["MergeUserRequest"]
 export type MergeUserResult = Schemas["MergeUserResponse"]
+/** A link that sets an account's password: mailed, or returned to pass on. */
+export type PasswordLink = Schemas["PasswordLinkPublic"]
 
 export type Workspace = Schemas["WorkspacePublic"]
 export type CreateWorkspaceRequest = Schemas["WorkspaceCreate"]
@@ -562,10 +575,8 @@ export type WorkspaceVisibility = Schemas["WorkspaceVisibility"]
 // A change to it: only the fields sent change.
 export type WorkspaceVisibilityUpdate = Schemas["WorkspaceVisibilityUpdate"]
 
-// Invitations: the emailed half of adding a member. `InviteOrganizationMemberRequest`
-// is `CreateOrganizationMemberRequest`'s twin (same fields, different result:
-// `invited` and an accept link rather than `active` immediately), so it is
-// `Defaulted` on the same field for the same reason.
+// Invitations: the emailed half of adding a member. `role` carries a schema
+// default the form may leave to the server, so the requests are `Defaulted` on it.
 export type InviteOrganizationMemberRequest = Defaulted<
   Schemas["InviteOrganizationMemberRequest"],
   "role"
@@ -662,7 +673,6 @@ export type OrganizationGuardrailTestResult =
 // `src/gateway/services/tenancy/organization_guardrail_definition_service.py`.
 export type OrganizationGuardrailDefinition =
   Schemas["OrganizationGuardrailDefinitionPublic"]
-export type GuardrailBuildState = OrganizationGuardrailDefinition["build_state"]
 export type CreateOrganizationGuardrailDefinitionRequest = Defaulted<
   Schemas["OrganizationGuardrailDefinitionCreate"],
   "enabled"
@@ -753,5 +763,6 @@ export type PlaygroundFavoriteModelsUpdate =
 // and the callback body cannot drift from the spec without a type error.
 export type OAuthAuthorizeResponse = Schemas["AuthorizeResponse"]
 export type OAuthCallbackRequest = Schemas["OAuthCallbackRequest"]
+export type OAuthSessionResponse = Schemas["OAuthSessionResponse"]
 
 export type * from "./local"

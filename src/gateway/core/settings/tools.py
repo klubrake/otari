@@ -441,6 +441,14 @@ class ToolSettings(BaseModel):
             "gateway, and every other keyword reaches the provider untouched. Requires a search backend."
         ),
     )
+    web_search_workspace_default: Annotated[bool | None, Shown(SettingsGroup.TOOLS)] = Field(
+        default=None,
+        description=(
+            "Whether a workspace with no web-access policy of its own may use otari_web_search, "
+            "otari_web_fetch and POST /api/v1/search. False makes web access something a workspace "
+            "admin turns on. When unset: on, except on a hosted deployment, where it is off."
+        ),
+    )
     web_search_allow_private_hosts: Annotated[bool, Shown(SettingsGroup.TOOLS)] = Field(
         default=False,
         description=(
@@ -464,8 +472,8 @@ class ToolSettings(BaseModel):
             "applies, and the one an unnamed POST /api/v1/search call uses. One whose provider "
             "any-search serves, or 'none' to turn in-loop search off. When unset: the instance the "
             "legacy web_search_provider or web_search_url settings describe, else the only search "
-            "instance, if there is exactly one and any-search serves its provider. Not in effect yet: see "
-            "docs/configuration.md."
+            "instance, if there is exactly one and any-search serves its provider. Not in effect yet for "
+            "the in-loop tool: see docs/configuration.md."
         ),
     )
     web_fetch_default_tool: Annotated[str | None, Shown(SettingsGroup.TOOLS)] = Field(
@@ -533,8 +541,8 @@ class ToolSettings(BaseModel):
         ``searxng`` tool inherits) can also come from a dashboard-stored
         override, and those are applied to the config after it loads. Failing at
         load time would refuse to boot a gateway the operator has in fact
-        configured. Enforcement is per request instead: ``resolve_search_tool``
-        refuses such a tool with a 400, and the rest of the gateway serves.
+        configured. Enforcement is per request instead: the resolver refuses such
+        a tool, the direct endpoint with a 400, and the rest of the gateway serves.
         """
         if self.web_search_url:
             return []

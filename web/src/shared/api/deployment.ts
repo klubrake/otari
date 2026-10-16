@@ -1,11 +1,18 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { useCallback, useSyncExternalStore } from "react"
 import type {
   DashboardBuild,
   DeploymentAdminAccess,
   DeploymentUser,
   DeploymentUserPassword,
+  DeploymentUsers,
   GatewayHealth,
+  PasswordLink,
   UpdateDeploymentUserRequest,
 } from "@/client"
 import {
@@ -14,7 +21,6 @@ import {
   DASHBOARD_BUILD_PATH,
   siteFetch,
 } from "@/shared/api/client"
-import { fetchAllPaged } from "@/shared/api/paging"
 import {
   BUILD,
   BUILD_POLL_MS,
@@ -202,8 +208,8 @@ function isDown(state: {
 // 404: a gate cannot be built on a failed request, and hiding a destination
 // grants nothing either way.
 //
-// Read by the deployment accounts page alone, to word its own refusal, and it
-// holds that decision until this lands. Nothing else asks: the rail and the
+// Read by the deployment accounts and hosted providers pages, to word their own
+// refusal, and each holds that decision until this lands. Nothing else asks: the rail and the
 // Overview index need the answer before their first paint, so they take
 // `deployment_operator` off the organization context, which is the same
 // server-side predicate on a read the shell already makes (otari#836).
@@ -217,20 +223,42 @@ export function useDeploymentAdminAccess() {
         (body) => body.granted,
       ),
     staleTime: 60_000,
-    // No `enabled` parameter: the one caller sits behind a route declaring
-    // `surface: "admin"`, so a deployment that does not host `/admin` never
-    // renders it and the 404 never becomes a second reading of `surfaces`.
+    // No `enabled` parameter: both callers sit behind routes whose surfaces
+    // (`admin`, `hosted_providers`) are published on the same deployments, so
+    // one that does not host `/admin` never renders either, and the 404 never
+    // becomes a second reading of `surfaces`.
     // Deliberately not inferred from a 404 here either, which is the scattered
     // mode check the surface axis replaced; the ordinary retry policy applies,
     // and a failure is a failure.
   })
 }
 
-export function useDeploymentUsers(enabled = true) {
+/**
+ * One page of the deployment's accounts, narrowed by `search` on the server.
+ *
+ * Debounce the term before it gets here (`useDebounced`), or every keystroke is
+ * a request.
+ */
+export function useDeploymentUsers(
+  {
+    page,
+    pageSize,
+    search,
+  }: { page: number; pageSize: number; search: string },
+  enabled = true,
+) {
   return useQuery({
-    queryKey: [DEPLOYMENT_ADMIN, "users"],
-    queryFn: () => fetchAllPaged<DeploymentUser>("/admin/users"),
+    queryKey: [DEPLOYMENT_ADMIN, "users", page, pageSize, search],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        skip: String(page * pageSize),
+        limit: String(pageSize),
+      })
+      if (search) params.set("search", search)
+      return apiFetch<DeploymentUsers>(`/admin/users?${params}`)
+    },
     staleTime: 60_000,
+    placeholderData: keepPreviousData,
     enabled,
   })
 }
@@ -269,5 +297,21 @@ export function useGenerateDeploymentUserPassword() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: [DEPLOYMENT_ADMIN] })
     },
+  })
+}
+
+/**
+ * Give an account a single-use link that sets its password.
+ *
+ * The gateway mails it where it can and otherwise returns it to pass on, so the
+ * result says which. No cached read changes, so nothing is invalidated.
+ */
+export function useIssuePasswordLink() {
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<PasswordLink>(
+        `/admin/users/${encodeURIComponent(id)}/password-link`,
+        { method: "POST" },
+      ),
   })
 }
