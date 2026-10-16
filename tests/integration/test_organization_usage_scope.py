@@ -661,6 +661,27 @@ def test_the_operator_route_reads_the_operators_active_organization(
     assert listed.isdisjoint(set(_ALPHA_ONE_MODELS) | set(_BETA_MODELS))
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"{API_ROOT}/usage/summary",
+        f"{API_ROOT}/usage/series?group_by=model",
+        f"{API_ROOT}/usage/groups?group_by=model",
+        f"{API_ROOT}/usage/latency?group_by=model",
+    ],
+)
+def test_the_operator_aggregates_read_the_operators_active_organization(
+    client: TestClient, world: _World, path: str
+) -> None:
+    """The operator's aggregates carry the scope its list does, or another organization's
+    spend leaks through a breakdown while the log looks correct."""
+    code, body = _as(client, world, "superuser", path)
+    assert code == status.HTTP_200_OK, body
+    named = str(body)
+    assert any(model in named for model in _BETA_MODELS), body
+    assert not any(model in named for model in _ALPHA_MODELS), body
+
+
 @pytest.mark.parametrize("path", _SCOPED_PATHS)
 def test_an_unauthenticated_request_is_refused(client: TestClient, world: _World, path: str) -> None:
     """No credential is a 401, so the scope is never reached with nobody behind it."""
