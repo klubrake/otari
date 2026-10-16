@@ -10,8 +10,8 @@ No prompt, model output or tool content is recorded. A trace holds names, ids,
 timings, token counts, outcomes and costs.
 
 This fork's dashboard has no Sessions page: its Activity page groups requests by
-session from the usage log instead. Traces are read through the trace API, and
-`OTARI_TRACE_CAPTURE_ENABLED=false` turns recording off.
+session from the usage log instead. Recording is off by default here;
+`OTARI_TRACE_CAPTURE_ENABLED=true` turns it on, and the trace API reads what it records.
 
 ## What makes a session
 
@@ -115,7 +115,7 @@ A hybrid data plane records no traces yet: it holds no database to keep them in.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `trace_capture_enabled` | `true` | Record traces and serve the read API. Requires restart. |
+| `trace_capture_enabled` | `false` | Record traces and serve the read API. Requires restart. |
 | `trace_retention_days` | `30` | Delete a trace once it has had no activity for this long. |
 | `trace_session_max_age_days` | `90` | Delete a session's trace this long after it started, even while it is active, so a reused session id starts a new trace. |
 

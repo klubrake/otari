@@ -321,6 +321,8 @@ def test_config(postgres_url: str) -> GatewayConfig:
         # fail-closed require_pricing=True behavior is covered by dedicated tests
         # that build their own config (see test_require_pricing.py).
         require_pricing=False,
+        # Off by default in this fork; on here so upstream's trace tests keep running.
+        trace_capture_enabled=True,
     )
 
 
