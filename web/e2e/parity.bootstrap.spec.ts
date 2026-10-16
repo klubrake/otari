@@ -32,7 +32,6 @@ test("the deployment bootstrap is served unauthenticated", async ({
       "routing",
       "settings",
       "tools",
-      "traces",
       "usage",
       "users",
       "workspaces",
