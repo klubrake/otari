@@ -16,22 +16,22 @@ a second row. The endpoint accepts only metadata and numeric token counts; promp
 completions, and tool payloads are rejected by the request schema, not stored.
 """
 
+import re
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, NamedTuple
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import inspect as sa_inspect
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import API_ROOT
 from gateway.core.metered_pricing import BillableUsage, ChargeLine, billable_usage, price_billable_usage
+from gateway.core.sql import INGEST_LOCK_TIMEOUT_MS, insert_ignoring_duplicates
 from gateway.log_config import logger
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import ModelPricing
@@ -148,6 +148,153 @@ class ExternalEventsRequest(BaseModel):
         return value
 
 
+# Spans from the Claude Platform (a Console telemetry destination) and the Claude SDKs.
+# Their usage repeats on several levels of one request's span tree, so they get their
+# own mapping rather than the generic GenAI one, which would book every level.
+CLAUDE_SCOPE_PREFIX = "com.anthropic."
+CLAUDE_SOURCE = "claude_platform"
+_CLAUDE_SDK_SCOPE_PREFIX = "com.anthropic.sdk."
+# The SDKs name the cloud a Claude client reaches in their own words.
+_CLAUDE_PROVIDERS = {"aws.bedrock": "bedrock", "gcp.vertex_ai": "vertexaianthropic"}
+
+
+def _count(value: Any) -> int:
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _claude_event(
+    attrs: Mapping[str, Any],
+    *,
+    event_id: str,
+    model: Any,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read: int = 0,
+    cache_write: int = 0,
+    cache_write_1h: int = 0,
+    reasoning: int = 0,
+    timestamp: datetime | None,
+    duration_ms: float | None,
+    failed: bool,
+) -> ExternalUsageEvent | None:
+    provider = str(attrs.get("gen_ai.provider.name") or "anthropic")
+    session = attrs.get("anthropic.session.id") or attrs.get("gen_ai.conversation.id")
+    # A caller names its own conversation id, so one that is not identifier-shaped
+    # loses the label rather than the usage.
+    label = str(session) if session else None
+    if label and (len(label) > 256 or not re.fullmatch(_IDENT_PATTERN, label)):
+        label = None
+    if not (model and timestamp and (input_tokens or output_tokens)):
+        return None
+    try:
+        return ExternalUsageEvent(
+            source_event_id=event_id,
+            timestamp=timestamp,
+            provider=_CLAUDE_PROVIDERS.get(provider, provider),
+            model=str(model),
+            status="error" if failed else "success",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+            cache_write_1h_tokens=cache_write_1h,
+            reasoning_tokens=reasoning,
+            # ``gen_ai.usage.input_tokens`` counts the cache reads and writes here,
+            # unlike Claude Code's additive counts.
+            cache_tokens_in_prompt=True,
+            duration_ms=int(duration_ms) if duration_ms is not None else None,
+            session_label=label,
+        )
+    except ValidationError:
+        return None
+
+
+def claude_usage_events(
+    name: str,
+    attrs: Mapping[str, Any],
+    *,
+    scope: str,
+    span_key: str,
+    timestamp: datetime | None,
+    duration_ms: float | None,
+    failed: bool,
+) -> list[ExternalUsageEvent]:
+    """Map one Claude Platform or Claude SDK span onto the usage it alone accounts for.
+
+    A request's usage repeats on its ``anthropic.messages.create`` span, the
+    ``anthropic.model_request`` spans under it and its ``anthropic.compaction``
+    spans, so each token is booked from one level only: the request span on the
+    Messages API, which also carries its compactions' tokens, and the model
+    request spans in a Managed Agents session, which has no request span with
+    usage. The SDK's client span and the API's server span for one request share
+    a response id, so whichever arrives second is a duplicate. Outcome evaluation
+    spans carry tokens but no model to price them by, and are not booked.
+
+    ``span_key`` identifies the span itself (its trace and span ids), for the rows
+    that have no response id to key on.
+    """
+    events: list[ExternalUsageEvent | None] = []
+    if name == "anthropic.messages.create":
+        response_id = attrs.get("gen_ai.response.id")
+        if not response_id:
+            return []
+        model = attrs.get("gen_ai.response.model") or attrs.get("gen_ai.request.model")
+        # A streamed response's SDK span splits out only the cache writes made before
+        # the first output token, so its 1h share is left unknown; the write total is whole.
+        partial_split = scope.startswith(_CLAUDE_SDK_SCOPE_PREFIX) and attrs.get("gen_ai.request.stream") is True
+        events.append(
+            _claude_event(
+                attrs,
+                event_id=str(response_id),
+                input_tokens=_count(attrs.get("gen_ai.usage.input_tokens")),
+                output_tokens=_count(attrs.get("gen_ai.usage.output_tokens")),
+                cache_read=_count(attrs.get("gen_ai.usage.cache_read.input_tokens")),
+                cache_write=_count(attrs.get("gen_ai.usage.cache_write.input_tokens")),
+                cache_write_1h=0
+                if partial_split
+                else _count(attrs.get("anthropic.usage.cache_creation.ephemeral_1h_input_tokens")),
+                reasoning=_count(attrs.get("gen_ai.usage.reasoning.output_tokens")),
+                model=model,
+                timestamp=timestamp,
+                duration_ms=duration_ms,
+                failed=failed,
+            )
+        )
+        # Compaction tokens are outside the request's ``gen_ai.usage.*`` counts and
+        # carry no cache breakdown, so their cached share bills at the input rate.
+        events.append(
+            _claude_event(
+                attrs,
+                event_id=f"{response_id}:compaction",
+                input_tokens=_count(attrs.get("anthropic.usage.compaction.input_tokens")),
+                output_tokens=_count(attrs.get("anthropic.usage.compaction.output_tokens")),
+                model=model,
+                timestamp=timestamp,
+                duration_ms=None,
+                failed=failed,
+            )
+        )
+    elif name == "anthropic.model_request" and attrs.get("anthropic.session.id"):
+        events.append(
+            _claude_event(
+                attrs,
+                event_id=span_key,
+                model=attrs.get("gen_ai.response.model") or attrs.get("gen_ai.request.model"),
+                input_tokens=_count(attrs.get("gen_ai.usage.input_tokens")),
+                output_tokens=_count(attrs.get("gen_ai.usage.output_tokens")),
+                cache_read=_count(attrs.get("gen_ai.usage.cache_read.input_tokens")),
+                cache_write=_count(attrs.get("gen_ai.usage.cache_write.input_tokens")),
+                timestamp=timestamp,
+                duration_ms=duration_ms,
+                failed=failed,
+            )
+        )
+    return [event for event in events if event is not None]
+
+
 class ExternalIngestError(BaseModel):
     """A single rejected event, with enough context to fix it and retry."""
 
@@ -201,33 +348,6 @@ def _reject(result: ExternalIngestResult, index: int, source_event_id: str | Non
         result.errors.append(ExternalIngestError(index=index, source_event_id=source_event_id, detail=detail))
 
 
-async def _existing_event_ids(db: AsyncSession, source: str, event_ids: list[str]) -> set[str]:
-    """Return the subset of ``event_ids`` already present for ``source``.
-
-    Chunked so a full 1000-event batch stays under SQLite's default bound on the
-    number of bind parameters in a single statement.
-    """
-    found: set[str] = set()
-    for start in range(0, len(event_ids), _IN_CHUNK):
-        chunk = event_ids[start : start + _IN_CHUNK]
-        if not chunk:
-            continue
-        rows = (
-            (
-                await db.execute(
-                    select(UsageLog.source_event_id).where(
-                        UsageLog.source == source,
-                        UsageLog.source_event_id.in_(chunk),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        found.update(row for row in rows if row is not None)
-    return found
-
-
 def _model_keys(provider: str, model: str) -> list[str]:
     """Candidate pricing keys, canonical then legacy, matching find_model_pricing."""
     return [f"{provider}:{model}", f"{provider}/{model}"]
@@ -256,7 +376,7 @@ async def _load_pricing_index(
     A Claude Code batch carries a few models but a distinct timestamp per event, so
     a per-event ``find_model_pricing`` would issue ~one query per event (an N+1). We
     instead pull the full history for every model key in a fixed handful of queries
-    and pick what applies per timestamp below; the genai default fallback is
+    and pick what applies per timestamp below; the models.dev default fallback is
     memoized in pricing_service and hits no database.
 
     ``organization_id`` is the importing workspace's organization, resolved from
@@ -295,7 +415,7 @@ def _resolve_pricing(
     """Effective pricing at the event timestamp, resolved from the preloaded index.
 
     Mirrors ``find_model_pricing``, whole: the importing organization's own
-    override, then the canonical key, then the legacy key, then the genai default
+    override, then the canonical key, then the legacy key, then the models.dev default
     (when enabled). Stored rows win over the default, and the newest row effective
     at or before the timestamp is chosen, so historical rates are honored.
 
@@ -395,28 +515,6 @@ def _build_row(
     )
 
 
-def _insert_values(row: UsageLog) -> dict[str, Any]:
-    """What :func:`_build_row` assigned, as values for a Core insert.
-
-    Only the attributes that were set: a dict of every mapped column would carry
-    ``None`` for the ones that were not, overriding their defaults.
-    """
-    state = sa_inspect(row)
-    return {attr.key: getattr(row, attr.key) for attr in state.mapper.column_attrs if attr.key in state.dict}
-
-
-def _insert_ignoring_duplicates(db: AsyncSession, rows: list[UsageLog]) -> Any:
-    """An INSERT that skips the rows a concurrent import already landed."""
-    values = [_insert_values(row) for row in rows]
-    insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
-    return (
-        insert(UsageLog)
-        .values(values)
-        .on_conflict_do_nothing(index_elements=["source", "source_event_id"])
-        .returning(UsageLog.id)
-    )
-
-
 async def _insert_rows(
     db: AsyncSession,
     source: str,
@@ -442,7 +540,15 @@ async def _insert_rows(
     for start in range(0, len(rows), _INSERT_CHUNK):
         chunk = rows[start : start + _INSERT_CHUNK]
         try:
-            inserted = len((await db.execute(_insert_ignoring_duplicates(db, chunk))).all())
+            inserted = len(
+                await insert_ignoring_duplicates(
+                    db,
+                    chunk,
+                    conflict=(UsageLog.source, UsageLog.source_event_id),
+                    returning=UsageLog.id,
+                    lock_timeout_ms=INGEST_LOCK_TIMEOUT_MS,
+                )
+            )
             await db.commit()
         except IntegrityError:
             # Not the idempotency key, which the statement above absorbs: some
@@ -580,12 +686,7 @@ async def ingest_external_events(
         pricing = _resolve_pricing(pricing_index, event.provider, event.model, event.timestamp)
         rows.append(_build_row(request.source, target_user, event, pricing, api_key_id, usage_workspace_id))
 
-    # Drop events already imported in a prior batch before inserting.
-    if rows:
-        existing = await _existing_event_ids(db, request.source, [r.source_event_id for r in rows if r.source_event_id])
-        fresh = [r for r in rows if r.source_event_id not in existing]
-        result.duplicate += len(rows) - len(fresh)
-        await _insert_rows(db, request.source, fresh, result)
+    await _insert_rows(db, request.source, rows, result)
 
     logger.info(
         "external usage ingest: source=%s accepted=%d duplicate=%d rejected=%d",

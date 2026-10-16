@@ -1,7 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { OverviewSummary } from "@/client"
 import { apiFetch, heavyReadSignal } from "@/shared/api/client"
-import { OVERVIEW, workspaceVisibilityKey } from "@/shared/api/queryKeys"
+import {
+  OVERVIEW,
+  workspaceMeta,
+  workspaceVisibilityKey,
+} from "@/shared/api/queryKeys"
 import { HEAVY_READ } from "@/shared/api/usage"
 
 export type OverviewScope = OverviewSummary["scope"]
@@ -28,6 +32,7 @@ export function useOverviewSummary({
   const queryClient = useQueryClient()
   return useQuery({
     queryKey: [OVERVIEW, workspaceId ?? null, month, scope],
+    meta: workspaceMeta(workspaceId),
     // Its month aggregate waits its turn with the Usage page's reads.
     queryFn: async ({ signal }) => {
       const params = new URLSearchParams({ month, scope })

@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import (
-    ModelProviderPortDep,
+    HostedProviderServiceDep,
+    RequestSessionModelProviderPortDep,
     extract_credential_token,
     get_config,
     get_db,
@@ -195,16 +196,16 @@ async def list_models(
     config: Annotated[GatewayConfig, Depends(get_config)],
     auth: Annotated[tuple[APIKey | None, bool], Depends(verify_catalog_reader)],
     session_identity: Annotated[TenancyUser | None, Depends(get_session_identity)],
-    model_provider: ModelProviderPortDep,
+    model_provider: RequestSessionModelProviderPortDep,
     provider: Annotated[str | None, Query(description="Filter models by provider name")] = None,
 ) -> ModelListResponse:
     """List all available models.
 
     Returns models auto-discovered from configured providers, enriched with
     pricing data from the model_pricing table when available, and with each
-    model's token limits: the context window from models.dev, or from
-    genai-prices where models.dev has none, and the output limit from models.dev
-    alone. A limit neither knows is null. Models that only exist in the pricing
+    model's token limits: the context window from the live models.dev catalog,
+    or from the pricing snapshot where it has none, and the output limit from the
+    live catalog alone. A limit neither knows is null. Models that only exist in the pricing
     table are also included for backward compatibility.
     """
     catalog = await build_merged_catalog(
@@ -225,6 +226,7 @@ async def list_models(
 @operator_router.get("/models/discoverable")
 async def list_discoverable_models(
     config: Annotated[GatewayConfig, Depends(get_config)],
+    hosted: HostedProviderServiceDep,
     refresh: Annotated[
         bool,
         Query(description="Re-dial every provider instead of answering from the discovery cache."),
@@ -238,13 +240,19 @@ async def list_discoverable_models(
     operator-gated because a provider error message describes the gateway's own
     configuration.
 
+    Covers the configured provider instances and every hosted provider switched
+    on, whatever organization it is restricted to. A hosted provider that a
+    configured instance of the same name shadows is not listed.
+
     Answers from the discovery cache, which a background refresher keeps warm, so
     the call does not wait on a slow or unreachable provider. Each provider
     carries the ``checked_at`` its result was produced at; a null one has not been
     dialed yet. Pass ``refresh=true`` to force a live re-dial of every provider.
     """
     serve_stale = background_discovery_enabled(config) and not refresh
-    discoveries = await discover_models_with_status(config, serve_stale=serve_stale, force=refresh)
+    discoveries = await discover_models_with_status(
+        config, hosted=hosted.discovery_dials, serve_stale=serve_stale, force=refresh
+    )
     cache = get_model_cache()
     providers = [
         DiscoverableProvider(
@@ -294,7 +302,7 @@ async def get_model(
     config: Annotated[GatewayConfig, Depends(get_config)],
     auth: Annotated[tuple[APIKey | None, bool], Depends(verify_catalog_reader)],
     session_identity: Annotated[TenancyUser | None, Depends(get_session_identity)],
-    model_provider: ModelProviderPortDep,
+    model_provider: RequestSessionModelProviderPortDep,
 ) -> ModelObject:
     """Get details for a specific model."""
     obj, aliases = await _find_model(db, config, model_id, auth, session_identity, model_provider)
@@ -371,7 +379,7 @@ async def _find_model(
     # expired when the next round starts and stays expired until that round's
     # dials complete. A TTL-bounded peek here would 404 a model that GET
     # /api/v1/models is listing in the same instant, for any provider model with no
-    # pricing row and no genai-prices fallback. This endpoint never dials, so
+    # pricing row and no models.dev fallback. This endpoint never dials, so
     # serving the last known answer is the only way to agree with the listing.
     discovered_model = None
     discovered_provider = None
@@ -392,7 +400,7 @@ async def _find_model(
 
     if not pricing and not discovered_model:
         # Neither priced nor discoverable, yet the gateway may still serve this
-        # model and bill it at the genai-prices default: request-time lookup
+        # model and bill it at the models.dev default: request-time lookup
         # consults the same fallback. Reporting 404 for a model that is being
         # charged for is the lie phase 3 of the listing exists to avoid, so
         # answer with the effective rate when there is one.

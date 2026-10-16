@@ -380,10 +380,129 @@ class SearchToolTestResponse(pydantic.BaseModel):
     error: str | None = pydantic.Field(
         default=None,
         description=(
-            "When not ok, the error's tag: timeout, network, http_error, invalid_response, or the provider's own."
+            "When not ok, the error's tag: timeout, network, http_error, invalid_response, unexpected_response "
+            "(an answer whose shape the provider changed), or the provider's own."
         ),
     )
     hits: int | None = pydantic.Field(default=None, description="For a search that worked: how many hits came back.")
     characters: int | None = pydantic.Field(
         default=None, description="For a fetch that worked: how many characters of page text came back."
     )
+
+
+# Perplexity's documented ceiling on search_domain_filter, mirrored so an
+# oversized list is rejected here rather than by the upstream provider.
+_MAX_DOMAIN_FILTERS = 20
+
+
+class SearchRequest(pydantic.BaseModel):
+    """A direct search request: LiteLLM's ``/v1/search`` body, plus ``include_raw`` and ``provider_options``."""
+
+    model_config = pydantic.ConfigDict(
+        json_schema_extra={"example": {"query": "otari llm gateway", "max_results": 5}},
+    )
+
+    query: str = pydantic.Field(min_length=1, description="The search query")
+    search_tool_name: str | None = pydantic.Field(
+        default=None,
+        description=(
+            "Configured search tool to run against. Optional when the deployment names a default "
+            "(web_search_default_tool) or has exactly one tool, and ignored on "
+            "POST /api/v1/search/{search_tool_name}."
+        ),
+    )
+    max_results: int | None = pydantic.Field(
+        default=None,
+        ge=1,
+        description=(
+            "Maximum number of results to return; 10 when unset. Lowered to the workspace's ceiling "
+            "when it sets one, and to the provider's own maximum."
+        ),
+    )
+    search_domain_filter: list[str] | None = pydantic.Field(
+        default=None,
+        max_length=_MAX_DOMAIN_FILTERS,
+        description="Restrict results to these domains; prefix a domain with '-' to exclude it instead",
+    )
+    country: str | None = pydantic.Field(
+        default=None,
+        min_length=2,
+        max_length=2,
+        description="Two-letter ISO country code to localize results to",
+    )
+    max_tokens_per_page: int | None = pydantic.Field(
+        default=None, ge=1, description="Approximate cap on the page content returned per result"
+    )
+    include_raw: bool = pydantic.Field(default=False, description="Also return the provider's whole response, as raw.")
+    provider_options: dict[str, Any] | None = pydantic.Field(
+        default=None,
+        description=(
+            "Native options for the provider that serves the call, under the provider's own names, as "
+            "GET /api/v1/search-tools/providers lists them. An option the provider does not take from a "
+            "request is refused with a 400. On a call that names no tool they go to whichever provider "
+            "serves it, so name the tool when they are meant for one provider."
+        ),
+    )
+    user: str | None = pydantic.Field(default=None, description="User ID for usage attribution")
+
+
+class SearchResultItem(pydantic.BaseModel):
+    """One search result, shaped as LiteLLM's ``SearchResult``."""
+
+    title: str = pydantic.Field(description="The page's title; empty when the provider gave none.")
+    url: str
+    snippet: str = pydantic.Field(
+        description="The page text the provider returned, else its excerpt, cut to the page budget."
+    )
+    date: str | None = pydantic.Field(default=None, description="The page's date, as the provider gave it.")
+    last_updated: str | None = pydantic.Field(default=None, description="Always null: no provider reports it.")
+
+
+class SearchResponse(pydantic.BaseModel):
+    """A completed direct search."""
+
+    object: Literal["search"] = "search"
+    search_tool: str = pydantic.Field(description="The configured search tool that served the request")
+    results: list[SearchResultItem]
+    raw: dict[str, Any] | None = pydantic.Field(
+        default=None,
+        exclude_if=lambda raw: raw is None,
+        description="The provider's whole response, untouched; only when the request set include_raw.",
+    )
+
+
+class OtariToolCallSource(pydantic.BaseModel):
+    """One page a gateway-run search returned: where it is, never its text."""
+
+    url: str
+    title: str
+    published_date: str | None = pydantic.Field(default=None, description="The page's date, as the provider gave it.")
+
+
+class OtariToolCallError(pydantic.BaseModel):
+    """What a failed gateway-run call may show: never a body, a URL or exception text."""
+
+    provider: str | None = pydantic.Field(description="The provider that failed; null when none was reached.")
+    status: int | None = pydantic.Field(description="The provider's HTTP error status, when it answered with one.")
+    tag: str = pydantic.Field(description="Why the call failed, such as timeout or call_limit.")
+    retryable: bool = pydantic.Field(description="Whether retrying the same call may help.")
+
+
+class OtariToolCall(pydantic.BaseModel):
+    """One web search or fetch the gateway ran, as a Chat Completions response reports it in ``otari_tool_calls``.
+
+    A stream sends the entry when the call starts and again when it ends, both with
+    the same ``id``. Fields not set are left out of the wire entry.
+    """
+
+    id: str
+    type: Literal["web_search", "web_fetch"]
+    status: Literal["in_progress", "completed", "failed"]
+    query: str | None = pydantic.Field(default=None, description="A search's query.")
+    url: str | None = pydantic.Field(
+        default=None, description="The URL a fetch asked for, without its query string and fragment."
+    )
+    sources: list[OtariToolCallSource] | None = pydantic.Field(
+        default=None, description="A completed search's results; empty when it found none."
+    )
+    error: OtariToolCallError | None = pydantic.Field(default=None, description="Why a failed call failed, when known.")

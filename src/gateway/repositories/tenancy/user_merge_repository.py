@@ -11,11 +11,12 @@ from sqlmodel import col
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import BudgetReservation, BudgetResetLog
 from gateway.models.files import FileObject
-from gateway.models.inference import BatchRecord
+from gateway.models.inference import BatchRecord, IdempotencyRecord
 from gateway.models.providers import ModelAlias, ProviderEndpoint
 from gateway.models.routing import RouterPreference, RoutingMemory, RoutingPolicy
 from gateway.models.tenancy import User as Identity
 from gateway.models.tools import SandboxContainer
+from gateway.models.traces import Trace
 from gateway.models.usage import AgentTelemetry, UsageLog
 from gateway.models.users import User
 
@@ -35,6 +36,8 @@ REFERENCING: tuple[Any, ...] = (
     ProviderEndpoint,
     RoutingPolicy,
     SandboxContainer,
+    IdempotencyRecord,
+    Trace,
 )
 # Unique on (workspace_id, name, user_id), so a same-named row on both users
 # would collide once moved.

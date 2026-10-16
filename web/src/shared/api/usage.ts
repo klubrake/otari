@@ -43,6 +43,7 @@ import { useDeploymentOperator } from "@/shared/api/organizations"
 import {
   OVERVIEW,
   USAGE,
+  workspaceMeta,
   workspaceSpendKey,
   workspaceVisibilityKey,
 } from "@/shared/api/queryKeys"
@@ -316,6 +317,7 @@ function usagePageQuery(
 ) {
   return queryOptions({
     queryKey: [USAGE, "list", base, filters, page, pageSize, sort],
+    meta: workspaceMeta(filters.workspace_id),
     queryFn: () =>
       fetchUsageRows(base, filters, {
         skip: page * pageSize,
@@ -362,6 +364,7 @@ export function useUsageBatches(
   const scope = useUsageScope()
   return useInfiniteQuery({
     queryKey: [USAGE, "batches", scope.base, filters, batch, sort],
+    meta: workspaceMeta(filters.workspace_id),
     queryFn: ({ pageParam }) =>
       fetchUsageRows(scope.base, filters, {
         skip: pageParam,
@@ -419,6 +422,7 @@ export function useUsageCount(
   const scope = useUsageScope()
   return useQuery({
     queryKey: [USAGE, "count", scope.base, filters, sort.key],
+    meta: workspaceMeta(filters.workspace_id),
     queryFn: () =>
       apiFetch<UsageCount>(
         `${scope.base}/count?${countParams(filters, sort.key)}`,
@@ -451,6 +455,7 @@ export function useLiveUsageCount(
   const scope = useUsageScope()
   return useQuery({
     queryKey: [USAGE, "count", "live", scope.base, filters, sort.key],
+    meta: workspaceMeta(filters.workspace_id),
     queryFn: () =>
       apiFetch<UsageCount>(
         `${scope.base}/count?${countParams(filters, sort.key)}`,
@@ -944,6 +949,7 @@ export function useUsageTools(
   const scope = useUsageScope(usageScope)
   return useQuery({
     queryKey: [USAGE, "tools", scope.base, filters],
+    meta: workspaceMeta(filters.workspace_id),
     queryFn: ({ signal }) =>
       apiFetch<UsageTools>(
         `${scope.base}/tools?${usageParams(filters).toString()}`,

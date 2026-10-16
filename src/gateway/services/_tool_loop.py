@@ -36,12 +36,12 @@ AccT = TypeVar("AccT")
 class ToolBackend(Protocol):
     """Subset of the tool-backend surface the loop drives.
 
-    Structurally implemented by ``MCPClientPool``, ``SandboxBackend``, and
-    ``WebSearchBackend``; each exposes the same members the loop and the route
-    pipeline need to advertise tools, decide ownership, execute a call, and
-    describe each tool's purpose for the system-message hint block. Widening
-    ``pool`` to this Protocol lets the routes pass any of those backends
-    without casts.
+    Structurally implemented by ``MCPClientPool``, ``SandboxBackend``,
+    ``WebRetrievalBackend`` and ``CombinedToolBackend`` (``services/tools``); each exposes the
+    same members the loop and the route pipeline need to advertise tools, decide
+    ownership, execute a call, and describe each tool's purpose for the
+    system-message hint block. Widening ``pool`` to this Protocol lets the routes
+    pass any of those backends without casts.
     """
 
     @property
@@ -218,6 +218,7 @@ async def run_tool_loop(
     pool: ToolBackend,
     max_iterations: int,
     on_first_response: Callable[[], None] | None = None,
+    check_first_response: Callable[[ResultT], ResultT] | None = None,
 ) -> ResultT:
     """Non-streaming tool loop, generic over the wire format.
 
@@ -244,6 +245,8 @@ async def run_tool_loop(
     the model has produced any assistant output, the conversation state is
     provider-specific and subsequent failures must not silently swap
     providers. See the hybrid-mode attempt loops in the route modules.
+    ``check_first_response`` runs before it and may raise to refuse that
+    response as a provider failure, which leaves the attempt free to fall over.
     """
     transcript, merged_tools, base = _prepare(
         strategy.transcript_key,
@@ -263,6 +266,8 @@ async def run_tool_loop(
 
         result = await strategy.call(kwargs)
         if not first_response_signaled:
+            if check_first_response is not None:
+                result = check_first_response(result)
             first_response_signaled = True
             if on_first_response is not None:
                 on_first_response()

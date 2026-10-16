@@ -1,4 +1,4 @@
-"""Request and response models of the organizations domain's workspace settings."""
+"""Request and response models of the organizations domain."""
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -9,6 +9,12 @@ _MEMBERS_SEE_WORKSPACE_TOTALS_DESC = (
     "provider or status code) and its budget's dollar figures. Never anyone else's requests, keys or limits. "
     "When false, a member reads only their own usage and the budget as a percentage."
 )
+
+
+class OrganizationRefusal(BaseModel):
+    """The body of a request the organizations domain refuses."""
+
+    detail: str = Field(description="Why the request was refused.")
 
 
 class WorkspaceVisibility(BaseModel):

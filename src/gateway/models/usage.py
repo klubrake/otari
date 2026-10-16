@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     Uuid,
+    false,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -121,6 +122,11 @@ class UsageLog(Base):
     # exclude_from_budget. False rows are recorded (and appear in cost analytics)
     # but their cost is never written to User.spend.
     counts_toward_budget: Mapped[bool] = mapped_column(default=True)
+    # True when the request was served on a credential the deployment pays for,
+    # one ``ModelProviderPort`` handed out, and so charged through ``BillingPort``
+    # where an overlay binds one. False for every other row, and for every row
+    # written before the column existed.
+    deployment_paid: Mapped[bool] = mapped_column(default=False, server_default=false())
 
     prompt_tokens: Mapped[int | None] = mapped_column()
     completion_tokens: Mapped[int | None] = mapped_column()
@@ -155,7 +161,8 @@ class UsageLog(Base):
 
     # Why ``cost`` is the amount it is, which the row cannot re-derive on its own:
     # ``pricing_source`` names the price list that settled it ("organization",
-    # "managed", "genai_prices"), ``pricing_reference`` identifies the entry in it
+    # "managed", "defaults"; older rows read "genai_prices"), ``pricing_reference``
+    # identifies the entry in it
     # (a pricing row's id, or a ``provider:model`` key), ``pricing_effective_at``
     # is when that rate took effect, and ``pricing_version`` pins the revision of
     # the list. ``calculated_at`` is when the amount was priced, which is not

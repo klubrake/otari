@@ -20,6 +20,7 @@ this container after the core defaults are bound, and may rebind any port and
 contribute routers of its own. Unset, the defaults stand.
 """
 
+import functools
 import importlib
 import inspect
 from collections.abc import Callable, ItemsView
@@ -39,10 +40,11 @@ from gateway.adapters.file_storage_adapter import build_file_storage_port
 from gateway.adapters.growth_signal_adapter import NullGrowthSignalAdapter
 from gateway.adapters.identity_provider_adapter import DeploymentIdentityProviderAdapter
 from gateway.adapters.mcp_server_adapter import LocalMcpServers, RemoteMcpServers
-from gateway.adapters.model_provider_adapter import SelfHostedModelProviderAdapter
+from gateway.adapters.model_provider_adapter import HostedProviderModelProviderAdapter
 from gateway.adapters.provider_file_adapter import AnyLlmProviderFiles
 from gateway.adapters.rate_limit_store_adapter import build_rate_limit_store
 from gateway.adapters.telemetry_storage_adapter import DatabaseTelemetryStorageAdapter
+from gateway.adapters.usage_signal_adapter import NullUsageSignalAdapter
 from gateway.adapters.web_search_policy_adapter import LocalWebSearchPolicy, RemoteWebSearchPolicy
 from gateway.core.config import GatewayConfig
 from gateway.core.deployment import Plane, deployment_for
@@ -62,8 +64,11 @@ from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.ports.provider_file_port import ProviderFilePort
 from gateway.ports.rate_limit_store_port import RateLimitStorePort
 from gateway.ports.telemetry_storage_port import TelemetryStoragePort
+from gateway.ports.usage_signal_port import UsageSignalPort
 from gateway.ports.web_search_policy_port import WebSearchPolicyPort
 from gateway.repositories.tenancy import UserRepository
+from gateway.services.providers import HostedProviderService
+from gateway.services.tenancy import forget_unproven_access
 from gateway.services.tenancy.membership_listener import MembershipListener
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.workspace_listener import WorkspaceListener
@@ -93,6 +98,7 @@ MembershipListenerBuilder = Callable[[UnitOfWork], MembershipListener]
 WorkspaceListenerBuilder = Callable[[UnitOfWork], WorkspaceListener]
 WorkspaceSearchKeysBuilder = Callable[[AsyncSession], WorkspaceSearchKeys]
 CodeExecutionPoliciesBuilder = Callable[[AsyncSession], WorkspaceCodeExecutionPolicies]
+HostedProviderServiceBuilder = Callable[[UnitOfWork], HostedProviderService]
 Register = Callable[["Container"], None]
 
 
@@ -245,9 +251,28 @@ def _entitlement_adapter(session: AsyncSession | None) -> EntitlementPort:
     return BaseEntitlementAdapter(session)
 
 
-def _model_provider_adapter(session: AsyncSession | None) -> ModelProviderPort:
-    """Build the core ``ModelProviderPort`` adapter for one request."""
-    return SelfHostedModelProviderAdapter(session)
+def _model_provider_adapter_factory(
+    hosted_provider_service: HostedProviderServiceBuilder | None,
+) -> UnitOfWorkPortFactory[ModelProviderPort]:
+    """Build the core ``ModelProviderPort`` factory: the deployment's hosted providers.
+
+    The adapter reads the hosted-providers store, so it needs the request's Unit
+    of Work. Without one (the hybrid data plane, which has no database, and the
+    boot-time shape check) it is built with no service and answers nothing.
+    With one, the service comes from ``hosted_provider_service``, the builder
+    the API layer passes in, for the reason the membership listener's is passed.
+    """
+
+    def build(session: AsyncSession | None, uow: UnitOfWork | None) -> ModelProviderPort:
+        del session
+        if uow is None:
+            return HostedProviderModelProviderAdapter(None)
+        if hosted_provider_service is None:
+            msg = f"a hosted-provider service builder is required to build {_port_name(ModelProviderPort)}"
+            raise ContainerError(msg)
+        return HostedProviderModelProviderAdapter(hosted_provider_service(uow))
+
+    return build
 
 
 def _telemetry_storage_adapter(session: AsyncSession | None) -> TelemetryStoragePort:
@@ -258,6 +283,11 @@ def _telemetry_storage_adapter(session: AsyncSession | None) -> TelemetryStorage
 def _growth_signal_adapter(session: AsyncSession | None) -> GrowthSignalPort:
     """Build the core ``GrowthSignalPort`` adapter for one request."""
     return NullGrowthSignalAdapter(session)
+
+
+def _usage_signal_adapter(session: AsyncSession | None) -> UsageSignalPort:
+    """Build the core ``UsageSignalPort`` adapter, which holds no state of its own."""
+    return NullUsageSignalAdapter()
 
 
 def _identity_provider_adapter_factory(
@@ -288,6 +318,7 @@ def _identity_provider_adapter_factory(
                 uow=uow,
                 workspace_listener=workspace_listener(uow),
             ),
+            functools.partial(forget_unproven_access, session),
             open_signup=bool(config and config.open_signup),
         )
 
@@ -465,6 +496,7 @@ def _with_session(port: PortKey[T], adapter: Callable[[AsyncSession], T]) -> Por
 
 
 def _local_web_search_policy(
+    config: GatewayConfig,
     search_keys: WorkspaceSearchKeysBuilder | None,
 ) -> Callable[[AsyncSession], WebSearchPolicyPort]:
     """Build the stored web search policy, which also reads the workspace's own search key."""
@@ -473,12 +505,15 @@ def _local_web_search_policy(
         if search_keys is None:
             msg = f"a search key resolver is required to build {_port_name(WebSearchPolicyPort)}"
             raise ContainerError(msg)
-        return LocalWebSearchPolicy(session, search_keys=search_keys(session))
+        return LocalWebSearchPolicy(
+            session, search_keys=search_keys(session), on_without_policy=config.web_search_on_without_policy()
+        )
 
     return build
 
 
 def _local_code_execution_policy(
+    config: GatewayConfig,
     policies: CodeExecutionPoliciesBuilder | None,
 ) -> Callable[[AsyncSession], CodeExecutionPolicyPort]:
     """Build the stored code execution policy."""
@@ -487,7 +522,7 @@ def _local_code_execution_policy(
         if policies is None:
             msg = f"a code execution policy reader is required to build {_port_name(CodeExecutionPolicyPort)}"
             raise ContainerError(msg)
-        return LocalCodeExecutionPolicy(policies(session))
+        return LocalCodeExecutionPolicy(policies(session), on_without_policy=config.code_execution_on_without_policy())
 
     return build
 
@@ -509,10 +544,12 @@ def _bind_workspace_ports(
     elif deployment_for(config).supports(Plane.CONTROL):
         container.bind(
             CodeExecutionPolicyPort,
-            _with_session(CodeExecutionPolicyPort, _local_code_execution_policy(code_execution_policies)),
+            _with_session(CodeExecutionPolicyPort, _local_code_execution_policy(config, code_execution_policies)),
         )
         container.bind(McpServerPort, _with_session(McpServerPort, LocalMcpServers))
-        container.bind(WebSearchPolicyPort, _with_session(WebSearchPolicyPort, _local_web_search_policy(search_keys)))
+        container.bind(
+            WebSearchPolicyPort, _with_session(WebSearchPolicyPort, _local_web_search_policy(config, search_keys))
+        )
     else:
         container.bind(CodeExecutionPolicyPort, _shared(RemoteCodeExecutionPolicy(config)))
         container.bind(McpServerPort, _shared(RemoteMcpServers(config)))
@@ -527,6 +564,7 @@ def build_container(
     workspace_listener: WorkspaceListenerBuilder | None,
     search_keys: WorkspaceSearchKeysBuilder | None = None,
     code_execution_policies: CodeExecutionPoliciesBuilder | None = None,
+    hosted_provider_service: HostedProviderServiceBuilder | None = None,
 ) -> Container:
     """Build the composition-root container for this deployment.
 
@@ -538,9 +576,10 @@ def build_container(
     organization service notifies. It is a parameter because its builder lives
     in the API layer, which this module cannot import. ``workspace_listener``
     builds what sets up a workspace that adapter's open signup creates,
-    ``search_keys`` the resolver of a workspace's own web search key, and
+    ``search_keys`` the resolver of a workspace's own web search key,
     ``code_execution_policies`` the reader of a workspace's code execution
-    policy, for the same reason.
+    policy, and ``hosted_provider_service`` the service the model provider
+    adapter serves hosted inference from, all for the same reason.
 
     Raises:
         BootstrapError: If the selector is present but blank, or names a
@@ -557,13 +596,16 @@ def build_container(
     # Entitlement: the base grants the capability set it ships, which is
     # currently empty, and reports every overlay-only capability as absent.
     container.bind(EntitlementPort, _entitlement_adapter)
-    # Model inference: the base has no hosted-inference fleet, so every
-    # candidate with no BYO credential is unavailable. Self-hosting is served
-    # upstream of this port, not behind it.
-    container.bind(ModelProviderPort, _model_provider_adapter)
+    # Model inference: the base serves a candidate with no BYO credential on
+    # one of the deployment's hosted providers, where the operator configured
+    # one. Self-hosting is served upstream of this port, not behind it.
+    container.bind_with_unit_of_work(ModelProviderPort, _model_provider_adapter_factory(hosted_provider_service))
     # Growth and support-messenger notifications: the base has no vendor of its
     # own, so every lifecycle event is a no-op.
     container.bind(GrowthSignalPort, _growth_signal_adapter)
+    # Settled usage rows: the base reports them to nobody, its usage table
+    # being the whole record. Resolved once, when the usage log writer is built.
+    container.bind(UsageSignalPort, _usage_signal_adapter)
     # Telemetry storage: the base keeps what the OTLP receiver captures in
     # this deployment's own database, which is where it has always gone. An
     # overlay binds a scale-out store behind the same port.
@@ -643,6 +685,7 @@ def build_container(
         raise BootstrapError(msg)
     rebound = sorted(_port_name(port) for port, factory in container.bindings() if defaults.get(port) is not factory)
     _verify_port_shape(container, ModelProviderPort)
+    _verify_port_shape(container, UsageSignalPort)
     container.summary = f"{bootstrap_selector} rebound {', '.join(rebound) or 'no ports'}"
     contributed = ", ".join(contribution.capability for contribution in container.router_contributions())
     if contributed:

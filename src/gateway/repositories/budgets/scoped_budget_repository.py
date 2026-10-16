@@ -46,7 +46,7 @@ class ApplicableCeiling:
 
 @dataclass(frozen=True)
 class CeilingUsage:
-    """A ceiling's cap, its recorded use and its holds, on each axis."""
+    """A ceiling's cap, its recorded use and its holds, on each axis, and when its window ends."""
 
     max_budget: Decimal | None
     current_spend: Decimal
@@ -57,6 +57,7 @@ class CeilingUsage:
     request_limit: int | None
     current_requests: int
     reserved_requests: int
+    period_end: datetime | None
 
 
 @dataclass(frozen=True)
@@ -208,7 +209,7 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
         return result.tuples().first()
 
     async def get_usage(self, scoped_budget_id: str) -> CeilingUsage | None:
-        """Return this ceiling's cap, recorded use and holds on each axis, or None when it no longer exists."""
+        """Return this ceiling's cap, recorded use, holds and window end, or None when it no longer exists."""
         row = (
             await self.db.execute(
                 select(
@@ -221,6 +222,7 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
                     Budget.request_limit,
                     ScopedBudget.current_requests,
                     ScopedBudget.reserved_requests,
+                    ScopedBudget.period_end,
                 )
                 .join(Budget, Budget.budget_id == ScopedBudget.budget_id)
                 .where(ScopedBudget.id == scoped_budget_id)
@@ -368,15 +370,30 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
             ) in result.tuples().all()
         ]
 
-    async def list_in_scopes(self, scopes: ScopeIdSets, *, skip: int, limit: int) -> list[tuple[ScopedBudget, Budget]]:
-        """Return a page of the ceilings on these scopes, each with the budget it names, oldest first."""
-        result = await self.db.execute(
+    async def list_in_scopes(
+        self,
+        scopes: ScopeIdSets,
+        *,
+        skip: int,
+        limit: int,
+        scope_type: ScopeType | None = None,
+        scope_id: str | None = None,
+    ) -> list[tuple[ScopedBudget, Budget]]:
+        """Return a page of the ceilings on these scopes, each with the budget it names, oldest first.
+
+        ``scope_type`` and ``scope_id`` narrow the page to one scope kind or one scope.
+        """
+        statement = (
             select(ScopedBudget, Budget)
             .join(Budget, Budget.budget_id == ScopedBudget.budget_id)
             .where(_in_scopes(scopes))
-            .order_by(ScopedBudget.created_at, ScopedBudget.id)
-            .offset(skip)
-            .limit(limit)
+        )
+        if scope_type is not None:
+            statement = statement.where(ScopedBudget.scope_type == scope_type)
+        if scope_id is not None:
+            statement = statement.where(ScopedBudget.scope_id == scope_id)
+        result = await self.db.execute(
+            statement.order_by(ScopedBudget.created_at, ScopedBudget.id).offset(skip).limit(limit)
         )
         return list(result.tuples().all())
 
@@ -395,6 +412,13 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    async def get_in_scopes(self, scoped_budget_id: str, scopes: ScopeIdSets) -> ScopedBudget | None:
+        """Return the ceiling with this ID when it is on one of these scopes, otherwise None."""
+        result = await self.db.execute(
+            select(ScopedBudget).where(ScopedBudget.id == scoped_budget_id, _in_scopes(scopes))
+        )
+        return result.scalar_one_or_none()
 
     async def lock(self, scoped_budget_ids: Sequence[str]) -> None:
         """Lock these ceilings until the transaction ends, in the order of their IDs."""
@@ -520,6 +544,39 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
         if held_requests > 0:
             values["reserved_requests"] = _release_count_expression(ScopedBudget.reserved_requests, held_requests)
         await self._update_counters(scoped_budget_ids, values)
+
+    async def scope_ceiling(self, scope_type: ScopeType, scope_id: str) -> ScopedBudget | None:
+        """Return the ceiling that caps this scope across every provider, or None."""
+        result = await self.db.execute(select(ScopedBudget).where(_scope_match(scope_type, scope_id, None)))
+        return result.scalars().first()
+
+    async def add_scope_ceiling_if_absent(
+        self,
+        *,
+        scope_type: ScopeType,
+        scope_id: str,
+        budget_id: str,
+        period_start: datetime | None,
+        period_end: datetime | None,
+    ) -> bool:
+        """Stage a ceiling capping this scope across every provider, returning False when one already does.
+
+        The insert runs in a SAVEPOINT, so losing that race to a concurrent writer rolls back this row alone.
+        """
+        try:
+            async with self.db.begin_nested():
+                self.db.add(
+                    ScopedBudget(
+                        scope_type=scope_type,
+                        scope_id=scope_id,
+                        budget_id=budget_id,
+                        period_start=period_start,
+                        period_end=period_end,
+                    )
+                )
+        except IntegrityError:
+            return False
+        return True
 
     async def _exists(self, match: ColumnElement[bool]) -> bool:
         """Report whether any ceiling matches this predicate."""

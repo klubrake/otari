@@ -13,6 +13,7 @@ from gateway.models import (  # noqa: F401
     budgets,
     files,
     guardrails,
+    identity,
     inference,
     platform,
     playground,
@@ -24,6 +25,7 @@ from gateway.models import (  # noqa: F401
     saved_views,
     tenancy,
     tools,
+    traces,
     usage,
     users,
 )

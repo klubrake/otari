@@ -7,8 +7,9 @@ Each entry names the ``CoreFeature`` its own module declares, so nothing is buil
 Whether a listed feature runs is that feature's own ``enabled`` setting.
 """
 
+from gateway.api.routes.traces import FEATURE as TRACES
 from gateway.core.feature import CoreFeature
 
 # Upstream ships in-product feedback here, which forwards what a user types to
 # api.otari.ai. This fork deletes it: nothing about this deployment's users leaves it.
-CORE_FEATURES: tuple[CoreFeature, ...] = ()
+CORE_FEATURES: tuple[CoreFeature, ...] = (TRACES,)

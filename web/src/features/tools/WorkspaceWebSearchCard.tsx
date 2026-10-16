@@ -29,15 +29,14 @@ import { useAutosave } from "@/shared/hooks/useAutosave"
 // results and domains. The card shows the switch with the narrowing under
 // Advanced; the purpose hint and provider options are set through the API.
 //
-// What "none" means depends on the deployment. Standalone, no row narrows
-// nothing, so it reads as on, and switching on deletes a row that narrows
-// nothing else. Hosted, the platform reads a workspace with no row as off, so
-// the switch reads the stored `enabled` alone and only ever writes it.
+// What "none" means is the deployment's `default_enabled`. Switching to that
+// value deletes a row that narrows nothing else, and any other change writes.
 
-// The server's own bounds (`workspace_web_search_service`): a ceiling above
-// what the backend honors could never take effect, and the list bound stops one
-// workspace's row growing without limit.
-export const MAX_RESULTS = 20
+// The server's own bounds (`workspace_web_search_service`). The results bound
+// is only the largest number its column holds, since the gateway sets no
+// ceiling of its own; the list bound stops one workspace's row growing without
+// limit.
+export const MAX_RESULTS = 2147483647
 const MAX_DOMAINS = 100
 
 // Anything that means the entry is not a bare host. The server compares each
@@ -90,13 +89,10 @@ function narrowsAnything(config: WorkspaceWebSearchConfig): boolean {
  */
 export function WorkspaceWebSearchCard({
   leading,
-  isHosted = false,
   isAvailable = true,
 }: {
   /** Rows above the switch, so the tools and their switch read as one card. */
   leading?: ReactNode
-  /** A hosted control plane, where no row means off. */
-  isHosted?: boolean
   /** Whether this deployment can run either tool at all. */
   isAvailable?: boolean
 }) {
@@ -150,11 +146,6 @@ export function WorkspaceWebSearchCard({
   }
 
   if (!manages) {
-    // The playground's answer reads a missing row as on, which a hosted
-    // control plane does not, so there a member is shown the tools alone.
-    if (isHosted) {
-      return leading ? <SettingsGroup isBounded>{leading}</SettingsGroup> : null
-    }
     return (
       <WorkspaceToolStatus
         tool="web_search"
@@ -165,9 +156,9 @@ export function WorkspaceWebSearchCard({
   }
 
   const config = query.data
-  const isOn = isHosted
-    ? Boolean(config?.configured && config.enabled)
-    : !(config?.configured && !config.enabled)
+  const isOn = config?.configured
+    ? config.enabled
+    : (config?.default_enabled ?? true)
   const organizationName = context.data?.organization.name
   // Disabled until the read has succeeded. Without that the switch sits on over
   // a workspace that may well have a stored row, and one change issues the
@@ -177,9 +168,9 @@ export function WorkspaceWebSearchCard({
 
   const setAllowed = (allowed: boolean) =>
     save.run(() =>
-      isHosted || !allowed || (config && narrowsAnything(config))
-        ? write({ enabled: allowed })
-        : clearConfig.mutateAsync({ workspaceId: selected.workspace_id }),
+      config && allowed === config.default_enabled && !narrowsAnything(config)
+        ? clearConfig.mutateAsync({ workspaceId: selected.workspace_id })
+        : write({ enabled: allowed }),
     )
   // Reachable only while the switch is on, so the row it writes stays on.
   const commitField = (patch: Partial<UpdateWorkspaceWebSearchConfigRequest>) =>
@@ -224,7 +215,7 @@ export function WorkspaceWebSearchCard({
         <PolicyRow
           key={`results-${selected.workspace_id}`}
           label="Max results for this workspace"
-          help="Search only. Lowers how many results one search returns."
+          help="Search only. Lowers how many results one search returns. Empty: the provider's own maximum."
           placeholder="10"
           isNumeric
           committed={

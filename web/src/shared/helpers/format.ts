@@ -58,6 +58,8 @@ export function formatUnitRate(value: number): string {
 // `undefined` rather than a placeholder when the row recorded none, so a table
 // cell can render the em dash that keeps it aligned and a stat card can drop
 // the figure instead.
+export function formatLatency(ms: number): string
+export function formatLatency(ms: number | null | undefined): string | undefined
 export function formatLatency(
   ms: number | null | undefined,
 ): string | undefined {
@@ -254,6 +256,33 @@ export function formatCompact(value: number): string {
 /** A duration in whole-ish seconds, for a threshold: 10000 -> "10 s". */
 export function formatSeconds(ms: number): string {
   return `${formatNumber(ms / 1000)} s`
+}
+
+// A date and a time to the minute, where the seconds are noise.
+export function formatDateTimeMinutes(iso: string | null | undefined): string {
+  if (!iso) {
+    return "—"
+  }
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) {
+    return iso
+  }
+  return date.toLocaleString(undefined, {
+    dateStyle: "short",
+    timeStyle: "short",
+  })
+}
+
+// The time of day alone, for rows that already sit under their date.
+export function formatTime(iso: string | null | undefined): string {
+  if (!iso) {
+    return "—"
+  }
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) {
+    return iso
+  }
+  return date.toLocaleTimeString()
 }
 
 // The heading a dated row sits under in a history list: "Today", "Yesterday",

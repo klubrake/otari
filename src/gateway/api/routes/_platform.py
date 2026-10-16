@@ -12,7 +12,7 @@ lock-in semantics, and the terminal all-failed status mapping uniformly.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar
 
@@ -42,6 +42,7 @@ from gateway.metrics import REGISTRY, Counter
 from gateway.services.bedrock_gateway_auth import build_bedrock_client_args
 from gateway.services.control_plane import ResolveEndpoint, resolve, transport
 from gateway.services.inference import (
+    is_empty_completion,
     is_provider_billing_error,
     is_retry_futile,
     is_upstream_request_fault,
@@ -125,22 +126,28 @@ class ResolvedAttempt(BaseModel):
     ``default_attempt_kwargs``, which merges these in non-overridably."""
 
 
+# What the gateway attaches from a peer's settlement, checked at this edge: a
+# negative amount or a source name of any shape reaches a client otherwise.
+_SETTLED_COST_PATTERN = r"^\d+\.\d{6}$"
+_PRICING_SOURCE_PATTERN = r"^[a-z_]{1,32}$"
+
+
 class SettledCost(BaseModel):
     """An attachable platform settlement: a priced cost and the basis for it."""
 
-    cost_usd: str = Field(pattern=r"^-?\d+\.\d{6}$")
-    pricing_source: str
+    cost_usd: str = Field(pattern=_SETTLED_COST_PATTERN)
+    pricing_source: str = Field(pattern=_PRICING_SOURCE_PATTERN)
 
 
 class _UsagePricing(BaseModel):
-    source: str | None
+    source: str | None = Field(pattern=_PRICING_SOURCE_PATTERN)
 
 
 class _CompletedUsageSettlement(BaseModel):
     correlation_id: str
     status: Literal["completed"]
     outcome: Literal["success"]
-    cost_usd: str = Field(pattern=r"^-?\d+\.\d{6}$")
+    cost_usd: str = Field(pattern=_SETTLED_COST_PATTERN)
     currency: Literal["USD"]
     usage_status: Literal["reported", "unavailable"]
     pricing: _UsagePricing
@@ -181,6 +188,31 @@ class _AttemptFailure:
     error: BaseException = field(repr=False)
 
 
+class UnsupportedAttemptProviderError(Exception):
+    """The control plane named a provider this gateway's any-llm does not know.
+
+    A newer control plane can offer a provider an older gateway predates. The
+    attempt is a gateway capability gap, not a provider failure, and is reported
+    as one so the platform does not blame the provider.
+    """
+
+    def __init__(self, provider: str) -> None:
+        super().__init__(f"This gateway cannot reach provider {provider!r}")
+        self.provider = provider
+
+
+def attempt_provider(attempt: ResolvedAttempt) -> LLMProvider:
+    """The any-llm provider ``attempt`` names.
+
+    Raises:
+        UnsupportedAttemptProviderError: This gateway does not know the provider.
+    """
+    try:
+        return LLMProvider(attempt.provider)
+    except ValueError:
+        raise UnsupportedAttemptProviderError(attempt.provider) from None
+
+
 def build_attempt_client_args(attempt: ResolvedAttempt) -> dict[str, Any] | None:
     """Build the ``client_args`` any-llm needs to construct this attempt's
     provider client, or ``None`` when the attempt carries no ``extra_params``.
@@ -204,7 +236,7 @@ def build_attempt_client_args(attempt: ResolvedAttempt) -> dict[str, Any] | None
     """
     if not attempt.extra_params:
         return None
-    if LLMProvider(attempt.provider) == LLMProvider.BEDROCK:
+    if attempt_provider(attempt) == LLMProvider.BEDROCK:
         return build_bedrock_client_args(attempt.api_key, attempt.extra_params)
     return dict(attempt.extra_params)
 
@@ -222,14 +254,14 @@ def default_attempt_kwargs(
     shadowed by a same-named field in the caller's own request body,
     matching how ``api_key``/``model`` are already non-overridable.
     """
-    attempt_provider = LLMProvider(attempt.provider)
+    provider = attempt_provider(attempt)
     kwargs: dict[str, Any] = {"api_key": attempt.api_key}
     if attempt.api_base:
         kwargs["api_base"] = attempt.api_base
     merged = {
         **kwargs,
         **base_request_fields,
-        "model": f"{attempt_provider.value}:{attempt.model}",
+        "model": f"{provider.value}:{attempt.model}",
     }
     client_args = build_attempt_client_args(attempt)
     if client_args is not None:
@@ -378,6 +410,7 @@ async def run_platform_attempts(
     report_attempt_outcome: Callable[[ResolvedAttempt, str, Any, str | None, bool], None],
     on_success: Callable[[ResolvedAttempt], None],
     max_tool_iterations: int,
+    prepare_attempt: Callable[[ResolvedAttempt], dict[str, Any]] | None = None,
 ) -> T:
     """Iterate ``attempts``, returning the first one that succeeds.
 
@@ -389,7 +422,9 @@ async def run_platform_attempts(
     upstream response — locking the request in to the current attempt. The
     runner is agnostic to the response shape; ``extract_usage`` pulls the
     usage object out for reporting and ``on_success`` lets the caller mutate
-    the FastAPI response object on success.
+    the FastAPI response object on success. ``prepare_attempt`` is called just
+    before each attempt runs, with the request fields that attempt is sent in
+    place of ``base_request_fields``.
 
     Lock-in semantics: once ``on_first_response`` has fired on an attempt,
     any subsequent error from that attempt terminates the request instead of
@@ -430,7 +465,6 @@ async def run_platform_attempts(
     last_exc: BaseException | None = None
 
     for index, attempt in enumerate(attempts):
-        completion_kwargs = default_attempt_kwargs(attempt, base_request_fields)
         is_last_planned_attempt = index == len(attempts) - 1
 
         # Per-attempt lock-in flag. Flipped the moment the upstream returns
@@ -451,7 +485,10 @@ async def run_platform_attempts(
             )
 
         try:
-            result = await run_attempt(completion_kwargs, _mark_locked_in)
+            # Built inside the ``try``: an attempt naming a provider this gateway
+            # cannot reach falls through to the next one like any failed attempt.
+            fields = prepare_attempt(attempt) if prepare_attempt is not None else base_request_fields
+            result = await run_attempt(default_attempt_kwargs(attempt, fields), _mark_locked_in)
         except HTTPException:
             raise
         except MaxToolIterationsExceeded as exc:
@@ -743,6 +780,10 @@ def _classify_upstream_error(exc: BaseException) -> tuple[bool, str]:
     """
     if missing_credential(exc) is not None:
         return True, "missing_credential"
+    if isinstance(exc, UnsupportedAttemptProviderError):
+        return True, "unsupported_provider"
+    if is_empty_completion(exc):
+        return True, "empty_completion"
 
     kind, status_code = upstream_exception_shape(exc)
     if kind is not None:
@@ -767,12 +808,14 @@ async def _report_platform_usage(
     session_label: str | None = None,
     *,
     ttft_ms: int | None = None,
+    units: Mapping[str, int] | None = None,
     is_final_attempt: bool,
 ) -> SettledCost | None:
     """POST a usage record back to the platform with bounded retries.
 
     ``is_final_attempt`` tells the platform that no later planned fallback will
-    run. Failures are swallowed after ``max_retries`` so they don't impact the
+    run. ``units`` carries the counts a rate that is not per token bills a
+    successful attempt on, keyed by pricing unit. Failures are swallowed after ``max_retries`` so they don't impact the
     user's response path. Non-retryable status codes (auth /
     payment-required / not-found / conflict / unprocessable) short-circuit the
     retry loop.
@@ -814,6 +857,11 @@ async def _report_platform_usage(
             if cache_write_tokens:
                 usage_payload["cache_write_1h_tokens"] = cache_write_1h_tokens_of(usage)
             payload["usage"] = usage_payload
+        # Beside ``usage`` rather than in it: a report with no token counts omits
+        # ``usage`` so the platform records it as unavailable, and a peer that
+        # does not read ``units`` must keep seeing that.
+        if units:
+            payload["units"] = dict(units)
     elif error_class is not None:
         payload["error_class"] = error_class
 

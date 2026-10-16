@@ -11,20 +11,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import (
     get_config,
-    get_db,
-    get_inference_service,
+    get_db_if_needed,
     get_log_writer,
-    verify_api_key_or_master_key,
+    verify_api_key_or_master_key_if_needed,
 )
-from gateway.api.routes._passthrough import BillingMeters, run_passthrough
+from gateway.api.routes._passthrough import run_passthrough
+from gateway.api.routes._pipeline import record_inline_cost_settlement
 from gateway.core.config import GatewayConfig
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import ModelPricing
 from gateway.schemas.inference import RerankResponse
 from gateway.services.budgets import rerank_estimate
-from gateway.services.inference import InferenceService
+from gateway.services.inference import RERANK_BILLING, InferenceService
 from gateway.services.log_writer import LogWriter
-from gateway.services.pricing_service import billed_search_units, rerank_cost, rerank_meters
 from gateway.services.provider_kwargs import ResolvedProvider
 
 router = APIRouter(tags=["rerank"])
@@ -49,11 +48,10 @@ async def create_rerank(
     raw_request: Request,
     response: Response,
     request: RerankRequest,
-    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    auth_result: Annotated[tuple[APIKey | None, bool] | None, Depends(verify_api_key_or_master_key_if_needed)],
+    db: Annotated[AsyncSession | None, Depends(get_db_if_needed)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     log_writer: Annotated[LogWriter, Depends(get_log_writer)],
-    inference: Annotated[InferenceService, Depends(get_inference_service)],
 ) -> RerankResponse:
     """Rerank documents by relevance to a query.
 
@@ -71,22 +69,11 @@ async def create_rerank(
     - API key + user field: Use specified user (must exist)
     - API key without user field: Use the shared "default" user
     """
-    prompt_chars = len(request.query) + sum(len(doc) for doc in request.documents)
 
     def estimate(pricing: ModelPricing | None) -> Decimal:
-        return rerank_estimate(pricing, prompt_chars=prompt_chars)
-
-    def usage_tokens(result: ProviderRerankResponse) -> tuple[int | None, int | None, int | None]:
-        total_tokens = _total_tokens(result)
-        return (total_tokens, 0, total_tokens)
-
-    def compute_cost(result: ProviderRerankResponse, pricing: ModelPricing | None) -> Decimal | None:
-        return rerank_cost(pricing, search_units=_search_units(result), total_tokens=_total_tokens(result))
-
-    def compute_meters(
-        result: ProviderRerankResponse, pricing: ModelPricing | None, cost: Decimal
-    ) -> BillingMeters | None:
-        return rerank_meters(pricing, search_units=_search_units(result), total_tokens=_total_tokens(result), cost=cost)
+        return rerank_estimate(
+            pricing, query_chars=len(request.query), document_chars=[len(doc) for doc in request.documents]
+        )
 
     async def call_provider(resolved: ResolvedProvider) -> ProviderRerankResponse:
         rerank_kwargs: dict[str, Any] = {
@@ -118,17 +105,11 @@ async def create_rerank(
         request_params=request.model_fields_set,
         estimate=estimate,
         enforce_require_pricing=True,
-        usage_tokens=usage_tokens,
-        compute_cost=compute_cost,
-        compute_meters=compute_meters,
+        billing=RERANK_BILLING,
+        inline_cost=True,
     )
-    return inference.rerank_response(outcome.result, pricing=outcome.pricing, cost=outcome.cost)
-
-
-def _total_tokens(result: ProviderRerankResponse) -> int | None:
-    """The tokens the provider reported for ``result``, if it reported any."""
-    return result.usage.total_tokens if result.usage else None
-
-
-def _search_units(result: ProviderRerankResponse) -> int:
-    return billed_search_units(result.meta.billed_units if result.meta else None)
+    if outcome.inline_cost is not None:
+        record_inline_cost_settlement("attached")
+    return InferenceService.rerank_response(
+        outcome.result, pricing=outcome.pricing, cost=outcome.cost, inline_cost=outcome.inline_cost
+    )

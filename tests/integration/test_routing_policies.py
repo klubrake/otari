@@ -42,10 +42,12 @@ from gateway.core.config import (
     API_ROOT,
     ATTEMPT_COUNT_HEADER,
     FALLBACK_HEADER,
+    MODEL_HEADER,
     PROVIDER_HEADER,
     RESPONSE_DURATION_HEADER,
     GatewayConfig,
 )
+from gateway.core.error_codes import ERROR_CODE_HEADER, PROVIDER_ERROR
 from gateway.models.routing import RoutingConfig
 from gateway.services import catalog as selectors
 
@@ -169,10 +171,15 @@ def _awaited_model(mock: AsyncMock) -> str:
     return model
 
 
-def _served_by(resp: Any) -> tuple[str | None, str | None, str | None]:
-    """The serving instance, attempt count and fallback flag a response's headers carry."""
+def _served_by(resp: Any) -> tuple[str | None, str | None, str | None, str | None]:
+    """The serving instance and model, attempt count and fallback flag a response's headers carry."""
     headers = resp.headers
-    return headers.get(PROVIDER_HEADER), headers.get(ATTEMPT_COUNT_HEADER), headers.get(FALLBACK_HEADER)
+    return (
+        headers.get(PROVIDER_HEADER),
+        headers.get(MODEL_HEADER),
+        headers.get(ATTEMPT_COUNT_HEADER),
+        headers.get(FALLBACK_HEADER),
+    )
 
 
 def _usage_rows(client: TestClient) -> list[dict[str, Any]]:
@@ -194,10 +201,10 @@ def test_policy_routes_to_its_default_target(client: TestClient) -> None:
         resp = _chat(client, "fast")
 
     assert resp.status_code == 200, resp.text
-    # The caller sees the policy name, never the underlying model.
+    # The body names the policy, and only the headers name the model behind it.
     assert resp.json()["model"] == "fast"
     assert _awaited_model(mock) == "openai:gpt-5-mini"
-    assert _served_by(resp) == ("openai", "1", "false")
+    assert _served_by(resp) == ("openai", "gpt-5-mini", "1", "false")
     # Billing keys on the resolved target.
     rows = _usage_rows(client)
     assert len(rows) == 1
@@ -219,7 +226,12 @@ def test_single_candidate_policy_matches_naming_the_model_directly(client: TestC
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
-def test_a_plain_model_names_the_instance_that_served_it(client: TestClient, stream: bool) -> None:
+@pytest.mark.parametrize(
+    ("model", "header"), [("gpt-5-mini", "gpt-5-mini"), ("gpt-5-m\u00efni", None)], ids=["ascii", "non-ascii"]
+)
+def test_a_plain_model_names_the_instance_and_model_that_served_it(
+    client: TestClient, stream: bool, model: str, header: str | None
+) -> None:
     _create_user(client)
 
     async def provider(**kwargs: Any) -> Any:
@@ -241,11 +253,12 @@ def test_a_plain_model_names_the_instance_that_served_it(client: TestClient, str
         return chunks()
 
     with patch("gateway.api.routes.chat.acompletion", new=provider):
-        resp = _chat(client, "openai:gpt-5-mini", stream=stream)
+        resp = _chat(client, f"openai:{model}", stream=stream)
         resp.read()
 
     assert resp.status_code == 200, resp.text
-    assert _served_by(resp) == ("openai", "1", "false")
+    # A name a header cannot carry is left out rather than failing a response the provider gave.
+    assert _served_by(resp) == ("openai", header, "1", "false")
     assert int(resp.headers[RESPONSE_DURATION_HEADER]) >= 0
 
 
@@ -255,7 +268,7 @@ def test_a_failed_request_names_no_serving_instance(client: TestClient) -> None:
         resp = _chat(client, "fast")
 
     assert resp.status_code == 502
-    assert _served_by(resp) == (None, None, None)
+    assert _served_by(resp) == (None, None, None, None)
     assert RESPONSE_DURATION_HEADER not in resp.headers
 
 
@@ -282,7 +295,7 @@ def test_failover_serves_the_next_candidate_and_bills_it_once(client: TestClient
     # Relabeled to the policy, so a fallover is invisible to the caller's code.
     assert resp.json()["model"] == "fast"
     # ...but not to a caller reading the headers, which name what served it.
-    assert _served_by(resp) == ("anthropic", "2", "true")
+    assert _served_by(resp) == ("anthropic", "claude-haiku-4-5", "2", "true")
 
     # Two rows: the attempt that served, plus the failure the policy absorbed.
     rows = _usage_rows(client)
@@ -338,6 +351,58 @@ def test_a_local_adapter_fault_still_fails_over(client: TestClient) -> None:
     assert resp.status_code == 200, resp.text
     assert calls == ["openai:gpt-5-mini", "anthropic:claude-haiku-4-5"]
     assert "x-should-retry" not in resp.headers
+
+
+def _empty_completion(model: str) -> ChatCompletion:
+    """A 200 from the provider with nothing in it: no choices, usage still reported."""
+    return ChatCompletion(
+        id="cmpl-empty",
+        choices=[],
+        created=0,
+        model=model,
+        object="chat.completion",
+        usage=CompletionUsage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
+    )
+
+
+def test_an_empty_completion_is_a_provider_error(client: TestClient) -> None:
+    _create_user(client)
+    with patch("gateway.api.routes.chat.acompletion", new=AsyncMock(return_value=_empty_completion("gpt-5-mini"))):
+        resp = _chat(client, "openai:gpt-5-mini")
+
+    assert resp.status_code == 502, resp.text
+    assert resp.headers[ERROR_CODE_HEADER] == PROVIDER_ERROR
+    assert resp.json()["code"] == PROVIDER_ERROR
+    assert resp.json()["detail"] == "The provider returned a completion with no choices"
+    rows = _usage_rows(client)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "error"
+    assert rows[0]["status_code"] == 502
+    assert rows[0]["error_message"] == "The provider returned a completion with no choices"
+
+
+def test_an_empty_completion_fails_over_to_the_next_candidate(client: TestClient) -> None:
+    _create_user(client)
+    calls: list[str] = []
+
+    async def empty_then_served(**kwargs: Any) -> ChatCompletion:
+        calls.append(kwargs["model"])
+        if kwargs["model"] == "openai:gpt-5-mini":
+            return _empty_completion("gpt-5-mini")
+        return _completion("claude-haiku-4-5")
+
+    with patch("gateway.api.routes.chat.acompletion", new=empty_then_served):
+        resp = _chat(client, "fast")
+
+    assert resp.status_code == 200, resp.text
+    assert calls == ["openai:gpt-5-mini", "anthropic:claude-haiku-4-5"]
+    assert resp.json()["choices"][0]["message"]["content"] == "hello"
+    assert _served_by(resp) == ("anthropic", "claude-haiku-4-5", "2", "true")
+    rows = _usage_rows(client)
+    absorbed = [r for r in rows if r["status"] == "absorbed"]
+    assert [r["model"] for r in absorbed] == ["gpt-5-mini"]
+    assert absorbed[0]["error_message"] == "The provider returned a completion with no choices"
+    assert [r["model"] for r in rows if r["status"] == "success"] == ["claude-haiku-4-5"]
 
 
 def test_all_candidates_failing_is_a_generic_502(client: TestClient) -> None:
@@ -433,7 +498,7 @@ def test_streaming_fails_over_before_any_bytes_are_flushed(client: TestClient) -
     assert resp.status_code == 200
     assert calls == ["openai:gpt-5-mini", "anthropic:claude-haiku-4-5"]
     # The walk runs before the stream opens, so the headers already know who serves it.
-    assert _served_by(resp) == ("anthropic", "2", "true")
+    assert _served_by(resp) == ("anthropic", "claude-haiku-4-5", "2", "true")
     # Chunks are relabeled to the policy name too.
     assert '"model":"fast"' in body.replace(" ", "")
 
@@ -469,7 +534,7 @@ def test_streaming_fails_over_when_the_stream_fails_on_its_first_read(client: Te
 
     assert resp.status_code == 200
     assert calls == ["openai:gpt-5-mini", "anthropic:claude-haiku-4-5"]
-    assert _served_by(resp) == ("anthropic", "2", "true")
+    assert _served_by(resp) == ("anthropic", "claude-haiku-4-5", "2", "true")
     assert '"error"' not in body
 
 
@@ -1583,7 +1648,7 @@ def test_messages_endpoint_fails_over(client: TestClient, stream: bool) -> None:
 
     assert resp.status_code == 200, resp.text
     assert calls == ["openai:gpt-5-mini", "anthropic:claude-haiku-4-5"]
-    assert _served_by(resp) == ("anthropic", "2", "true")
+    assert _served_by(resp) == ("anthropic", "claude-haiku-4-5", "2", "true")
 
 
 def test_responses_endpoint_fails_over(client: TestClient) -> None:
@@ -1613,7 +1678,7 @@ def test_responses_endpoint_fails_over(client: TestClient) -> None:
 
     assert resp.status_code == 200, resp.text
     assert calls == ["openai:gpt-5-mini", "anthropic:claude-haiku-4-5"]
-    assert _served_by(resp) == ("anthropic", "2", "true")
+    assert _served_by(resp) == ("anthropic", "claude-haiku-4-5", "2", "true")
 
 
 # ---------------------------------------------------------------------------
@@ -1987,6 +2052,140 @@ def test_a_catalog_id_reaches_the_offering_a_key_may_use(catalog_client: TestCli
     assert resp.status_code == 200, resp.text
     assert _awaited_model(mock) == "anthropic:m1-b"
     assert [(r["model"], r["selection_reason"]) for r in _usage_rows(catalog_client)] == [("m1-b", "catalog")]
+
+
+_LEGACY_ID = "openai/gpt-x"
+_SOLO_ID = "openai/gpt-solo"
+
+
+@pytest.fixture
+def legacy_catalog_client(routing_config: GatewayConfig, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
+    """``openai/gpt-x`` is the legacy spelling of ``openai:gpt-x`` and the catalog ID of a model Azure also serves.
+
+    The index ranks Azure first, so a plan led by ``openai:gpt-x`` follows the name rather than the ranking.
+    """
+
+    async def _idle(*_args: Any, **_kwargs: Any) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("gateway.main.run_selector_index_refresher", _idle)
+    config = routing_config.model_copy(
+        update={
+            "providers": {
+                **routing_config.providers,
+                "azure": {
+                    "provider_type": "azureopenai",
+                    "api_key": "sk-azure",
+                    "api_base": "https://example.openai.azure.com",
+                },
+            }
+        }
+    )
+    rows = [
+        selectors.OfferingRow("azure:gpt-x", "azure", "azureopenai", 1.0),
+        selectors.OfferingRow("openai:gpt-x", "openai", "openai", None),
+        selectors.OfferingRow("openai:gpt-solo", "openai", "openai", 1.0),
+    ]
+    identities = {
+        _LEGACY_ID: (_LEGACY_ID, ("azure:gpt-x", "openai:gpt-x")),
+        _SOLO_ID: (_SOLO_ID, ("openai:gpt-solo",)),
+    }
+    for client in build_test_client(config):
+        selectors.set_selector_index(selectors.build_selector_index(rows, identities))
+        yield client
+    selectors.reset_selector_index()
+
+
+def _openai_unavailable(calls: list[str]) -> Any:
+    async def dispatch(**kwargs: Any) -> ChatCompletion:
+        calls.append(kwargs["model"])
+        if kwargs["model"].startswith("openai:"):
+            raise _http_error(503)
+        return _completion("gpt-x")
+
+    return dispatch
+
+
+def test_a_legacy_spelling_of_a_catalog_id_falls_back_after_the_offering_it_names(
+    legacy_catalog_client: TestClient,
+) -> None:
+    _create_user(legacy_catalog_client)
+    calls: list[str] = []
+
+    with patch("gateway.api.routes.chat.acompletion", new=_openai_unavailable(calls)):
+        resp = _chat(legacy_catalog_client, _LEGACY_ID)
+
+    assert resp.status_code == 200, resp.text
+    assert calls == ["openai:gpt-x", "azureopenai:gpt-x"]
+    assert resp.json()["model"] == _LEGACY_ID
+    rows = _usage_rows(legacy_catalog_client)
+    served = [r for r in rows if r["status"] == "success"]
+    absorbed = [r for r in rows if r["status"] == "absorbed"]
+    assert [(r["provider"], r["model"], r["attempt_position"], r["selection_reason"]) for r in served] == [
+        ("azure", "gpt-x", 2, "on_failure")
+    ]
+    assert served[0]["policy_name"] == _LEGACY_ID
+    assert [(r["provider"], r["model"], r["attempt_position"]) for r in absorbed] == [("openai", "gpt-x", 1)]
+
+
+def test_a_legacy_spelling_of_a_catalog_id_is_served_by_the_offering_it_names(
+    legacy_catalog_client: TestClient,
+) -> None:
+    _create_user(legacy_catalog_client)
+
+    with patch("gateway.api.routes.chat.acompletion", new=AsyncMock(return_value=_completion("gpt-x"))) as mock:
+        resp = _chat(legacy_catalog_client, _LEGACY_ID)
+
+    assert resp.status_code == 200, resp.text
+    assert _awaited_model(mock) == "openai:gpt-x"
+    assert [(r["provider"], r["selection_reason"], r["policy_name"]) for r in _usage_rows(legacy_catalog_client)] == [
+        ("openai", "catalog", _LEGACY_ID)
+    ]
+
+
+def test_the_colon_spelling_of_an_offering_never_falls_back(legacy_catalog_client: TestClient) -> None:
+    _create_user(legacy_catalog_client)
+    calls: list[str] = []
+
+    with patch("gateway.api.routes.chat.acompletion", new=_openai_unavailable(calls)):
+        resp = _chat(legacy_catalog_client, "openai:gpt-x")
+
+    assert resp.status_code != 200
+    assert calls == ["openai:gpt-x"]
+    assert [r["policy_name"] for r in _usage_rows(legacy_catalog_client)] == [None]
+
+
+def test_a_legacy_spelling_of_a_single_offering_model_never_falls_back(legacy_catalog_client: TestClient) -> None:
+    _create_user(legacy_catalog_client)
+    calls: list[str] = []
+
+    with patch("gateway.api.routes.chat.acompletion", new=_openai_unavailable(calls)):
+        resp = _chat(legacy_catalog_client, _SOLO_ID)
+
+    assert resp.status_code != 200
+    assert calls == ["openai:gpt-solo"]
+    assert [r["policy_name"] for r in _usage_rows(legacy_catalog_client)] == [None]
+
+
+def test_a_legacy_spelling_gains_no_offering_the_keys_allow_list_excludes(legacy_catalog_client: TestClient) -> None:
+    _create_user(legacy_catalog_client)
+    key_resp = legacy_catalog_client.post(
+        f"{API_ROOT}/keys",
+        json={"user_id": "test-user", "allowed_models": ["openai:gpt-x"]},
+        headers=HEADERS,
+    )
+    assert key_resp.status_code == 200, key_resp.text
+    calls: list[str] = []
+
+    with patch("gateway.api.routes.chat.acompletion", new=_openai_unavailable(calls)):
+        resp = legacy_catalog_client.post(
+            f"{API_ROOT}/chat/completions",
+            json={"model": _LEGACY_ID, "messages": [{"role": "user", "content": "hi"}]},
+            headers={API_KEY_HEADER: f"Bearer {key_resp.json()['key']}"},
+        )
+
+    assert resp.status_code != 200
+    assert calls == ["openai:gpt-x"]
 
 
 def _cap_anthropic_spend(client: TestClient) -> None:

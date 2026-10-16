@@ -15,7 +15,7 @@ import type {
 import { apiFetch } from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
 import { fetchAllRows } from "@/shared/api/paging"
-import { KEYS } from "@/shared/api/queryKeys"
+import { KEYS, workspaceMeta } from "@/shared/api/queryKeys"
 
 // Which of the two key surfaces this caller may act on.
 //
@@ -56,6 +56,7 @@ export function useKeys(workspaceId?: string, enabled = true) {
   const scope = useKeysScope()
   return useQuery({
     queryKey: [KEYS, scope.base, workspaceId ?? null],
+    meta: workspaceMeta(workspaceId),
     queryFn: () => fetchAllKeys(scope.base, workspaceId),
     enabled: scope.isReady && enabled,
     staleTime: 60_000,

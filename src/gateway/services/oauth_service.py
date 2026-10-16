@@ -49,7 +49,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 from apron_auth import OAuthClient, ProviderConfig
-from apron_auth.errors import StateError
+from apron_auth.errors import INVALID_GRANT, StateError, TokenExchangeError
 from apron_auth.models import OAuthPendingState as PendingState
 from apron_auth.providers import github as apron_github
 from apron_auth.providers import google as apron_google
@@ -59,8 +59,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from gateway.core.config import API_ROOT, OAUTH_PROVIDERS, GatewayConfig
-from gateway.exceptions.identity_exceptions import OAuthExchangeError, OAuthNotConfiguredError, OAuthStateError
+from gateway.exceptions.identity_exceptions import (
+    OAuthExchangeError,
+    OAuthNotConfiguredError,
+    OAuthProviderUnavailableError,
+    OAuthStateError,
+)
 from gateway.log_config import logger
+from gateway.models.identity import EmailAssertion, ProviderIdentity
 from gateway.models.tenancy import OAUTH_STATE_TTL_SECONDS, OAuthPendingState
 
 # Which scopes each provider is asked for, and what it calls itself.
@@ -76,10 +82,14 @@ from gateway.models.tenancy import OAUTH_STATE_TTL_SECONDS, OAuthPendingState
 
 @dataclass(frozen=True)
 class _Provider:
-    """One provider's scopes, and the name it writes itself under."""
+    """One provider's scopes, the name it writes itself under, and whether its email claim can be trusted.
+
+    ``email_claim_trusted`` is true only when no tenant can set what the provider says about an address.
+    """
 
     label: str
     scopes: tuple[str, ...]
+    email_claim_trusted: bool
 
 
 # The resource the OAuth routes are mounted at. The router takes its prefix from
@@ -95,28 +105,13 @@ FLOW_COOKIE_PATH = f"{API_ROOT}{OAUTH_ROUTE_PREFIX}"
 _FLOW_SECRET_LENGTH = 43
 
 _PROVIDERS: dict[str, _Provider] = {
-    "google": _Provider(label="Google", scopes=("openid", "email", "profile")),
-    "github": _Provider(label="GitHub", scopes=("read:user", "user:email")),
+    "google": _Provider(label="Google", scopes=("openid", "email", "profile"), email_claim_trusted=True),
+    "github": _Provider(label="GitHub", scopes=("read:user", "user:email"), email_claim_trusted=True),
 }
 # Kept honest by a unit test as well, but asserted at import so a provider added
 # to one of the two lists and not the other fails on the way up rather than on
 # the first request that names it.
 assert set(_PROVIDERS) == set(OAUTH_PROVIDERS), "OAUTH_PROVIDERS and _PROVIDERS must name the same providers"
-
-
-@dataclass(frozen=True)
-class OAuthIdentity:
-    """What a completed exchange says about the person who just consented.
-
-    Narrower than apron-auth's ``IdentityProfile`` on purpose: this is the
-    subset that crosses ``IdentityProviderPort``, so what an adapter may key on
-    is visible here rather than being whatever the library happened to return.
-    """
-
-    provider: str
-    email: str | None
-    full_name: str | None
-    email_verified: bool
 
 
 def provider_label(provider: str) -> str:
@@ -128,6 +123,15 @@ def provider_label(provider: str) -> str:
     """
     known = _PROVIDERS.get(provider)
     return known.label if known else provider
+
+
+def trusts_email_claim(provider: str) -> bool:
+    """Say whether no tenant can set what this provider says about an address.
+
+    An unknown provider is not trusted.
+    """
+    known = _PROVIDERS.get(provider)
+    return known is not None and known.email_claim_trusted
 
 
 def redirect_uri(config: GatewayConfig, provider: str) -> str:
@@ -185,7 +189,7 @@ class _DatabaseStateStore:
     table that nothing else reads.
 
     Rows are staged on the caller's transaction and never committed here. The
-    route owns the commit boundary, which is what lets a callback that fails
+    caller owns the commit boundary, which is what lets a callback that fails
     after consuming a state roll the consumption back and leave the person a
     flow to retry.
     """
@@ -206,7 +210,6 @@ class _DatabaseStateStore:
         now = datetime.now(UTC)
         # The sweep rides here rather than on a scheduler because this is the
         # only write the table takes, so it is the only place that can grow it.
-        # Same reason ``create_dashboard_session`` prunes on the way in.
         await self._db.execute(delete(OAuthPendingState).where(col(OAuthPendingState.expires_at) <= now))
         self._db.add(
             OAuthPendingState(
@@ -349,7 +352,7 @@ async def exchange_code(
     state: str,
     flow_secret: str | None,
     db: AsyncSession,
-) -> OAuthIdentity:
+) -> ProviderIdentity:
     """Trade an authorization code for the identity the provider vouches for.
 
     ``state`` is claimed before the code is sent anywhere, so a callback this
@@ -366,9 +369,11 @@ async def exchange_code(
             credentials for ``provider``, or does not know its own address.
         OAuthStateError: If ``state`` names no authorization this deployment is
             still waiting on, for ``provider``, from this browser.
-        OAuthExchangeError: If the exchange or the identity fetch fails, for any
-            reason. The provider's own words stay on the traceback and out of
-            the response; see that error's docstring.
+        OAuthExchangeError: If the provider says the code is invalid, expired or spent, or the identity does not
+            fit the link table.
+        OAuthProviderUnavailableError: If the provider fails or cannot be reached during the exchange or the
+            identity fetch.
+            The provider's own words stay on the traceback and out of the response, as that error's docstring says.
 
     """
     if flow_secret is None:
@@ -388,20 +393,31 @@ async def exchange_code(
         # Logged with the exception so an operator can see the provider's own
         # error and description, which the response deliberately does not carry.
         logger.warning("OAuth code exchange with %s failed", provider, exc_info=True)
+        if _provider_refused_the_code(error):
+            raise OAuthExchangeError(provider_label(provider)) from error
+        raise OAuthProviderUnavailableError(provider_label(provider)) from error
+
+    try:
+        return ProviderIdentity(
+            provider=provider,
+            subject=profile.subject or "",
+            email=profile.email,
+            full_name=profile.name,
+            email_verified=EmailAssertion.from_claim(profile.email_verified),
+        )
+    except ValueError as error:
+        logger.warning("Refused a %s identity that the link table cannot hold", provider)
         raise OAuthExchangeError(provider_label(provider)) from error
 
-    return OAuthIdentity(
-        provider=provider,
-        email=profile.email,
-        full_name=profile.name,
-        # apron-auth reports email_verified as tri-state (True, False, or
-        # unasserted). This edition resolves identity on a bool, so an
-        # unasserted value collapses to unverified rather than being laundered
-        # into a verified identity. mozilla-ai/otari-ai#1551 moves resolution
-        # onto the tri-state model, once, on the platform; it is deliberately
-        # not anticipated here.
-        email_verified=profile.email_verified is True,
-    )
+
+def _provider_refused_the_code(error: Exception) -> bool:
+    """Whether the token endpoint said the authorization code is invalid, expired or already spent.
+
+    Only ``invalid_grant`` says that. Every other failure is the provider's or this deployment's: no answer, a
+    server error under whatever code it carries, a failed identity fetch, or ``invalid_client`` and
+    ``unauthorized_client``, which mean the configured client credentials were refused.
+    """
+    return isinstance(error, TokenExchangeError) and error.error_code == INVALID_GRANT
 
 
 def require_configured(config: GatewayConfig, provider: str) -> None:
@@ -485,7 +501,6 @@ __all__ = [
     "FLOW_COOKIE_NAME",
     "FLOW_COOKIE_PATH",
     "OAUTH_ROUTE_PREFIX",
-    "OAuthIdentity",
     "apply_flow_cookie",
     "authorization_url",
     "base_url",
@@ -495,4 +510,5 @@ __all__ = [
     "provider_label",
     "redirect_uri",
     "require_configured",
+    "trusts_email_claim",
 ]

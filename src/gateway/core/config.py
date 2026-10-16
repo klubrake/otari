@@ -1,5 +1,6 @@
 import base64
 import binascii
+import json
 import os
 import re
 import types
@@ -12,16 +13,21 @@ from urllib.parse import urlsplit
 import yaml
 from any_llm import AnyLLM, LLMProvider
 from any_llm.exceptions import AnyLLMError
+from botocore.config import Config as BotocoreConfig
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from gateway.core.addresses import normalized_address
 from gateway.core.env import otari_env
+from gateway.core.settings.api_keys import ApiKeySettings
 from gateway.core.settings.budgets import BudgetSettings
 from gateway.core.settings.inference import InferenceSettings
+from gateway.core.settings.organizations import OrganizationSettings
 from gateway.core.settings.pricing import PricingSettings
+from gateway.core.settings.providers import ProviderSettings
 from gateway.core.settings.tools import ToolSettings
+from gateway.core.settings.traces import TraceSettings
 from gateway.core.settings_view import OMITTED, SECRET, SettingsGroup, Shown
 from gateway.log_config import logger
 from gateway.models.routing import RoutingConfig
@@ -86,11 +92,12 @@ REQUEST_ID_HEADER = "Otari-Request-ID"
 # standalone gateway resolves no attempts to name.
 ATTEMPT_ID_HEADER = "Otari-Attempt-ID"
 # Response headers describing how a standalone completion was served: the
-# provider instance that answered (its name, never its base URL), how many
-# candidates were sent the request, whether a candidate other than the plan's
-# first served it, and how long the gateway took to answer. See
+# provider instance that answered (its name, never its base URL), the model it
+# was sent, how many candidates were sent the request, whether a candidate other
+# than the plan's first served it, and how long the gateway took to answer. See
 # docs/routing.md#what-is-billed-and-what-the-caller-sees.
 PROVIDER_HEADER = "Otari-Provider"
+MODEL_HEADER = "Otari-Model"
 ATTEMPT_COUNT_HEADER = "Otari-Attempt-Count"
 FALLBACK_HEADER = "Otari-Fallback"
 RESPONSE_DURATION_HEADER = "Otari-Response-Duration-Ms"
@@ -138,6 +145,10 @@ RESERVED_PROVIDER_INSTANCE_NAMES: frozenset[str] = frozenset({"otari", HOSTED_OF
 
 OTARI_CONFIG_YAML_ENV = "OTARI_CONFIG_YAML"
 OTARI_CONFIG_B64_ENV = "OTARI_CONFIG_B64"
+# Mapping fields an OTARI_<FIELD> variable sets as a JSON object. The variable
+# replaces the file's block whole, as a top-level key of OTARI_CONFIG_YAML does,
+# rather than merging into it per entry.
+JSON_ENV_FIELDS = ("hosted_providers",)
 # GatewayConfig fields promoted from ad hoc otari_env() reads in route/service
 # code. The read sites still consult otari_env() (they have no config object in
 # scope), so load_config bridges values set in the YAML config into the process
@@ -302,6 +313,11 @@ def session_affinity_supported(instance: str, provider_type: str | None) -> bool
 # from a keyed provider, so they are listed by hand and drift-guarded in
 # ``tests/unit/test_provider_instances.py``.
 KEYLESS_SELF_HOSTED_PROVIDERS = frozenset({"cascadia", "llamacpp", "lmstudio", "otari", "vllm"})
+
+
+def _is_keyless(provider_type: str) -> bool:
+    """Whether a provider is served without a key: a keyless local or self-hosted backend."""
+    return provider_type in KEYLESS_SELF_HOSTED_PROVIDERS or provider_credential_env_names(provider_type) == ()
 
 
 def provider_credential_env_names(provider_type: str) -> tuple[str, ...] | None:
@@ -498,7 +514,36 @@ class RelyingParty(NamedTuple):
 
 # Gotcha: fields are ordered last base first, then this class's own.
 # The settings view keeps that order, so moving a base reorders it.
-class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, ToolSettings, BaseSettings):
+def _validate_bedrock_client_config(instance: str, client_args: Any, *, block: str = "providers") -> None:
+    """Fail at startup on a Bedrock ``client_args.config`` botocore cannot build.
+
+    The gateway merges it into every Bedrock client it builds, so a typo in an
+    option name would otherwise fail each request with a ``TypeError``.
+    """
+    config = client_args.get("config") if isinstance(client_args, dict) else None
+    if config is None or isinstance(config, BotocoreConfig):
+        return
+    if not isinstance(config, dict):
+        msg = f"{block}.{instance}.client_args.config must be a mapping of botocore Config options."
+        raise ValueError(msg)
+    try:
+        BotocoreConfig(**config)
+    except TypeError as exc:
+        msg = f"{block}.{instance}.client_args.config is not a valid botocore Config: {exc}"
+        raise ValueError(msg) from exc
+
+
+class GatewayConfig(
+    InferenceSettings,
+    BudgetSettings,
+    ApiKeySettings,
+    PricingSettings,
+    ProviderSettings,
+    OrganizationSettings,
+    ToolSettings,
+    TraceSettings,
+    BaseSettings,
+):
     """Gateway configuration with support for YAML files and environment variables."""
 
     model_config = SettingsConfigDict(
@@ -696,12 +741,15 @@ class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, ToolSett
         ge=1,
         description=(
             "Maximum calls per client IP per minute to the app's unauthenticated "
-            "surfaces (None disables this limit): failed POST /api/v1/auth/session "
-            "attempts (a correct master key is never throttled there), every call "
-            "to the two public invitation-accept routes, and every call to the "
-            "signup, verification and password-reset routes, counted whether they "
-            "succeed or fail. Separate from rate_limit_rpm, which is keyed to "
-            "authenticated users and does not cover any of these pre-auth paths."
+            "surfaces (None disables this limit), counted in three separate budgets of "
+            "this size: failed POST /api/v1/auth/session attempts (a correct master "
+            "key is never throttled there); every call to the signup, resend "
+            "verification, password-reset request, OAuth and public invitation routes, "
+            "counted whether they succeed or fail; and failed email verifications, "
+            "whose password check would otherwise be open to guessing. Reset-confirm "
+            "is not counted, since its token is the whole proof. Separate from "
+            "rate_limit_rpm, which is keyed to authenticated users and does not cover "
+            "any of these pre-auth paths."
         ),
     )
     public_catalog_rate_limit_per_minute: Annotated[int | None, Shown(SettingsGroup.RATE_LIMITING)] = Field(
@@ -1164,8 +1212,8 @@ class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, ToolSett
             "Enrich the model listing and the dashboard's model detail with metadata "
             "(token limits, modalities, capabilities, knowledge cutoff) fetched from "
             "the public models.dev catalog. Set false to disable the outbound call; "
-            "the gateway then falls back to the bundled genai-prices data, which "
-            "lists a context window for some models and no output limit."
+            "the gateway then reads the context window from the bundled or accepted "
+            "models.dev snapshot and lists no output limit. Pricing does not depend on it."
         ),
     )
     models_dev_cache_ttl_seconds: Annotated[int, Shown(SettingsGroup.MODELS)] = Field(
@@ -1464,12 +1512,21 @@ class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, ToolSett
         description=(
             "Who runs the code a provider-native code-execution declaration asks for "
             "(Anthropic's code_execution_<date>, OpenAI's code_interpreter, the bare code_execution). "
-            "'auto' (the default when unset) forwards it to the provider when that provider runs the "
-            "tool natively for the model, and runs it on this gateway's sandbox otherwise, so a request "
-            "written for a frontier model keeps working when the model is swapped. 'otari' always runs it "
+            "'auto' (the default when unset) decides each attempt: it forwards it to the provider when that "
+            "attempt's model runs the tool natively, and runs it on this gateway's sandbox otherwise, so a "
+            "request written for a frontier model keeps working when the model is swapped or falls back. "
+            "'otari' always runs it "
             "on the sandbox; 'provider' always forwards it. A workspace policy may pin a value and the "
             "Otari-Code-Execution header may choose one per request where the workspace has not. "
             "The explicit otari_code_execution type is always run by the gateway."
+        ),
+    )
+    code_execution_workspace_default: Annotated[bool | None, Shown(SettingsGroup.TOOLS)] = Field(
+        default=None,
+        description=(
+            "Whether a workspace with no code-execution policy of its own may run code on the sandbox. "
+            "False makes code execution something a workspace admin turns on. When unset: on, except on "
+            "a hosted deployment, where it is off."
         ),
     )
     mcp_allow_loopback: Annotated[bool, Shown(SettingsGroup.TOOLS)] = Field(
@@ -1898,6 +1955,19 @@ class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, ToolSett
             )
             raise ValueError(msg) from exc
 
+    def validate_declared_access(self) -> None:
+        """Refuse ``budgets`` and ``api_keys`` declarations on a hybrid gateway.
+
+        A hybrid gateway holds no budgets or keys of its own, so it refuses both
+        rather than ignoring them, the way it refuses ``rate_limits``.
+        """
+        if self.is_hybrid_mode and (self.budgets or self.api_keys):
+            msg = (
+                "budgets and api_keys are declared in config, but a hybrid gateway holds neither; "
+                "declare them on the control plane instead"
+            )
+            raise ValueError(msg)
+
     def validate_aliases(self) -> None:
         """Validate the ``aliases`` map at startup so misconfig fails fast."""
         for name, target in self.aliases.items():
@@ -2021,6 +2091,7 @@ class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, ToolSett
             if not isinstance(entry, dict):
                 continue
             declared = entry.get("provider_type")
+            impl = instance
             if isinstance(declared, str) and declared:
                 impl = PROVIDER_TYPE_ALIASES.get(declared, declared)
                 try:
@@ -2028,6 +2099,8 @@ class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, ToolSett
                 except ValueError as exc:
                     msg = f"providers.{instance}.provider_type '{declared}' is not a known provider implementation."
                     raise ValueError(msg) from exc
+            if impl == LLMProvider.BEDROCK.value:
+                _validate_bedrock_client_config(instance, entry.get("client_args"))
             models = entry.get("models")
             if models is not None and not (isinstance(models, list) and all(isinstance(m, str) for m in models)):
                 msg = f"providers.{instance}.models must be a list of model id strings."
@@ -2049,6 +2122,33 @@ class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, ToolSett
                 raise ValueError(msg)
             if not entry:
                 self._warn_on_uncredentialed_bare_entry(instance)
+
+    def validate_hosted_providers(self) -> None:
+        """Validate the ``hosted_providers:`` block at startup so a misconfigured entry fails fast.
+
+        On top of the shape ``hosted_provider_entries`` checks, an entry for a
+        provider that needs a key must carry one: unlike a ``providers:``
+        instance, a hosted provider is served on its own credential and never
+        on the provider's environment variable. A keyless self-hosted backend
+        may leave it out. The restriction's organization cannot be checked
+        here, before the database is reachable; boot logs one that names
+        nothing.
+        """
+        entries = self.hosted_provider_entries()
+        if entries and self.is_hybrid_mode:
+            logger.warning(
+                "hosted_providers is ignored in hybrid mode: a hybrid gateway is served the credentials otari.ai "
+                "resolves for it, and has no hosted providers of its own."
+            )
+        for provider, entry in entries.items():
+            if entry.api_key is None and not _is_keyless(provider):
+                msg = (
+                    f"hosted_providers.{provider}.api_key is required: {provider} needs a key. "
+                    "Reference it as ${VAR} rather than writing it into the file."
+                )
+                raise ValueError(msg)
+            if provider == LLMProvider.BEDROCK.value:
+                _validate_bedrock_client_config(provider, entry.client_args, block="hosted_providers")
 
     def _warn_on_uncredentialed_bare_entry(self, instance: str) -> None:
         """Warn when a settings-less entry names a provider that needs a credential.
@@ -2137,6 +2237,24 @@ class GatewayConfig(InferenceSettings, BudgetSettings, PricingSettings, ToolSett
         if self.effective_sandbox_provider() is not SandboxProvider.PROTOCOL:
             return True
         return bool(self.sandbox_url or otari_env("SANDBOX_URL"))
+
+    def web_search_on_without_policy(self) -> bool:
+        """Whether a workspace with no stored web-access policy may use the web tools.
+
+        The hosted fallback keeps the control plane's existing behavior and goes with hosted mode.
+        """
+        if self.web_search_workspace_default is not None:
+            return self.web_search_workspace_default
+        return not self.is_hosted_mode
+
+    def code_execution_on_without_policy(self) -> bool:
+        """Whether a workspace with no stored code-execution policy may use the sandbox.
+
+        The hosted fallback keeps the control plane's existing behavior and goes with hosted mode.
+        """
+        if self.code_execution_workspace_default is not None:
+            return self.code_execution_workspace_default
+        return not self.is_hosted_mode
 
     def effective_sandbox_image(self) -> str | None:
         """The image this deployment asks a sandbox session for, or ``None``.
@@ -2705,6 +2823,7 @@ def load_config(config_path: str | None = None) -> GatewayConfig:
     structured_env_config = _load_structured_env_config()
     if structured_env_config:
         config_dict.update(structured_env_config)
+    _apply_json_env_overrides(config_dict)
 
     # Snapshot which bridged fields the YAML config set, before the env
     # overrides below inject OTARI_ values into the same dict: only YAML-set
@@ -2722,7 +2841,9 @@ def load_config(config_path: str | None = None) -> GatewayConfig:
     config._resolve_platform_token()
     config.validate_mode_selection()
     config.validate_provider_instances()
+    config.validate_hosted_providers()
     config.validate_aliases()
+    config.validate_declared_access()
     config.validate_routing_policies()
     config.validate_search_tools()
     config.validate_fetch_tools()
@@ -2807,6 +2928,30 @@ def _apply_otari_env_overrides(config: dict[str, Any]) -> None:
             config[field_name] = _coerce_scalar_env(value, GatewayConfig.model_fields[field_name].annotation)
         except _NonScalarField:
             continue
+
+
+def _apply_json_env_overrides(config: dict[str, Any]) -> None:
+    """Replace each ``JSON_ENV_FIELDS`` block with its ``OTARI_<FIELD>`` JSON object, when one is set.
+
+    Written into the init dict for the reason the scalar overrides are: pydantic's
+    own env source ranks below init, and merges a mapping under it per key, so the
+    file's entries would win. ``${VAR}`` references resolve as in a config file.
+    Errors name the variable and the position, never the content, which may hold a key.
+    """
+    for field_name in JSON_ENV_FIELDS:
+        env_name = f"{OTARI_ENV_PREFIX}{field_name.upper()}"
+        raw = os.getenv(env_name)
+        if raw is None or not raw.strip():
+            continue
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            msg = f"{env_name} is not valid JSON: {exc.msg} at line {exc.lineno}, column {exc.colno}."
+            raise ValueError(msg) from None
+        if not isinstance(value, dict):
+            msg = f"{env_name} must be a JSON object, got {type(value).__name__}."
+            raise ValueError(msg)
+        config[field_name] = _resolve_env_vars(value)
 
 
 def _apply_platform_env_overrides(config: dict[str, Any]) -> None:

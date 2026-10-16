@@ -152,9 +152,14 @@ class _Adapter:
         return attempt.call_kwargs(base_request_fields)
 
 
+class _ToolContext:
+    def request_fields_for(self, provider: str, base_request_fields: dict[str, Any]) -> dict[str, Any]:
+        return base_request_fields
+
+
 def test_each_routed_candidate_uses_its_own_instance_setting() -> None:
     config = _config(baseten=BASETEN, fallback={"provider_type": "openai", "api_key": "k"})
-    build = _local_attempt_kwargs(cast(Any, _Adapter()), config)
+    build = _local_attempt_kwargs(cast(Any, _Adapter()), config, cast(Any, _ToolContext()))
     fields = {"prompt_cache_key": "scoped"}
 
     baseten = Attempt(position=1, instance="baseten", provider=LLMProvider.OPENAI, model="glm")

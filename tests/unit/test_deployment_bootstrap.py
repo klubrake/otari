@@ -103,7 +103,8 @@ def test_standalone_reports_a_local_operator_and_the_full_surface_set(tmp_path: 
     assert response.json() == {
         "deployment_type": "standalone",
         "session_type": "local_operator",
-        "surfaces": sorted(STANDALONE_SURFACES),
+        # The trace explorer is a core feature, published on top of the declared surfaces while it is on.
+        "surfaces": sorted({*STANDALONE_SURFACES, "traces"}),
         "sign_in_methods": ["master_key"],
         "management_url": None,
         "data_plane_url": None,
@@ -300,6 +301,7 @@ def test_open_signup_is_published_only_with_mail_to_carry_the_verification(tmp_p
 # check is for is a surface whose API went away, and a name that reaches one
 # mounted route has not.
 SURFACE_ROUTE_PREFIXES = {
+    "hosted_providers": f"{API_ROOT}/hosted-providers",
     "organization_guardrails": f"{API_ROOT}/organizations/me/guardrails",
     "organization_providers": f"{API_ROOT}/organizations/me/provider-keys",
     "organization_usage": f"{API_ROOT}/organizations/me/usage",
@@ -396,6 +398,7 @@ def test_hosted_swaps_the_process_wide_provider_page_for_the_per_organization_on
         "organization_usage",
         "playground",
         "providers",
+        "traces",
     }
 
 
@@ -419,6 +422,7 @@ def test_hosted_publishes_the_playground_once_it_knows_its_data_plane(tmp_path: 
     assert set(answered["surfaces"]) ^ set(STANDALONE_SURFACES) == {
         "organization_usage",
         "providers",
+        "traces",
     }
 
 

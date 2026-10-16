@@ -22,7 +22,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import get_config, get_db, require_deployment_operator, verify_catalog_reader
+from gateway.api.deps import (
+    HostedProviderServiceDep,
+    get_config,
+    get_db,
+    require_deployment_operator,
+    verify_catalog_reader,
+)
+from gateway.api.routes._helpers import database_error
 from gateway.core.config import (
     PROVIDER_TYPE_ALIASES,
     RESERVED_PROVIDER_INSTANCE_NAMES,
@@ -153,7 +160,7 @@ async def list_providers(
     """List static metadata for every configured provider.
 
     Operator-facing: reports each provider's capabilities, documentation and
-    pricing links, and display name from the bundled any-llm and genai-prices
+    pricing links, and display name from the bundled any-llm and models.dev
     datasets. No provider is contacted, so this is cheap and always available.
     """
     return ProvidersResponse(providers=[_to_schema(info) for info in list_provider_info(config)])
@@ -200,7 +207,7 @@ async def provider_catalog() -> list[KnownProviderSummarySchema]:
     """List every known provider for the add-provider picker: id and name only.
 
     Lightweight by design so the picker never lags: provider ids come from the
-    any-llm registry and names from the bundled genai-prices dataset, so no
+    any-llm registry and names from the models.dev catalog, so no
     provider SDK is imported. The autofill hints for a chosen provider come from
     GET /api/v1/providers/catalog/{provider_id}, which imports only that one SDK.
     """
@@ -284,9 +291,16 @@ def _to_health_schema(health: ProviderHealth) -> ProviderHealthSchema:
 @router.get("/providers/health")
 async def provider_health(
     config: Annotated[GatewayConfig, Depends(get_config)],
+    hosted: HostedProviderServiceDep,
     refresh: bool = False,
 ) -> ProviderHealthResponse:
     """Report every configured provider's reachability, with a last-checked time.
+
+    Covers the configured provider instances and every hosted provider switched
+    on, each hosted provider under its provider name. A hosted provider that a
+    configured instance of the same name shadows is not reported. One whose
+    stored key cannot be decrypted with the configured `OTARI_SECRET_KEY` is
+    reported unreachable with that reason.
 
     Reuses the per-provider model-discovery test path, so a provider is healthy
     when its credentials can list models. Results are served from the discovery
@@ -301,6 +315,7 @@ async def provider_health(
     """
     results = await check_all_provider_health(
         config,
+        hosted=hosted.discovery_dials,
         refresh=refresh,
         serve_stale=background_discovery_enabled(config) and not refresh,
     )
@@ -485,23 +500,7 @@ async def _gate_api_base(api_base: str | None) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
 
-def _db_error_summary(exc: BaseException) -> str:
-    """Name a database error by the driver's exception class and SQLSTATE, never by its text.
-
-    The text is unsafe to log here: ``str(exc)`` carries the statement's bound
-    parameters, and asyncpg appends the server's DETAIL, which for a constraint
-    failure is the whole row, ``client_args`` included in plaintext.
-    """
-    orig = getattr(exc, "orig", None)
-    if orig is None:
-        return type(exc).__name__
-    # SQLAlchemy's asyncpg adapter re-raises asyncpg's own exception as the cause.
-    driver = orig.__cause__ or orig
-    sqlstate = getattr(orig, "sqlstate", None) or getattr(driver, "sqlstate", None)
-    return f"{type(driver).__name__} (SQLSTATE {sqlstate})" if sqlstate else type(driver).__name__
-
-
-async def _commit(db: AsyncSession, instance: str, *, conflict_detail: str | None = None) -> None:
+async def _commit(db: AsyncSession, operation: str, *, conflict_detail: str | None = None) -> None:
     try:
         await db.commit()
     except IntegrityError as exc:
@@ -510,16 +509,12 @@ async def _commit(db: AsyncSession, instance: str, *, conflict_detail: str | Non
         await db.rollback()
         if conflict_detail is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=conflict_detail) from None
-        logger.error("Failed to write stored provider '%s': %s", instance, _db_error_summary(exc))
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error") from None
+        raise database_error(operation, exc) from None
     except DATABASE_ERRORS as exc:
         # Logged before the rollback, which can itself fail on a timed-out connection.
-        logger.error("Failed to write stored provider '%s': %s", instance, _db_error_summary(exc))
+        error = database_error(operation, exc)
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error",
-        ) from None
+        raise error from None
 
 
 async def _apply_write(db: AsyncSession, config: GatewayConfig, instance: str) -> None:
@@ -592,9 +587,9 @@ async def reencrypt_stored_provider_keys(
     except SecretBoxUnavailableError as exc:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
-    except SQLAlchemyError:
+    except DATABASE_ERRORS as exc:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error") from None
+        raise database_error("reencrypt stored provider keys", exc) from None
     get_model_cache().clear()
     try:
         await refresh_provider_cache(db, config)
@@ -643,7 +638,7 @@ async def create_stored_provider(
 
     await _commit(
         db,
-        request.instance,
+        "create stored provider",
         conflict_detail=f"A stored provider '{request.instance}' already exists; use PATCH to update it.",
     )
     if request.instance in (config._provider_baseline or {}):
@@ -705,7 +700,7 @@ async def update_stored_provider(
     except SecretBoxUnavailableError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
-    await _commit(db, instance)
+    await _commit(db, "update stored provider")
     await _apply_write(db, config, instance)
     await db.refresh(row)
     return StoredProviderResponse.from_model(row)
@@ -723,7 +718,7 @@ async def delete_stored_provider(
         if instance in (config._provider_baseline or {}):
             detail = f"Provider '{instance}' is defined in config.yml and cannot be deleted through the API."
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
-    await _commit(db, instance)
+    await _commit(db, "delete stored provider")
     await _apply_write(db, config, instance)
 
 

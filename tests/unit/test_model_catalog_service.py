@@ -189,6 +189,20 @@ def test_metadata_entry_reads_a_gemini_listing_id_as_the_bare_one() -> None:
     assert metadata_entry(None, "gemini", "gemini-3.5-flash-lite") is None
 
 
+@pytest.mark.parametrize(
+    "catalog",
+    [
+        pytest.param({"openai": ["gpt-4o"]}, id="provider-not-an-object"),
+        pytest.param({"openai": {"models": ["gpt-4o"]}}, id="models-not-an-object"),
+        pytest.param({"openai": {}}, id="no-models"),
+        pytest.param({"openai": {"models": {"gpt-4o": "GPT-4o"}}}, id="model-not-an-object"),
+    ],
+)
+def test_metadata_entry_reads_a_malformed_catalog_as_no_entry(catalog: dict[str, Any]) -> None:
+    """models.dev is fetched JSON, so a shape it was not expected to have describes no model rather than raising."""
+    assert metadata_entry(catalog, "openai", "gpt-4o") is None
+
+
 @pytest.mark.asyncio
 async def test_catalog_metadata_fetches_only_when_a_read_may() -> None:
     """A request-time read fetches on a cold cache; a read off the request path never does."""
@@ -203,3 +217,33 @@ async def test_catalog_metadata_fetches_only_when_a_read_may() -> None:
 
         assert await load_catalog_metadata(config, cached_only=True) == CATALOG
     assert await load_catalog_metadata(GatewayConfig(models_dev_metadata=False)) is None
+
+
+@pytest.mark.asyncio
+async def test_the_shared_fetch_fills_the_metadata_cache_and_is_reused() -> None:
+    mcs.clear_catalog_cache()
+    with patch.object(mcs, "_download", new=AsyncMock(return_value={"openai": {}})) as download:
+        assert await mcs.fetch_models_dev_document(fill_cache=True) == {"openai": {}}
+        assert await mcs.fetch_models_dev_document(reuse_within=60) == {"openai": {}}
+        assert download.await_count == 1
+
+        # A catalog refresher tick right after reuses it too, instead of fetching again.
+        config = GatewayConfig(master_key="k", models_dev_metadata=True)
+        assert await mcs.load_models_dev_catalog(config, force=True, reuse_within=60) == {"openai": {}}
+        assert download.await_count == 1
+    mcs.clear_catalog_cache()
+
+
+@pytest.mark.asyncio
+async def test_the_shared_fetch_leaves_the_cache_alone_unless_asked_and_raises_on_failure() -> None:
+    mcs.clear_catalog_cache()
+    with patch.object(mcs, "_download", new=AsyncMock(return_value={"openai": {}})):
+        await mcs.fetch_models_dev_document()
+    assert mcs._cache.ok is False
+
+    with (
+        patch.object(mcs, "_download", new=AsyncMock(side_effect=mcs.ModelsDevFetchError("down"))),
+        pytest.raises(mcs.ModelsDevFetchError),
+    ):
+        await mcs.fetch_models_dev_document()
+    mcs.clear_catalog_cache()

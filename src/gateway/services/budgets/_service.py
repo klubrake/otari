@@ -1,18 +1,24 @@
 import asyncio
 import uuid
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 
-from gateway.core.database import DATABASE_ERRORS
+from gateway.core.database import DATABASE_ERRORS, describe_database_error
+from gateway.core.settings.api_keys import ApiKeyConfig
+from gateway.core.settings.budgets import BudgetConfig
 from gateway.core.unit_of_work import UnitOfWork
-from gateway.exceptions.budget_exceptions import DeploymentBudgetIsEndUserDefaultError
+from gateway.exceptions import TenancyError
+from gateway.exceptions.budget_exceptions import DeclaredAccessError, DeploymentBudgetIsEndUserDefaultError
 from gateway.log_config import logger
 from gateway.models.api_keys import APIKey
+from gateway.models.budgets import Budget, ScopedBudget, ScopeType
 from gateway.models.tenancy import User
 from gateway.rate_limit import BudgetMinuteLimits
 from gateway.repositories.budgets import BudgetRepositories
 from gateway.schemas.budgets import (
     BudgetResponse,
     CreateBudgetRequest,
+    EndUserBudgetPublic,
     EndUserPublic,
     OrganizationBudgetCreate,
     OrganizationBudgetPublic,
@@ -29,6 +35,7 @@ from gateway.schemas.budgets import (
     WorkspaceSpendPublic,
 )
 from gateway.services.api_keys import ApiKeyService
+from gateway.services.budgets._declared import attach_key_ceiling
 from gateway.services.budgets._deployment_surface import _DeploymentSurface
 from gateway.services.budgets._end_users import ResolvedEndUser, _EndUsers, end_user_budget_list
 from gateway.services.budgets._member_policies import _MemberPolicies
@@ -64,14 +71,102 @@ class BudgetService:
         visibility: WorkspaceVisibilityService,
     ) -> None:
         self._uow = uow
+        self._repositories = repositories
         self._budgets = repositories.budgets
         self._api_keys = api_keys
-        self._organization = _OrganizationSurface(repositories, ScopeOwnership(organizations, api_keys), organizations)
+        self._organizations = organizations
+        self._scopes = ScopeOwnership(organizations, api_keys)
+        self._organization = _OrganizationSurface(repositories, self._scopes, organizations)
         self._workspace = _WorkspaceSurface(repositories, workspace_access, visibility)
         self._end_users = _EndUsers(repositories)
         self._deployment = _DeploymentSurface(repositories)
         self._member_policies = _MemberPolicies(repositories, organizations, workspace_access)
         self._moves = _ReservationMoves(repositories)
+
+    async def list_deployment_budgets(self, organization_id: uuid.UUID, *, skip: int, limit: int) -> list[Budget]:
+        """A page of the budgets the deployment owns and the operator's organization owns."""
+        async with self._uow:
+            return await self._budgets.list_in_reach_of(organization_id, skip=skip, limit=limit)
+
+    async def get_deployment_budget(self, budget_id: str, organization_id: uuid.UUID) -> Budget | None:
+        """The budget with this ID when the deployment or the operator's organization owns it."""
+        async with self._uow:
+            return await self._budgets.get_in_reach_of(budget_id, organization_id)
+
+    async def list_deployment_ceilings(
+        self,
+        organization_id: uuid.UUID,
+        *,
+        scope_type: ScopeType | None,
+        scope_id: str | None,
+        skip: int,
+        limit: int,
+    ) -> list[tuple[ScopedBudget, Budget]]:
+        """A page of the ceilings on scopes inside the operator's organization, each with the budget it names."""
+        async with self._uow:
+            scopes = await self._scopes.get_scope_ids_in(organization_id)
+            return await self._repositories.ceilings.list_in_scopes(
+                scopes, skip=skip, limit=limit, scope_type=scope_type, scope_id=scope_id
+            )
+
+    async def get_deployment_ceiling(self, ceiling_id: str, organization_id: uuid.UUID) -> ScopedBudget | None:
+        """The ceiling with this ID when its scope is inside the operator's organization."""
+        async with self._uow:
+            scopes = await self._scopes.get_scope_ids_in(organization_id)
+            return await self._repositories.ceilings.get_in_scopes(ceiling_id, scopes)
+
+    async def apply_declared_access(
+        self,
+        budgets: Mapping[str, BudgetConfig],
+        api_keys: Mapping[str, ApiKeyConfig],
+        *,
+        workspace_id: uuid.UUID | None,
+        fingerprint: Callable[[str], str],
+    ) -> None:
+        """Write the budgets and API keys config.yml declares over what is stored, in one transaction.
+
+        Each budget is created or replaced under its id. Each key is created or
+        updated under its config name, with its secret, its end-user budgets and,
+        when it names one, the ceiling that caps it. Nothing config.yml no longer
+        declares is deleted; it only stops being marked as declared. Replicas that
+        start at once each run this, and every insert yields to a row another one
+        placed first.
+
+        A new key lands in ``workspace_id``, which may be None only when no key is declared.
+
+        Raises:
+            DeclaredAccessError: an entry cannot be applied. Nothing is written.
+        """
+        declared_keys = list(api_keys)
+        async with self._uow:
+            for budget_id, budget in budgets.items():
+                try:
+                    await self._deployment.put_budget(budget_id, CreateBudgetRequest(**budget.model_dump()))
+                except TenancyError as exc:
+                    raise DeclaredAccessError(f"budgets.{budget_id}", exc.message) from exc
+            await self._budgets.mark_declared(list(budgets))
+            for name, key in api_keys.items():
+                if workspace_id is None:
+                    raise ValueError("A declared API key needs a workspace to land in")
+                try:
+                    listed, to_check = end_user_budget_list(
+                        key.end_user_budget_ids, key.end_user_budget_id, check_default=True, check_list=True
+                    )
+                    await self._end_users.require_assignable_budgets(to_check)
+                    key_id = await self._api_keys.apply_declared_key(
+                        name,
+                        key,
+                        owner=await self._organizations.billing_user_id(key.user_id),
+                        declared_names=declared_keys,
+                        end_user_budget_ids=listed,
+                        workspace_id=workspace_id,
+                        fingerprint=fingerprint,
+                    )
+                    if key.ceiling is not None:
+                        await attach_key_ceiling(self._repositories, key_id, key.ceiling)
+                except TenancyError as exc:
+                    raise DeclaredAccessError(f"api_keys.{name}", exc.message) from exc
+            await self._api_keys.release_undeclared_keys(declared_keys)
 
     async def create_member_policy(
         self, *, user: User, workspace_id: uuid.UUID, request: WorkspaceMemberBudgetPolicyCreate
@@ -230,6 +325,11 @@ class BudgetService:
         async with self._uow:
             return await self._end_users.resolve(api_key, external_id, requested_budget_id)
 
+    async def require_end_user_owner(self, *, api_key: APIKey) -> None:
+        """Refuse a service key whose own user is blocked or deleted, so it manages none of its end users."""
+        async with self._uow:
+            await self._end_users.require_owner(api_key)
+
     async def get_end_user(self, *, api_key: APIKey, external_id: str) -> EndUserPublic:
         """Return the end user of the key's owner that the service named ``external_id``."""
         async with self._uow:
@@ -246,6 +346,34 @@ class BudgetService:
         """Block, unblock or move an end user of the key's owner."""
         async with self._uow:
             return await self._end_users.update(api_key, external_id, blocked=blocked, budget_id=budget_id)
+
+    async def list_end_users(
+        self,
+        *,
+        api_key: APIKey,
+        external_id: str | None,
+        budget_id: str | None,
+        blocked: bool | None,
+        skip: int,
+        limit: int,
+    ) -> list[EndUserPublic]:
+        """Return a page of the key owner's end users, oldest first; ``external_id`` narrows it to that one."""
+        async with self._uow:
+            return await self._end_users.page(
+                api_key, external_id=external_id, budget_id=budget_id, blocked=blocked, skip=skip, limit=limit
+            )
+
+    async def count_end_users(
+        self, *, api_key: APIKey, external_id: str | None, budget_id: str | None, blocked: bool | None
+    ) -> int:
+        """Count the key owner's end users that ``list_end_users`` lists across every page."""
+        async with self._uow:
+            return await self._end_users.count(api_key, external_id=external_id, budget_id=budget_id, blocked=blocked)
+
+    async def list_end_user_budgets(self, *, api_key: APIKey) -> list[EndUserBudgetPublic]:
+        """Return the budgets the key may put its end users on, with how many of its owner's end users each holds."""
+        async with self._uow:
+            return await self._end_users.budgets(api_key)
 
     async def update_member_policy(
         self,
@@ -289,11 +417,11 @@ class BudgetService:
         try:
             async with self._uow:
                 return await self._moves.landed(handle, move)
-        except DATABASE_ERRORS:
+        except DATABASE_ERRORS as exc:
             logger.error(
-                "Could not tell whether the fallback holds of reservation %s committed; they are left as they are.",
+                "Could not tell whether the fallback holds of reservation %s committed; they are left as they are: %s",
                 move.reservation_id,
-                exc_info=True,
+                describe_database_error(exc),
             )
             return False
 

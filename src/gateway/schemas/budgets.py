@@ -13,6 +13,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field
 
 from gateway.models.budgets import (
+    BUDGET_ID_PATTERN,
     MAX_COUNT_LIMIT,
     MAX_MINUTE_LIMIT,
     Budget,
@@ -30,10 +31,6 @@ _ALIGNMENT_DESCRIPTION = (
     "Reset on a UTC calendar boundary instead of a fixed number of seconds, which is the only way "
     "to express a calendar month. Mutually exclusive with budget_duration_sec"
 )
-
-# An id a caller chooses for a budget: letters, digits, '.', '_' and '-', so it
-# reads the same in a path, a header and a config file.
-BUDGET_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 
 # A blank value matches no provider instance, so a ceiling that stored one would never bind.
 _ProviderKeyId = Annotated[str, Field(min_length=1, max_length=255, pattern=r"^\S+$")]
@@ -103,6 +100,13 @@ class BudgetResponse(BaseModel):
     tpm_limit: int | None = None
     budget_duration_sec: int | None
     reset_alignment: str | None
+    origin: str | None = Field(
+        default=None,
+        description=(
+            "'config' while config.yml declares this budget, in which case every start writes the declared "
+            "values back over any change made through the API; null otherwise"
+        ),
+    )
     created_at: str
     updated_at: str
     user_count: int = 0
@@ -130,6 +134,7 @@ class BudgetResponse(BaseModel):
             tpm_limit=budget.tpm_limit,
             budget_duration_sec=budget.budget_duration_sec,
             reset_alignment=budget.reset_alignment,
+            origin=budget.origin,
             created_at=budget.created_at.isoformat(),
             updated_at=budget.updated_at.isoformat(),
             user_count=user_count,
@@ -221,6 +226,15 @@ class EndUserUpdate(BaseModel):
     budget_id: str | None = Field(
         default=None, min_length=1, description="A budget on the key's end_user_budget_ids to move the end user to"
     )
+
+
+class EndUserBudgetPublic(BaseModel):
+    """A budget a service key may put its end users on, and how many of them are on it."""
+
+    budget_id: str
+    is_default: bool = Field(description="Whether a new end user starts here when its request names no budget")
+    end_user_count: int = Field(description="End users of the key's user on this budget, blocked ones included")
+    blocked_end_user_count: int
 
 
 class BudgetResetLogResponse(BaseModel):
@@ -645,6 +659,7 @@ __all__ = [
     "BudgetResponse",
     "CreateBudgetRequest",
     "CreateScopedBudgetRequest",
+    "EndUserBudgetPublic",
     "EndUserPublic",
     "EndUserPut",
     "EndUserUpdate",

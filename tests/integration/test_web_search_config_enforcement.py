@@ -28,7 +28,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from gateway.core.config import API_KEY_HEADER, API_ROOT
+from gateway.core.config import API_KEY_HEADER, API_ROOT, GatewayConfig
 from gateway.models.tools import WorkspaceWebSearchConfig
 
 _SEARCH_URL = "http://127.0.0.1:9998/search"
@@ -581,15 +581,17 @@ def test_the_config_surface_needs_the_master_key(
     assert with_an_api_key.status_code == 401
 
 
-def test_a_ceiling_the_backend_could_never_honor_is_refused(
+def test_a_ceiling_above_20_is_stored_and_one_its_column_cannot_hold_is_refused(
     client: TestClient,
     master_key_header: dict[str, str],
 ) -> None:
+    """The gateway sets no ceiling of its own (decision 65); the column is a 32-bit integer."""
     workspace_id = _default_workspace_id(client, master_key_header)
 
+    assert _set_config(client, master_key_header, workspace_id, enabled=True, max_results=500)["max_results"] == 500
     response = client.put(
         f"{API_ROOT}/workspaces/{workspace_id}/web-search",
-        json={"enabled": True, "max_results": 500},
+        json={"enabled": True, "max_results": 2**31},
         headers=master_key_header,
     )
 
@@ -744,7 +746,7 @@ def test_the_direct_search_endpoint_honors_the_same_veto(
         headers=master_key_header,
     ).json()
 
-    with patch("gateway.api.routes.search.run_search", new=AsyncMock()) as ran:
+    with patch("gateway.services.search_backend.run_search", new=AsyncMock()) as ran:
         response = client.post(
             f"{API_ROOT}/search/stub-search",
             json={"query": "anything"},
@@ -787,7 +789,7 @@ def test_invalid_legacy_domain_rule_returns_503_from_direct_search(
         headers=master_key_header,
     ).json()
 
-    with patch("gateway.api.routes.search.run_search", new=AsyncMock()) as ran:
+    with patch("gateway.services.search_backend.run_search", new=AsyncMock()) as ran:
         response = client.post(
             f"{API_ROOT}/search/invalid-config-search",
             json={"query": "anything"},
@@ -815,7 +817,7 @@ def test_the_direct_search_endpoint_is_unchanged_for_a_workspace_with_no_row(
     from gateway.services.search_backend import SearchHit, SearchOutcome
 
     outcome = SearchOutcome(results=[SearchHit(url="https://example.com", title="t", snippet="s")], cost_usd=0.0)
-    with patch("gateway.api.routes.search.run_search", new=AsyncMock(return_value=outcome)):
+    with patch("gateway.services.search_backend.run_search", new=AsyncMock(return_value=outcome)):
         response = client.post(
             f"{API_ROOT}/search/open-stub-search",
             json={"query": "anything"},
@@ -823,3 +825,70 @@ def test_the_direct_search_endpoint_is_unchanged_for_a_workspace_with_no_row(
         )
 
     assert response.status_code == 200, response.text
+
+
+@pytest.fixture
+def opt_in_web_access(test_config: GatewayConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deployment where a workspace with no row has web access off."""
+    monkeypatch.setattr(test_config, "web_search_workspace_default", False)
+
+
+@pytest.mark.usefixtures("opt_in_web_access")
+def test_no_row_reads_as_off_where_the_deployment_makes_web_access_opt_in(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    workspace_id = _default_workspace_id(client, master_key_header)
+
+    response = client.get(f"{API_ROOT}/workspaces/{workspace_id}/web-search", headers=master_key_header)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["configured"], body["default_enabled"], body["enabled"]) == (False, False, False)
+
+
+@pytest.mark.usefixtures("opt_in_web_access")
+def test_no_row_is_refused_like_a_disabled_row_where_web_access_is_opt_in(
+    client: TestClient,
+    api_key_header: dict[str, str],
+    master_key_header: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OTARI_WEB_SEARCH_URL", _SEARCH_URL)
+
+    refused, seen = _post_with_search_patched(client, api_key_header, _REQUEST)
+
+    assert refused.status_code == 403
+    assert refused.json()["detail"]["error"]["message"] == "web search is not enabled for this workspace"
+    assert seen.ran is False
+
+    _set_config(client, master_key_header, _default_workspace_id(client, master_key_header), enabled=True)
+    served, seen = _post_with_search_patched(client, api_key_header, _REQUEST)
+
+    assert served.status_code == 200
+    assert seen.ran is True
+
+
+@pytest.mark.usefixtures("opt_in_web_access")
+def test_the_direct_search_endpoint_refuses_a_workspace_with_no_row_where_web_access_is_opt_in(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    _stored_search_tool(client, master_key_header, "opt-in-search")
+    client.post(f"{API_ROOT}/users", json={"user_id": "opt-in-search-user"}, headers=master_key_header)
+    key = client.post(
+        f"{API_ROOT}/keys",
+        json={"key_name": "opt-in-search-key", "user_id": "opt-in-search-user"},
+        headers=master_key_header,
+    ).json()
+
+    with patch("gateway.services.search_backend.run_search", new=AsyncMock()) as ran:
+        response = client.post(
+            f"{API_ROOT}/search/opt-in-search",
+            json={"query": "anything"},
+            headers={API_KEY_HEADER: f"Bearer {key['key']}"},
+        )
+
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == "web search is not enabled for this workspace"
+    assert ran.await_count == 0

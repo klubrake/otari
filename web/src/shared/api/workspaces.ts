@@ -24,6 +24,7 @@ import {
   ORGANIZATIONS,
   OVERVIEW,
   WORKSPACES,
+  workspaceMeta,
   workspaceVisibilityKey,
 } from "@/shared/api/queryKeys"
 
@@ -71,6 +72,7 @@ export function useWorkspacesById(ids: readonly string[]) {
 export function useWorkspaceMembers(workspaceId: string | null) {
   return useQuery({
     queryKey: [WORKSPACES, workspaceId, "members"],
+    meta: workspaceMeta(workspaceId),
     queryFn: () =>
       fetchAllPaged<WorkspaceMember>(
         `/workspaces/${encodeURIComponent(workspaceId as string)}/members`,
@@ -93,6 +95,7 @@ export function useWorkspaceVisibility(
 ) {
   return useQuery({
     queryKey: workspaceVisibilityKey(workspaceId),
+    meta: workspaceMeta(workspaceId),
     queryFn: () =>
       apiFetch<WorkspaceVisibility>(
         `/workspaces/${encodeURIComponent(workspaceId)}/visibility`,
@@ -270,6 +273,7 @@ export function useUpdateWorkspaceMemberRole() {
 export function useWorkspaceBudgetDefaults(workspaceId: string | null) {
   return useQuery({
     queryKey: [WORKSPACES, workspaceId, "budget-defaults"],
+    meta: workspaceMeta(workspaceId),
     queryFn: () =>
       fetchAllPaged<WorkspaceBudgetDefault>(
         `/workspaces/${encodeURIComponent(workspaceId as string)}/member-budget-policies`,
@@ -295,6 +299,7 @@ export function useAllWorkspaceBudgetDefaults(workspaceIds: string[]) {
   return useQueries({
     queries: workspaceIds.map((workspaceId) => ({
       queryKey: [WORKSPACES, workspaceId, "budget-defaults"],
+      meta: workspaceMeta(workspaceId),
       queryFn: () =>
         fetchAllPaged<WorkspaceBudgetDefault>(
           `/workspaces/${encodeURIComponent(workspaceId)}/member-budget-policies`,
@@ -405,6 +410,7 @@ export function useDeleteWorkspaceBudgetDefault() {
 export function useWorkspaceProviderKeys(workspaceId: string | null) {
   return useQuery({
     queryKey: [WORKSPACES, workspaceId, "provider-keys"],
+    meta: workspaceMeta(workspaceId),
     queryFn: async () =>
       (
         await apiFetch<{ data: WorkspaceProviderKeyOverride[] }>(
@@ -432,6 +438,7 @@ export function useAllWorkspaceProviderKeys(workspaceIds: string[]) {
   return useQueries({
     queries: workspaceIds.map((workspaceId) => ({
       queryKey: [WORKSPACES, workspaceId, "provider-keys"],
+      meta: workspaceMeta(workspaceId),
       queryFn: async () =>
         (
           await apiFetch<{ data: WorkspaceProviderKeyOverride[] }>(

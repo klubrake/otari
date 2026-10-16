@@ -5,11 +5,11 @@ organization-scoped rates, budget isolation, and the read-surface (source filter
 by_source).
 """
 
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -362,29 +362,27 @@ def test_idempotent_resubmit(client: TestClient, master_key_header: dict[str, st
     assert db_session.query(UsageLog).filter(UsageLog.source_event_id == "req_dup").count() == 1
 
 
-def test_an_event_that_lands_between_the_check_and_the_insert_is_a_duplicate(
+def test_resubmit_held_by_an_uncommitted_write_gets_a_retryable_503(
     client: TestClient, master_key_header: dict[str, str], db_session: Session
 ) -> None:
-    """The race the pre-check cannot win is absorbed by the insert, not raised.
-
-    Two exporters resending the same batch is the ordinary case, so the window
-    between "which of these exist" and the insert is one somebody is always in.
-    Patching the pre-check away is how that window is held open here.
-    """
+    """A resubmit colliding with a write still in flight fails fast with a 503 rather than waiting it out."""
     _seed_user(client, master_key_header)
     _seed_pricing(client, master_key_header)
-    assert _post(client, master_key_header, [_event("req_raced")]).json()["accepted"] == 1
+    assert _post(client, master_key_header, [_event("req_held")]).json()["accepted"] == 1
 
-    async def _sees_nothing(*_args: Any, **_kwargs: Any) -> set[str]:
-        return set()
+    db_session.query(UsageLog).filter(UsageLog.source_event_id == "req_held").delete()
+    db_session.flush()
+    try:
+        started = time.monotonic()
+        held = _post(client, master_key_header, [_event("req_held")])
+        waited = time.monotonic() - started
+    finally:
+        db_session.rollback()
 
-    with patch("gateway.services.external_usage_service._existing_event_ids", new=_sees_nothing):
-        raced = _post(client, master_key_header, [_event("req_raced"), _event("req_fresh")])
-
-    assert raced.status_code == 200, raced.text
-    assert raced.json() == {"accepted": 1, "duplicate": 1, "rejected": 0, "errors": []}
-    assert db_session.query(UsageLog).filter(UsageLog.source_event_id == "req_raced").count() == 1
-    assert db_session.query(UsageLog).filter(UsageLog.source_event_id == "req_fresh").count() == 1
+    assert held.status_code == 503, held.text
+    assert held.headers["Retry-After"] == "2"
+    assert waited < 10
+    assert _post(client, master_key_header, [_event("req_held")]).json()["duplicate"] == 1
 
 
 def test_dedupes_within_batch(client: TestClient, master_key_header: dict[str, str], db_session: Session) -> None:

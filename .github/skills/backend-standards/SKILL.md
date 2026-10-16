@@ -118,7 +118,8 @@ rolls back.
 - Each request, and each worker job, has one Unit of Work over its one session, and every service
   built in that scope shares it. A request gets it from `get_unit_of_work` in `api/deps.py`. A
   worker job gets it from `create_unit_of_work()`, or from `create_log_unit_of_work()` for work
-  on the metering pool.
+  on the metering pool. A worker whose own reads still take the session gets both from
+  `create_unit_of_work_with_session()`, until those reads move into repositories.
 - A business step is one `async with uow:` block, an async context manager. The block commits
   when it ends, and rolls back and re-raises on an error. Either way the connection goes back to
   the pool.
@@ -210,6 +211,11 @@ through the config / `otari_env()`.
 - **Never log secrets or user payloads**: no API keys, no `messages`/`input`/completion text,
   no full request bodies. Log opaque ids, token counts, model/provider names, status. (The
   one sanctioned exception is the intentional one-time bootstrap key print.)
+- **Never log a database error's message or traceback**: it carries the statement's bound
+  parameters, and PostgreSQL's DETAIL carries the row. A route answers a failed write with
+  `raise database_error("<operation>", exc)` (`api/routes/_helpers.py`), which logs the error's
+  class, SQLSTATE and constraint; elsewhere, log `describe_database_error(exc)`
+  (`core/database.py`), never `exc_info=True` or `logger.exception`.
 
 ## Before you finish
 
