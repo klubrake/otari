@@ -23,6 +23,7 @@ from gateway.api.deps import (
     get_db,
     require_deployment_operator,
     verify_api_key_or_master_key,
+    verify_ingest_key_or_master_key,
 )
 from gateway.api.routes._billing_schemas import ChargeLine, MeterMap
 from gateway.api.routes._disconnect import CancelOnDisconnectRoute
@@ -323,7 +324,7 @@ async def list_usage(
 @key_router.post("/external-events")
 async def ingest_external_usage(
     request: ExternalEventsRequest,
-    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_api_key_or_master_key)],
+    auth_result: Annotated[tuple[APIKey | None, bool], Depends(verify_ingest_key_or_master_key)],
     db: Annotated[AsyncSession, Depends(get_ingest_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
 ) -> ExternalIngestResult:
