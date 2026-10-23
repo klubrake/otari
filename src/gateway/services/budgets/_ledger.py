@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped
 
 from gateway.core.database import create_session
+from gateway.core.sql import defer_commit_flush
 from gateway.log_config import logger
 from gateway.models.budgets import RESERVATION_EXPIRED, ReservationStatus
 from gateway.models.users import User
@@ -117,6 +118,7 @@ async def release_unrecorded(
     this call gave them back.
     """
     try:
+        await defer_commit_flush(db)
         await ReservationRepository(db).add_released(reservation_id, user_id=user_id)
         await release_scoped(
             db, scoped_budget_ids, held.amount, tokens=held.tokens, requests=held.requests, commit=False
@@ -270,6 +272,7 @@ async def _reclaim(db: AsyncSession, expired: Sequence[BudgetReservation]) -> in
         # Claim and release in one transaction. Committing the claim first would
         # mean a failure in the release left a row terminal with its hold still
         # held, and no later sweep would look at that row again.
+        await defer_commit_flush(db)
         if not await try_terminate(db, reservation.id, RESERVATION_EXPIRED):
             # This commits the empty transaction, because a rollback would expire the rows this loop iterates over.
             await db.commit()
@@ -322,6 +325,7 @@ def _clamped(names: Sequence[str], counters: Sequence[Decimal | int], held: Held
 
 async def _reconcile_user(db: AsyncSession, user_id: str, cutoff: datetime) -> bool:
     """Clamp one quiet user's holds to the sum of that user's active rows."""
+    await defer_commit_flush(db)
     counters = (
         await db.execute(
             select(User.reserved, User.reserved_tokens, User.reserved_requests)
@@ -356,6 +360,7 @@ async def _reconcile_user(db: AsyncSession, user_id: str, cutoff: datetime) -> b
 async def _reconcile_scoped(db: AsyncSession, scoped_budget_id: str, cutoff: datetime) -> bool:
     """Clamp one quiet ceiling's holds to the sum of its lines on active rows."""
     ceilings = ScopedBudgetRepository(db)
+    await ceilings.defer_commit_flush()
     counters = await ceilings.lock_quiet_holds(scoped_budget_id, quiet_before=cutoff)
     if counters is None:
         await db.commit()

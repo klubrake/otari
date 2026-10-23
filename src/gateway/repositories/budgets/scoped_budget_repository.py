@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped
 from sqlalchemy.sql.elements import ColumnElement
 
+from gateway.core.sql import defer_commit_flush
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.budget_exceptions import SpendCeilingAlreadyExistsError
 from gateway.models.budgets import (
@@ -419,6 +420,10 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
             select(ScopedBudget).where(ScopedBudget.id == scoped_budget_id, _in_scopes(scopes))
         )
         return result.scalar_one_or_none()
+
+    async def defer_commit_flush(self) -> None:
+        """Let this transaction's commit return before its flush, for one that moves a ceiling's hold."""
+        await defer_commit_flush(self.db)
 
     async def lock(self, scoped_budget_ids: Sequence[str]) -> None:
         """Lock these ceilings until the transaction ends, in the order of their IDs."""
