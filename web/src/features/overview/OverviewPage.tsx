@@ -5,6 +5,7 @@ import { PageLoading } from "@/design-system/feedback/PageLoading"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { SetupGuide } from "@/features/onboarding/SetupGuide"
 import { canManage } from "@/features/organization/roles"
+import { useHostedProviders } from "@/shared/api/hostedProviders"
 import { useModels } from "@/shared/api/models"
 import {
   useDeploymentOperator,
@@ -65,13 +66,19 @@ export function OverviewIndex() {
 }
 
 /**
- * The operator's page: the provider list decides whether a fresh gateway gets
- * the getting-started strip, and provider health fills the rail.
+ * The operator's page: the provider lists (the `config.yml` instances and the
+ * hosted providers, either of which serves a request) decide whether a fresh
+ * gateway gets the getting-started strip, and provider health fills the rail.
+ * A failed hosted read counts none; the configured list's failure is reported.
  */
 function OperatorOverview() {
   const providers = useProviders()
+  const hosted = useHostedProviders()
+  const providerCount = providers.isSuccess
+    ? providers.data.providers.length + (hosted.data?.data?.length ?? 0)
+    : 0
   const needsSetup =
-    providers.isSuccess && providers.data.providers.length === 0
+    providers.isSuccess && !hosted.isPending && providerCount === 0
   // Imported usage lands without a provider, so "no providers" alone does not
   // mean nothing has happened: the strip waits on the log being empty too.
   const anyUsage = useUsageLogs({}, 0, 1, { enabled: needsSetup })
@@ -85,11 +92,7 @@ function OperatorOverview() {
           {needsSetup && anyUsage.isSuccess && anyUsage.data.length === 0 ? (
             <GetStartedStrip />
           ) : null}
-          <SetupGuide
-            canServeRequests={
-              providers.isSuccess && providers.data.providers.length > 0
-            }
-          />
+          <SetupGuide canServeRequests={providerCount > 0} />
         </>
       }
       setupError={providers.error}

@@ -198,6 +198,8 @@ interface Bodies {
   failureCount?: number
   health?: unknown
   providers?: unknown
+  /** The hosted providers' rows, none unless a test names some. */
+  hostedProviders?: unknown[]
   members?: unknown[]
   context?: Parameters<typeof organizationContext>[0]
   activation?: unknown
@@ -338,6 +340,10 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
       return jsonResponse(
         b.health ?? { providers: [], healthy: 0, degraded: 0, total: 0 },
       )
+    }
+    if (url.includes(`${API_ROOT}/hosted-providers`)) {
+      const data = b.hostedProviders ?? []
+      return jsonResponse({ data, count: data.length })
     }
     if (url.includes(`${API_ROOT}/providers`)) {
       await b.holdProviders
@@ -1993,6 +1999,19 @@ describe("OverviewIndex routing", () => {
     expect(await screen.findByTestId("loc")).toHaveTextContent(
       "/organization/provider-keys",
     )
+  })
+
+  it("counts a hosted provider as one that serves, so the strip stays away and the guide asks", async () => {
+    const requested = mockApi({
+      providers: [],
+      hostedProviders: [{ name: "homelab", provider: "openai" }],
+    })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+    await screen.findByRole("heading", { name: "Overview" })
+    await waitFor(() =>
+      expect(requested.some((url) => url.includes("/activation"))).toBe(true),
+    )
+    expect(screen.queryByText("Get started with Otari")).toBeNull()
   })
 
   it("keeps the strip away from a gateway with usage but no providers", async () => {
