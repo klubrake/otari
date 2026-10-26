@@ -219,13 +219,12 @@ def test_the_channel_breakdown_on_sqlite_tells_the_three_channels_apart() -> Non
     from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT
 
     async def body(db: AsyncSession) -> dict[str | None, int]:
-        db.add(APIKey(id="k-forward", key_hash="h", key_name="forward", workspace_id=WORKSPACE, internal_secret="s"))
+        db.add(APIKey(id="k-app", key_hash="h", key_name="app", workspace_id=WORKSPACE))
         db.add_all(
             [
                 _log(source="claude_code"),
                 _log(source="gateway", endpoint=PLAYGROUND_USAGE_ENDPOINT),
-                _log(source="gateway", api_key_id="k-forward"),
-                _log(source="gateway"),
+                _log(source="gateway", api_key_id="k-app"),
                 _log(source="gateway"),
             ]
         )
@@ -235,7 +234,7 @@ def test_the_channel_breakdown_on_sqlite_tells_the_three_channels_apart() -> Non
             rows = await UsageSummaryRepository(uow).breakdown("channel", await _rows(uow), [], limit=None)
         return {row.key: row.requests for row in rows}
 
-    assert _run(body) == {"imported": 1, "playground": 2, "api": 2}
+    assert _run(body) == {"imported": 1, "playground": 1, "api": 2}
 
 
 def _p95_fixture(db: AsyncSession) -> None:
@@ -398,15 +397,13 @@ def test_the_channel_filter_on_sqlite_classifies_rows_as_the_breakdown_does() ->
     from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT
 
     async def body(db: AsyncSession) -> dict[str, set[str]]:
-        db.add(APIKey(id="k-forward", key_hash="hf", key_name="forward", workspace_id=WORKSPACE, internal_secret="s"))
         db.add(APIKey(id="k-app", key_hash="ha", key_name="app", workspace_id=WORKSPACE))
         db.add_all(
             [
                 _log(id="imported", source="claude_code"),
-                # Imported under a minted key is still imported: the source decides first.
-                _log(id="imported-keyed", source="claude_code", api_key_id="k-forward"),
+                # Imported under a key is still imported: the source decides first.
+                _log(id="imported-keyed", source="claude_code", api_key_id="k-app"),
                 _log(id="typed", source="gateway", endpoint=PLAYGROUND_USAGE_ENDPOINT),
-                _log(id="forwarded", source="gateway", api_key_id="k-forward"),
                 _log(id="api-keyed", source="gateway", api_key_id="k-app"),
                 _log(id="api-keyless", source="gateway"),
             ]
@@ -427,9 +424,9 @@ def test_the_channel_filter_on_sqlite_classifies_rows_as_the_breakdown_does() ->
 
     assert _run(body) == {
         "imported": {"imported", "imported-keyed"},
-        "playground": {"typed", "forwarded"},
+        "playground": {"typed"},
         "api": {"api-keyed", "api-keyless"},
-        "not-api": {"imported", "imported-keyed", "typed", "forwarded"},
+        "not-api": {"imported", "imported-keyed", "typed"},
         "not-playground": {"imported", "imported-keyed", "api-keyed", "api-keyless"},
     }
 

@@ -73,7 +73,7 @@ def _seed(db: Session, *, hours: int = 6, per_hour: int = 40, seed: int = 7) -> 
         db.add(User(user_id=user, alias=user.upper(), spend=0.0, blocked=False))
     db.flush()
     db.add(APIKey(id="k1", key_hash="h1", key_name="one", user_id="u1", workspace_id=workspace))
-    db.add(APIKey(id="k2", key_hash="h2", key_name="Two", user_id="u2", workspace_id=workspace, internal_secret="s"))
+    db.add(APIKey(id="k2", key_hash="h2", key_name="Two", user_id="u2", workspace_id=workspace))
     db.flush()
     for hour in range(hours):
         for _ in range(per_hour):

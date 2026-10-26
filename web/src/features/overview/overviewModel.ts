@@ -668,7 +668,7 @@ export function describeAttention(
         text: `${formatNumber(count)} provider${count === 1 ? "" : "s"} unreachable${
           item.subject_name ? `: ${item.subject_name}` : ""
         }`,
-        ...(servesProviders ? { to: "/providers" as const } : {}),
+        ...(servesProviders ? { to: "/admin/hosted-providers" as const } : {}),
       }
     }
     case "key_near_limit":

@@ -24,8 +24,8 @@ import {
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import {
   bootstrap,
-  HOSTED_SURFACES,
   organizationContext,
+  SURFACES,
   seriesPoint,
   usageTotals,
   workspaceActivation,
@@ -367,7 +367,7 @@ function LocationProbe() {
 }
 
 const ROUTES = [
-  { path: "/providers", element: <LocationProbe /> },
+  { path: "/admin/hosted-providers", element: <LocationProbe /> },
   { path: "/organization/provider-keys", element: <LocationProbe /> },
   { path: "/activity", element: <LocationProbe /> },
   { path: "/usage", element: <LocationProbe /> },
@@ -1073,7 +1073,7 @@ describe("what needs attention", () => {
       within(strip).getByRole("link", {
         name: "1 provider unreachable: fireworks",
       }),
-    ).toHaveAttribute("href", "/providers")
+    ).toHaveAttribute("href", "/admin/hosted-providers")
     expect(
       within(strip).getByRole("link", {
         name: "Workspace on pace to pass its budget ~Oct 19",
@@ -1182,8 +1182,7 @@ describe("what needs attention", () => {
     renderPage(<OverviewIndex />, {
       workspace: WORKSPACE_A,
       deployment: bootstrap({
-        deployment_type: "hosted",
-        surfaces: HOSTED_SURFACES,
+        surfaces: SURFACES.filter((surface) => surface !== "hosted_providers"),
       }),
     })
 
@@ -1973,16 +1972,17 @@ describe("OverviewIndex routing", () => {
     await user.click(
       screen.getByRole("link", { name: "Add your first provider" }),
     )
-    expect(await screen.findByTestId("loc")).toHaveTextContent("/providers")
+    expect(await screen.findByTestId("loc")).toHaveTextContent(
+      "/admin/hosted-providers",
+    )
   })
 
-  it("sends a hosted deployment to the organization's provider keys", async () => {
+  it("sends a deployment without hosted providers to the organization's provider keys", async () => {
     mockApi({ providers: [] })
     const user = userEvent.setup()
     renderPage(<OverviewIndex />, {
       deployment: bootstrap({
-        deployment_type: "hosted",
-        surfaces: HOSTED_SURFACES,
+        surfaces: SURFACES.filter((surface) => surface !== "hosted_providers"),
       }),
     })
 

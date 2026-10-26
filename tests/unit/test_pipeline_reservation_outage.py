@@ -21,7 +21,6 @@ import gateway.api.routes._pipeline as pipeline
 from gateway.api.routes import chat, messages
 from gateway.container import build_container
 from gateway.core.config import API_ROOT, GatewayConfig
-from gateway.ports.code_execution_policy_port import CodeExecutionPolicyPort
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.repositories.budgets import HeldAmounts
 from gateway.services import pricing_service
@@ -52,16 +51,14 @@ def _stub_preamble(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _resolve(adapter: Any, db: AsyncMock) -> pipeline.RequestContext:
-    app = SimpleNamespace(
-        state=SimpleNamespace(container=build_container(config=GatewayConfig(), workspace_listener=None))
-    )
+    app = SimpleNamespace(state=SimpleNamespace(container=build_container(config=GatewayConfig())))
     request = Request({"type": "http", "method": "POST", "path": f"{API_ROOT}/messages", "headers": [], "app": app})
     return await pipeline.resolve_request_context(
         adapter=adapter,
         raw_request=request,
         response=Response(),
         db=cast(AsyncSession, db),
-        uow=None,
+        uow=cast(Any, None),
         config=GatewayConfig(require_pricing=False),
         log_writer=cast(Any, object()),
         model="openai:gpt-4",
@@ -70,7 +67,7 @@ async def _resolve(adapter: Any, db: AsyncMock) -> pipeline.RequestContext:
         estimate_max_output_tokens=None,
         master_key_user_required_detail="user required",
         user_forbidden_detail="forbidden",
-        code_execution_policies=cast(CodeExecutionPolicyPort, object()),
+        code_execution_policies=cast(Any, object()),
         model_provider=cast(ModelProviderPort, object()),
     )
 

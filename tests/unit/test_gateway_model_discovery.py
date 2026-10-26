@@ -485,6 +485,85 @@ class TestDiscoverAllModels:
         assert result == [("edge", result[0][1])]
         assert result[0][1].id == "m1"
 
+    @pytest.mark.asyncio
+    async def test_a_declared_model_the_backend_does_not_list_is_warned_once(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # llama-server without --alias lists the GGUF path, not the id the operator declared.
+        monkeypatch.setattr("gateway.services.model_discovery_service._warned_undiscovered", {})
+        config = self._make_config(
+            providers={
+                "local-llm": {
+                    "provider_type": "openai",
+                    "api_base": "http://llama/v1",
+                    "models": ["qwen2.5-7b-instruct", "served"],
+                }
+            }
+        )
+        listed = [_make_model("/models/qwen2.5-7b-instruct-q4_k_m.gguf"), _make_model("served")]
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("gateway.services.model_discovery_service._supports_list_models", return_value=True),
+            patch("gateway.services.model_discovery_service.alist_models", new_callable=AsyncMock, return_value=listed),
+        ):
+            for _ in range(2):
+                with patch("gateway.services.model_discovery_service.get_model_cache", return_value=ModelCache()):
+                    await discover_all_models(config)
+
+        warnings = [r.getMessage() for r in caplog.records if "does not list" in r.getMessage()]
+        assert warnings == [
+            "Instance 'local-llm' declares models its backend does not list: qwen2.5-7b-instruct; "
+            "it lists: /models/qwen2.5-7b-instruct-q4_k_m.gguf, served"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_mismatch_that_clears_and_returns_is_warned_again(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("gateway.services.model_discovery_service._warned_undiscovered", {})
+        config = self._make_config(
+            providers={"edge": {"provider_type": "openai", "api_base": "http://edge/v1", "models": ["m1"]}}
+        )
+        # The backend loses m1, serves it again, then loses it again.
+        listings = [[_make_model("m2")], [_make_model("m1")], [_make_model("m2")]]
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("gateway.services.model_discovery_service._supports_list_models", return_value=True),
+            patch("gateway.services.model_discovery_service.alist_models", new_callable=AsyncMock) as listed,
+        ):
+            for listing in listings:
+                listed.return_value = listing
+                with patch("gateway.services.model_discovery_service.get_model_cache", return_value=ModelCache()):
+                    await discover_all_models(config)
+
+        warnings = [r.getMessage() for r in caplog.records if "does not list" in r.getMessage()]
+        assert warnings == ["Instance 'edge' declares models its backend does not list: m1; it lists: m2"] * 2
+
+    @pytest.mark.asyncio
+    async def test_declared_models_the_backend_lists_are_not_warned(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("gateway.services.model_discovery_service._warned_undiscovered", {})
+        config = self._make_config(
+            providers={"edge": {"provider_type": "openai", "api_base": "http://edge/v1", "models": ["m1"]}}
+        )
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("gateway.services.model_discovery_service.get_model_cache", return_value=ModelCache()),
+            patch("gateway.services.model_discovery_service._supports_list_models", return_value=True),
+            patch(
+                "gateway.services.model_discovery_service.alist_models",
+                new_callable=AsyncMock,
+                return_value=[_make_model("m1"), _make_model("m2")],
+            ),
+        ):
+            await discover_all_models(config)
+
+        assert "does not list" not in caplog.text
+
 
 class TestDiscoveryStallGuards:
     """Regressions for the discovery stall / over-calling that hung a DELETE.
@@ -745,7 +824,9 @@ class TestKeylessProviderConnection:
             patch("gateway.services.model_discovery_service._supports_list_models", return_value=True),
             patch("gateway.services.model_discovery_service.alist_models", mock_alist),
         ):
-            result = await run_credentials_test("openai", api_key=None, api_base="http://localhost:8000/v1")
+            result = await run_credentials_test(
+                "openai", api_key=None, api_base="http://localhost:8000/v1", declared=True
+            )
 
         assert result.error is None
         assert [m.id for m in result.models] == ["local-model"]
@@ -760,10 +841,52 @@ class TestKeylessProviderConnection:
             patch("gateway.services.model_discovery_service._supports_list_models", return_value=True),
             patch("gateway.services.model_discovery_service.alist_models", mock_alist),
         ):
-            await run_credentials_test("openai", api_key="sk-real", api_base="http://localhost:8000/v1")
+            await run_credentials_test("openai", api_key="sk-real", api_base="http://localhost:8000/v1", declared=True)
 
         assert mock_alist.await_args is not None
         assert mock_alist.await_args.kwargs["api_key"] == "sk-real"
+
+    @pytest.mark.asyncio
+    async def test_a_declared_keyless_provider_dials_without_a_key(self) -> None:
+        # The Providers page saves a declared entry, and a declared ollama needs no key.
+        mock_alist = AsyncMock(return_value=[_make_model("llama3")])
+        with (
+            patch("gateway.services.model_discovery_service._supports_list_models", return_value=True),
+            patch("gateway.services.model_discovery_service.alist_models", mock_alist),
+        ):
+            result = await run_credentials_test("ollama", api_key=None, declared=True)
+
+        assert result.error is None
+        mock_alist.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_declared_keyed_provider_never_reads_the_provider_variable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        mock_alist = AsyncMock(return_value=[])
+        with (
+            patch("gateway.services.model_discovery_service._supports_list_models", return_value=True),
+            patch("gateway.services.model_discovery_service.alist_models", mock_alist),
+        ):
+            result = await run_credentials_test("openai", api_key=None, declared=True)
+
+        assert result.error == "Provider 'openai' needs an API key."
+        mock_alist.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_organization_keyless_provider_never_reaches_the_deployments_backend(self) -> None:
+        # An organization key is not the deployment's declaration, so it never
+        # dials the deployment's own local server without an endpoint of its own.
+        mock_alist = AsyncMock(return_value=[])
+        with (
+            patch("gateway.services.model_discovery_service._supports_list_models", return_value=True),
+            patch("gateway.services.model_discovery_service.alist_models", mock_alist),
+        ):
+            result = await run_credentials_test("ollama", api_key=None, declared=False)
+
+        assert result.error == "Provider 'ollama' needs an API key."
+        mock_alist.assert_not_awaited()
 
 
 class TestProviderApiBaseSsrfGate:
@@ -786,7 +909,9 @@ class TestProviderApiBaseSsrfGate:
             patch("gateway.services.model_discovery_service._supports_list_models", return_value=True),
             patch("gateway.services.model_discovery_service.alist_models", mock_alist),
         ):
-            result = await run_credentials_test("openai", api_key="sk", api_base="http://127.0.0.1:8000/v1")
+            result = await run_credentials_test(
+                "openai", api_key="sk", api_base="http://127.0.0.1:8000/v1", declared=True
+            )
 
         assert result.error is None
         assert mock_alist.await_count == 1
@@ -799,7 +924,9 @@ class TestProviderApiBaseSsrfGate:
             patch("gateway.services.model_discovery_service._supports_list_models", return_value=True),
             patch("gateway.services.model_discovery_service.alist_models", mock_alist),
         ):
-            result = await run_credentials_test("openai", api_key="sk", api_base="http://127.0.0.1:8000/v1")
+            result = await run_credentials_test(
+                "openai", api_key="sk", api_base="http://127.0.0.1:8000/v1", declared=True
+            )
 
         # Blocked before the endpoint is dialed, surfaced as a test failure.
         assert result.error is not None
@@ -1013,7 +1140,9 @@ class TestMissingModelsEndpoint:
             patch("gateway.services.model_discovery_service._supports_list_models", return_value=True),
             patch("gateway.services.model_discovery_service.alist_models", side_effect=self._status_error(404)),
         ):
-            result = await run_credentials_test("openai", api_key="sk", api_base="https://api.otari.ai/v1")
+            result = await run_credentials_test(
+                "openai", api_key="sk", api_base="https://api.otari.ai/v1", declared=True
+            )
 
         assert result.error is not None
         assert result.discovery_unsupported is True
@@ -1027,7 +1156,7 @@ class TestMissingModelsEndpoint:
                 side_effect=self._status_error(401, "invalid api key"),
             ),
         ):
-            result = await run_credentials_test("openai", api_key="sk")
+            result = await run_credentials_test("openai", api_key="sk", declared=True)
 
         assert result.error is not None
         assert result.discovery_unsupported is False

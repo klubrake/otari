@@ -335,9 +335,9 @@ def test_passthrough_model_not_allowed_is_recorded(client: TestClient, master_ke
     assert row["model"] == "text-embedding-3-small"
     assert row["provider"] == "openai"
     assert "not permitted" in row["error_message"]
-    # Pass-through records the selector as sent, but mints no request id.
+    # Pass-through records the selector as sent, and the request id it answered with.
     assert row["requested_model"] == "openai:text-embedding-3-small"
-    assert row["request_id"] is None
+    assert row["request_id"] == resp.headers["Otari-Request-ID"]
 
 
 def test_passthrough_user_key_mismatch_is_recorded(client: TestClient, master_key_header: dict[str, str]) -> None:

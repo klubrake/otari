@@ -5,13 +5,16 @@ import { Section } from "@/design-system/layout/Section"
 import { useSurfaces } from "@/shared/hooks/useDeployment"
 
 /**
- * Where an operator adds a provider credential on this deployment: `/providers`
- * is where a fresh gateway is set up, and hosted and a control plane serve no
- * such page, so they get the organization's.
+ * Where an operator adds a provider credential on this deployment: the hosted
+ * providers page where it is published, the organization's keys otherwise.
  */
-function useAddProviderRoute(): "/providers" | "/organization/provider-keys" {
+function useAddProviderRoute():
+  | "/admin/hosted-providers"
+  | "/organization/provider-keys" {
   const serves = useSurfaces()
-  return serves("providers") ? "/providers" : "/organization/provider-keys"
+  return serves("hosted_providers")
+    ? "/admin/hosted-providers"
+    : "/organization/provider-keys"
 }
 
 const ACTIONS = {

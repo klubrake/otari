@@ -439,7 +439,6 @@ class OverviewRepository:
             .where(
                 col(Workspace.organization_id) == organization_id,
                 APIKey.is_active.is_(True),
-                APIKey.internal_secret.is_(None),
             )
         )
         if workspace_id is not None:

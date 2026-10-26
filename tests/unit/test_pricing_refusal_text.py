@@ -7,8 +7,8 @@ are recorded with status 402 and only the first is fixed by pricing the model
 it would send the dashboard's pricing guidance to the wrong rows.
 """
 
-from gateway.api.routes._pipeline import UNPRICED_TOOL_DETAIL_TEMPLATE
 from gateway.services.pricing_service import no_pricing_error_detail
+from gateway.services.tools import unpriced_tool_detail
 
 
 def test_the_model_refusal_names_require_pricing() -> None:
@@ -16,4 +16,4 @@ def test_the_model_refusal_names_require_pricing() -> None:
 
 
 def test_the_tool_refusal_names_require_pricing() -> None:
-    assert "require_pricing" in UNPRICED_TOOL_DETAIL_TEMPLATE.format(tool="web_search", key="otari:web_search")
+    assert "require_pricing" in unpriced_tool_detail("web_search")

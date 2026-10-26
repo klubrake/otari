@@ -37,7 +37,12 @@ from any_llm.types.model import Model
 from gateway.core.config import GatewayConfig
 from gateway.core.database import describe_database_error
 from gateway.log_config import logger
-from gateway.services.provider_kwargs import get_provider_kwargs, keyless_placeholder_api_key, otari_gateway_origin
+from gateway.services.provider_kwargs import (
+    credential_ladder_exhausted,
+    get_provider_kwargs,
+    keyless_placeholder_api_key,
+    otari_gateway_origin,
+)
 from gateway.services.upstream_redaction import redact_upstream_message
 from gateway.services.url_safety import UnsafeURLError, validate_provider_api_base
 
@@ -46,6 +51,10 @@ from gateway.services.url_safety import UnsafeURLError, validate_provider_api_ba
 # agree even when an operator raises the configured timeout; this default only
 # applies to direct callers (e.g. tests).
 _ADHOC_DISCOVERY_TIMEOUT_SECONDS = 10.0
+
+# The undiscovered declared ids last warned about per instance, so a mismatch
+# that persists across refreshes is logged once rather than on every refresh.
+_warned_undiscovered: dict[str, frozenset[str]] = {}
 
 
 @dataclass
@@ -380,7 +389,29 @@ async def _discover_for_provider(
             )
             return provider_name, declared
         raise
+    _warn_about_undiscovered_declared_models(config, provider_name, models)
     return provider_name, list(models)
+
+
+def _warn_about_undiscovered_declared_models(config: GatewayConfig, instance: str, models: Sequence[Model]) -> None:
+    """Warn when the instance declares a model id its backend does not list.
+
+    A self-hosted server can serve a model under an id other than the one the
+    operator declared and priced (llama-server without ``--alias`` lists the
+    GGUF path), and a request for the declared id then fails upstream.
+    """
+    discovered = {model.id for model in models}
+    missing = frozenset(model.id for model in _declared_models(config, instance) if model.id not in discovered)
+    if missing == _warned_undiscovered.get(instance, frozenset()):
+        return
+    _warned_undiscovered[instance] = missing
+    if missing:
+        logger.warning(
+            "Instance '%s' declares models its backend does not list: %s; it lists: %s",
+            instance,
+            ", ".join(sorted(missing)),
+            ", ".join(sorted(discovered)) or "nothing",
+        )
 
 
 # A provider error is echoed into a health or test response, so it is redacted
@@ -537,6 +568,7 @@ async def test_provider_credentials(
     api_key: str | None = None,
     api_base: str | None = None,
     client_args: dict[str, object] | None = None,
+    declared: bool,
     timeout: float = _ADHOC_DISCOVERY_TIMEOUT_SECONDS,
 ) -> ProviderDiscovery:
     """List models for ad-hoc credentials without storing them.
@@ -547,6 +579,8 @@ async def test_provider_credentials(
     capped provider errors, which may include the api_base but never the key).
     ``timeout`` defaults to the module bound; the route passes
     ``model_discovery_timeout_seconds`` so the saved and unsaved paths agree.
+    ``declared`` is whether the credentials will back a ``providers:`` entry, which
+    a keyless or ambient-credential provider needs in place of a key.
     """
     if not _supports_list_models(impl_name):
         return ProviderDiscovery(
@@ -578,7 +612,9 @@ async def test_provider_credentials(
     # A keyless custom endpoint (api_base set, no key) would otherwise be rejected
     # by any-llm before the connection is even attempted; supply the same
     # placeholder the saved path uses so "Test connection" honors the optional key.
-    api_key = api_key or keyless_placeholder_api_key(provider_enum, api_base, api_key)
+    api_key = api_key or keyless_placeholder_api_key(api_base, api_key)
+    if not api_key and credential_ladder_exhausted(provider_enum, {}, declared=declared):
+        return ProviderDiscovery(provider=impl_name, models=[], error=f"Provider '{impl_name}' needs an API key.")
     try:
         # Bounded like the stored-provider path so a black-holed endpoint cannot
         # hang the test button for the SDK's ~600s default.

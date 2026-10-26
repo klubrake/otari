@@ -183,45 +183,11 @@ def test_a_breakdown_by_channel_tells_imported_playground_and_api_apart(
     assert by_channel["imported"]["imported_cost"] == pytest.approx(0.2)
 
 
-def test_the_hosted_playgrounds_forwarding_key_counts_as_the_playground(
-    client: TestClient, master_key_header: dict[str, str], db_session: Session
-) -> None:
-    """A hosted control plane forwards the Playground under a key it was minted, with the API's endpoint label."""
-    db_session.add(
-        APIKey(
-            id="k-forward",
-            key_hash="hash-forward",
-            key_name="forward",
-            workspace_id=seed_workspace_id(db_session),
-            internal_secret="minted",
-        )
-    )
-    _key(db_session, "k-app", "app")
-    db_session.flush()
-    _row(db_session, api_key_id="k-forward")
-    _row(db_session, api_key_id="k-app")
-    db_session.commit()
-
-    by_channel = _rows(_summary(client, master_key_header, dimensions="channel"), "by_channel")
-    assert {key: row["requests"] for key, row in by_channel.items()} == {"playground": 1, "api": 1}
-
-
 def _channel_rows(db: Session) -> None:
-    """One request in each way in: two imported, one typed in each Playground shape, one API call."""
-    db.add(
-        APIKey(
-            id="k-forward",
-            key_hash="hash-forward",
-            key_name="forward",
-            workspace_id=seed_workspace_id(db),
-            internal_secret="minted",
-        )
-    )
-    db.flush()
+    """One request in each way in: two imported, one typed in the Playground, one API call."""
     _row(db, source="claude_code")
     _row(db, source="otari-ai:claude_code")
     _row(db, endpoint=PLAYGROUND_USAGE_ENDPOINT)
-    _row(db, api_key_id="k-forward")
     _row(db, endpoint="/v1/messages")
     db.commit()
 
@@ -230,10 +196,10 @@ def _channel_rows(db: Session) -> None:
     ("params", "requests"),
     [
         ({"channel": "imported"}, 2),
-        ({"channel": "playground"}, 2),
+        ({"channel": "playground"}, 1),
         ({"channel": "api"}, 1),
-        ({"channel": ["api", "playground"]}, 3),
-        ({"exclude_channel": "imported"}, 3),
+        ({"channel": ["api", "playground"]}, 2),
+        ({"exclude_channel": "imported"}, 2),
     ],
 )
 def test_a_channel_filter_keeps_the_rows_the_channel_breakdown_counts(
@@ -243,7 +209,7 @@ def test_a_channel_filter_keeps_the_rows_the_channel_breakdown_counts(
     params: dict[str, Any],
     requests: int,
 ) -> None:
-    """The filter and the breakdown share one rule, the hosted Playground's forwarding key included."""
+    """The filter and the breakdown share one rule."""
     _channel_rows(db_session)
 
     assert _summary(client, master_key_header, **params)["totals"]["request_count"] == requests

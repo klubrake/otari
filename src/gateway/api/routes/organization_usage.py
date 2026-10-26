@@ -129,7 +129,6 @@ from gateway.services.tenancy.authorization import (
     resolve_visible_workspace_scope,
     resolve_workspace_in_organization,
 )
-from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 
 router = APIRouter(
     prefix="/organizations/me/usage",
@@ -142,10 +141,9 @@ router = APIRouter(
     route_class=CancelOnDisconnectRoute,
 )
 
-# Published by hosted only, and no dashboard page gates on it any more: these routes
-# are mounted on standalone too, where the Usage page's Organization scope reads
-# them, offered by organization role rather than by this surface.
-SURFACE = Surface("organization_usage", standalone=False)
+# No dashboard page in this fork gates on it: the Usage page's Organization scope
+# reads these routes, offered by organization role rather than by this surface.
+SURFACE = Surface("organization_usage")
 
 
 WORKSPACE_TOTALS_DESC = (
@@ -238,7 +236,7 @@ async def _scope_condition(
     the list and the count never pass it. The breakdowns returned are what a
     granted totals summary splits by when it names none; None otherwise.
     """
-    organizations = OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener())
+    organizations = OrganizationService(db, membership_listener=None)
 
     if workspace_id is not None:
         # Only the organization is resolved on this branch. The full scope would

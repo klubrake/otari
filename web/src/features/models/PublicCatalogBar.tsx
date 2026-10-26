@@ -8,7 +8,7 @@ import {
   publicCatalogHref,
   siteHomeHref,
 } from "@/features/models/publicCatalog"
-import { docsSourceHref } from "@/shared/helpers/docs"
+import { documentationHref } from "@/shared/helpers/docs"
 import { useDeployment } from "@/shared/hooks/useDeployment"
 
 const GITHUB_URL = "https://github.com/mozilla-ai/otari"
@@ -22,18 +22,16 @@ const DRAWER_LINK =
 
 /**
  * The public catalog's bar: the same destinations as the site in front of it
- * (Models, Documentation, Log in, Sign up, GitHub), so a visitor who came from
- * that site's navbar finds the same one here. The logo goes back to the site
+ * (Models, Documentation, Log in, Sign up, GitHub, Discord), so a visitor who
+ * came from that site's navbar finds the same one here. The logo goes back to the site
  * where the deployment names one (`site_url`), else to the catalog.
  *
- * Documentation opens `docs_url` where it is set; otherwise the docs on GitHub,
- * because the bundled guide at `/#/docs` sits behind the sign-in screen.
  */
 export function PublicCatalogBar({ onList }: { onList: boolean }) {
   const deployment = useDeployment()
-  const { docs_url, open_signup } = deployment
+  const { open_signup } = deployment
   const [menuOpen, setMenuOpen] = useState(false)
-  const docsHref = docs_url ?? docsSourceHref("index.md")
+  const docsHref = documentationHref(deployment)
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4 md:px-6">

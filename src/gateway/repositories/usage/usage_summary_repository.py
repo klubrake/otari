@@ -20,7 +20,6 @@ from sqlalchemy import ColumnElement, String, Subquery, case, cast, func, litera
 from gateway.core.sql import UsageBucketGrain, bucket_expr, canonical_bucket, dialect_name, utc_bound
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage_filters import (
-    CHANNEL_KEY,
     LabelJoin,
     SortOrder,
     api_key_label,
@@ -83,9 +82,7 @@ def _breakdown(dimension: BreakdownDimension, rows: Any) -> _Breakdown:
         return _Breakdown(rows.policy_name)
     if dimension == "workspace":
         return _Breakdown(rows.workspace_id, workspace_label(rows.workspace_id), is_uuid=True)
-    # The channel reads the row's key through its own alias, never the key label join.
-    channel = usage_channel(rows.source, rows.endpoint, CHANNEL_KEY.c.internal_secret.is_not(None))
-    return _Breakdown(channel, reads=((CHANNEL_KEY, CHANNEL_KEY.c.id == rows.api_key_id),))
+    return _Breakdown(usage_channel(rows.source, rows.endpoint))
 
 
 def _joined(stmt: Any, spec: _Breakdown, *, with_label: bool) -> Any:

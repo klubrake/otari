@@ -158,7 +158,7 @@ describe("the shell's mount point", () => {
   async function renderShell(
     page: ReactElement,
     url?: string,
-    surfaces?: string[],
+    deployment = bootstrap(),
   ) {
     // The shell reads the organization context for its switcher and for the way
     // into the organization rail.
@@ -169,9 +169,7 @@ describe("the shell's mount point", () => {
       url,
       shell: (
         <Provider>
-          <DeploymentProvider
-            value={surfaces ? bootstrap({ surfaces }) : bootstrap()}
-          >
+          <DeploymentProvider value={deployment}>
             <SelectedWorkspaceProvider>
               <AppShell />
             </SelectedWorkspaceProvider>
@@ -237,7 +235,11 @@ describe("the shell's mount point", () => {
     await renderShell(
       <p>ROUTING</p>,
       "/routing",
-      bootstrap().surfaces.filter((surface) => surface !== "routing"),
+      bootstrap({
+        surfaces: bootstrap().surfaces.filter(
+          (surface) => surface !== "routing",
+        ),
+      }),
     )
 
     expect(await screen.findByText(/is not available here/)).toBeInTheDocument()

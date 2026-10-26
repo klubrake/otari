@@ -1,7 +1,9 @@
 """Forwarding the scoped prompt cache key as Baseten's ``x-session-affinity`` header."""
 
 import json
+import uuid
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
@@ -11,9 +13,7 @@ from any_llm import LLMProvider, acompletion, amessages, aresponses
 from gateway.api.routes._pipeline import RequestContext, _local_attempt_kwargs, scope_prompt_cache_key
 from gateway.api.routes._tools import _strip_gateway_fields
 from gateway.core.config import GatewayConfig
-from gateway.models.providers import ProviderCredential
 from gateway.services.provider_kwargs import SESSION_AFFINITY_HEADER, get_provider_kwargs, with_session_affinity
-from gateway.services.provider_store_service import _row_to_entry
 from gateway.types.attempt import Attempt
 
 BASETEN = {
@@ -36,17 +36,15 @@ def _sent_headers(kwargs: dict[str, Any]) -> dict[str, str] | None:
 def _scoped(caller_key: str, config: GatewayConfig) -> str:
     ctx = RequestContext(
         config=config,
-        db=None,
-        uow=None,
+        db=cast(Any, None),
+        uow=cast(Any, None),
         log_writer=cast(Any, None),
-        hybrid_mode=False,
-        route=None,
-        user_token=None,
         api_key_id=None,
         user_id="user-a",
         rate_limit_info=None,
         reservation=None,
         started_at=0.0,
+        workspace_id=uuid.uuid4(),
     )
     fields: dict[str, Any] = {"prompt_cache_key": caller_key}
     scope_prompt_cache_key(fields, ctx)
@@ -153,17 +151,19 @@ class _Adapter:
 
 
 class _ToolContext:
-    def request_fields_for(self, provider: str, base_request_fields: dict[str, Any]) -> dict[str, Any]:
+    def request_fields_for(self, provider: str, model: str, base_request_fields: dict[str, Any]) -> dict[str, Any]:
         return base_request_fields
 
 
 def test_each_routed_candidate_uses_its_own_instance_setting() -> None:
     config = _config(baseten=BASETEN, fallback={"provider_type": "openai", "api_key": "k"})
-    build = _local_attempt_kwargs(cast(Any, _Adapter()), config, cast(Any, _ToolContext()))
+    ctx = cast(Any, SimpleNamespace(config=config, request_extras=None))
+    build = _local_attempt_kwargs(cast(Any, _Adapter()), cast(Any, _ToolContext()), ctx)
     fields = {"prompt_cache_key": "scoped"}
 
-    baseten = Attempt(position=1, instance="baseten", provider=LLMProvider.OPENAI, model="glm")
-    fallback = Attempt(position=2, instance="fallback", provider=LLMProvider.OPENAI, model="gpt")
+    key = {"api_key": "k"}
+    baseten = Attempt(position=1, instance="baseten", provider=LLMProvider.OPENAI, model="glm", kwargs=key)
+    fallback = Attempt(position=2, instance="fallback", provider=LLMProvider.OPENAI, model="gpt", kwargs=key)
 
     assert _sent_headers(build(baseten, fields)) == {SESSION_AFFINITY_HEADER: "scoped"}
     assert "default_headers" not in build(fallback, fields).get("client_args", {})
@@ -259,10 +259,3 @@ async def test_header_reaches_the_wire(entry_point: str, stream: bool, path: str
     assert len(seen) == 1
     assert seen[0].url.path == path
     assert seen[0].headers[SESSION_AFFINITY_HEADER] == "scoped"
-
-
-def test_a_stored_provider_carries_the_flag_into_the_overlay() -> None:
-    on = ProviderCredential(instance="baseten", provider_type="openai", session_affinity=True, client_args={})
-    off = ProviderCredential(instance="plain", provider_type="openai", session_affinity=False, client_args={})
-    assert _row_to_entry(on)["session_affinity"] is True
-    assert "session_affinity" not in _row_to_entry(off)

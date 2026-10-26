@@ -164,7 +164,7 @@ function OverviewPage({
   const url = useUrlState(OVERVIEW_URL_DEFAULTS)
   const data = useOverviewData(url)
   const context = useOrganizationContext()
-  const servesProviders = useSurfaces()("providers")
+  const servesProviders = useSurfaces()("hosted_providers")
   const { viewer, scope, month, summary, overview } = data
   const now = data.now.getTime()
 

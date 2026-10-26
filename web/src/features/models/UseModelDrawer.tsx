@@ -2,7 +2,7 @@ import { Link } from "@tanstack/react-router"
 import { useState } from "react"
 
 import type { CatalogModelDetail, CatalogOffering } from "@/client"
-import { CopyField } from "@/design-system/actions/CopyField"
+import { CopyableValue, CopyField } from "@/design-system/actions/CopyField"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { Tab, TabRow } from "@/design-system/navigation/TabRow"
 import { Sheet } from "@/design-system/overlays/Sheet"
@@ -13,7 +13,6 @@ import {
   buildPythonSnippet,
   resolveSnippetBaseUrl,
 } from "@/shared/helpers/requestSnippets"
-import { useDeployment } from "@/shared/hooks/useDeployment"
 
 import { providerModelId } from "./modelKey"
 
@@ -42,8 +41,7 @@ export function UseModelDrawer({
   isOpen: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const deployment = useDeployment()
-  const baseUrl = resolveSnippetBaseUrl(deployment)
+  const baseUrl = resolveSnippetBaseUrl()
   // "Let the gateway choose" is only a choice where the gateway has indexed the
   // model; without an id to send, the request has to name a provider, so the
   // first offering stands as the default rather than an option that would
@@ -69,7 +67,7 @@ export function UseModelDrawer({
       ]
     : offeringOptions
   const input = {
-    baseUrl: baseUrl ?? "",
+    baseUrl,
     apiKey: "$OTARI_API_KEY",
     model: sendAs,
   }
@@ -83,8 +81,11 @@ export function UseModelDrawer({
       title={`Use ${model.name}`}
       description={
         <>
-          Send <code className="text-mono-caption">{sendAs}</code> as{" "}
-          <code className="text-mono-caption">model</code>.
+          Send{" "}
+          <CopyableValue value={sendAs} label="model selector">
+            <code className="text-mono-caption wrap-anywhere">{sendAs}</code>
+          </CopyableValue>{" "}
+          as <code className="text-mono-caption">model</code>.
         </>
       }
     >

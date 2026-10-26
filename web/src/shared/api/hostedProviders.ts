@@ -3,25 +3,34 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
   CreateHostedModelRequest,
   CreateHostedProviderRequest,
+  DeploymentProviderMigration,
+  DeploymentProviderMigrationReviewedRow,
   HostedAvailableModels,
-  HostedCatalogRefresh,
+  HostedCatalogUpdatePreview,
+  HostedCatalogUpdateRequest,
+  HostedCatalogUpdateResult,
   HostedModel,
   HostedModels,
   HostedModelsRefresh,
   HostedProvider,
   HostedProviders,
+  HostedProviderTestResult,
+  ReencryptHostedProvidersResult,
+  TestHostedProviderRequest,
   UpdateHostedModelRequest,
   UpdateHostedProviderRequest,
 } from "@/client"
 import { apiFetch, longRequestSignal } from "@/shared/api/client"
 import {
   CATALOG,
+  HOSTED_CATALOG_UPDATE_PREVIEW,
   HOSTED_PROVIDER_AVAILABLE_MODELS,
   HOSTED_PROVIDERS,
-  HOSTED_PROVIDERS_REFRESH_PREVIEW,
   MODELS,
   NO_RETRY,
   PRICING,
+  PROVIDER_HEALTH,
+  PROVIDERS,
 } from "@/shared/api/queryKeys"
 
 // The providers this deployment serves on its own keys, for a request that
@@ -29,17 +38,18 @@ import {
 // answers a non-operator 404, which is why the page asks the deployment admin
 // gate before it asks for this list.
 //
-// Everything is addressed by provider name, the row's identity. Each write that
+// Everything is addressed by the provider's name (`name`, which defaults to its
+// implementation `provider`), the row's identity. Each write that
 // can change a price or what is served also invalidates the catalog reads,
 // because a hosted model's rate is the deployment price list's.
 //
 // The create, both refreshes, the preview and the model picker dial the
-// upstream (every provider, for the sweep), so they carry `longRequestSignal`
+// upstream (every provider, for the catalog update), so they carry `longRequestSignal`
 // rather than the default request deadline.
 
 /**
- * The API's maximum: one row per provider implementation, a closed set well
- * inside it, so one page is the whole list.
+ * The API's maximum. An operator adds hosted providers by hand, so one page is
+ * the whole list.
  */
 const PROVIDER_PAGE_LIMIT = 1000
 
@@ -53,6 +63,7 @@ function useInvalidateHosted() {
     void queryClient.invalidateQueries({ queryKey: [PRICING] })
     void queryClient.invalidateQueries({ queryKey: [MODELS] })
     void queryClient.invalidateQueries({ queryKey: [CATALOG] })
+    void queryClient.invalidateQueries({ queryKey: [PROVIDER_HEALTH] })
   }
 }
 
@@ -207,23 +218,34 @@ export function useRefreshHostedModels(provider: string) {
 }
 
 /**
- * What a catalog sweep would remove, read once per opening of its confirm
- * dialog.
+ * What updating the catalog would do, read once per opening of its confirm
+ * dialog, and again when the cleanup is ticked or cleared.
  *
- * `opening` counts the openings and is 0 while the dialog is closed. Keying on
- * it gives every opening a query with no data, so a reopen shows the pending
- * state rather than the last opening's list, and `gcTime: 0` drops that list
- * once nothing observes it. Never stale within an opening, so a window focus
- * cannot swap the list under a confirm that was about to fire on it.
+ * A POST that the dialog reads as a query: it fetches the latest models.dev
+ * prices and holds them as pending for the update to name by digest, and it
+ * dials every provider; nothing else is written. `opening` counts the openings
+ * and is 0 while the dialog is closed. Keying on it gives every opening a query
+ * with no data, so a reopen shows the pending state rather than the last
+ * opening's answer, and `gcTime: 0` drops that answer once nothing observes it.
+ * Never stale within an opening, so a window focus cannot swap the preview under
+ * a confirm that was about to fire on it.
  */
-export function useHostedCatalogRefreshPreview(opening: number) {
+export function useHostedCatalogUpdatePreview(
+  opening: number,
+  cleanup: boolean,
+) {
   return useQuery({
     ...NO_RETRY,
-    queryKey: [HOSTED_PROVIDERS_REFRESH_PREVIEW, opening],
+    queryKey: [HOSTED_CATALOG_UPDATE_PREVIEW, opening, cleanup],
     queryFn: () =>
-      apiFetch<HostedCatalogRefresh>("/hosted-providers/refresh/preview", {
-        signal: longRequestSignal(),
-      }),
+      apiFetch<HostedCatalogUpdatePreview>(
+        "/hosted-providers/catalog-update/preview",
+        {
+          method: "POST",
+          body: JSON.stringify({ cleanup }),
+          signal: longRequestSignal(),
+        },
+      ),
     enabled: opening > 0,
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 0,
@@ -231,17 +253,103 @@ export function useHostedCatalogRefreshPreview(opening: number) {
 }
 
 /**
- * The deployment-wide sweep: every enabled provider is asked again what it
- * lists, then every priced model nothing here serves leaves the catalog.
+ * The catalog update: the reviewed models.dev prices, then every provider's
+ * models, then the cleanup if it was asked for.
  */
-export function useHostedCatalogRefresh() {
+export function useHostedCatalogUpdate() {
   const invalidate = useInvalidateHosted()
   return useMutation({
-    mutationFn: () =>
-      apiFetch<HostedCatalogRefresh>("/hosted-providers/refresh", {
+    mutationFn: (body: HostedCatalogUpdateRequest) =>
+      apiFetch<HostedCatalogUpdateResult>("/hosted-providers/catalog-update", {
         method: "POST",
+        body: JSON.stringify(body),
         signal: longRequestSignal(),
       }),
     onSuccess: invalidate,
+  })
+}
+
+/**
+ * Credentials tried against the provider without storing them. With `name`
+ * naming a stored provider, a field left out is read from it, so an edit can be
+ * tested without typing the key again. Dials the upstream.
+ */
+export function useTestHostedProvider() {
+  return useMutation({
+    mutationFn: (body: TestHostedProviderRequest) =>
+      apiFetch<HostedProviderTestResult>("/hosted-providers/test", {
+        method: "POST",
+        body: JSON.stringify(body),
+        signal: longRequestSignal(),
+      }),
+  })
+}
+
+/** Re-encrypts every stored hosted provider key under the primary `OTARI_SECRET_KEY`. */
+export function useReencryptHostedProviders() {
+  const invalidate = useInvalidateHosted()
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<ReencryptHostedProvidersResult>("/hosted-providers/reencrypt", {
+        method: "POST",
+      }),
+    onSuccess: invalidate,
+  })
+}
+
+/**
+ * What moving the providers startup could not move onto hosted providers
+ * would do. Reads the stored rows only and dials nothing, so
+ * it is cheap enough to ask whenever the page is open.
+ */
+export function useDeploymentProviderMigrationPreview(enabled: boolean) {
+  return useQuery({
+    queryKey: [HOSTED_PROVIDERS, "migration"],
+    queryFn: () =>
+      apiFetch<DeploymentProviderMigration>("/hosted-providers/migration"),
+    staleTime: 30_000,
+    enabled,
+  })
+}
+
+/**
+ * Moves the stored providers named, the rows of the preview the operator
+ * reviewed at the versions shown; a row the preview did not show, or one
+ * changed since, is left where it is. Each move asks
+ * the provider what it serves, as a create does.
+ */
+export function useApplyDeploymentProviderMigration() {
+  const queryClient = useQueryClient()
+  const invalidate = useInvalidateHosted()
+  return useMutation({
+    mutationFn: (rows: DeploymentProviderMigrationReviewedRow[]) =>
+      apiFetch<DeploymentProviderMigration>("/hosted-providers/migration", {
+        method: "POST",
+        body: JSON.stringify({ rows }),
+        signal: longRequestSignal(),
+      }),
+    onSuccess: () => {
+      invalidate()
+      void queryClient.invalidateQueries({ queryKey: [PROVIDERS] })
+    },
+  })
+}
+
+/**
+ * Removes a stored provider the move could not take. It serves nothing, so
+ * only the migration preview changes.
+ */
+export function useDiscardDeploymentProvider() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (instance: string) =>
+      apiFetch<void>(
+        `/hosted-providers/migration/${encodeURIComponent(instance)}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: [HOSTED_PROVIDERS, "migration"],
+      }),
   })
 }

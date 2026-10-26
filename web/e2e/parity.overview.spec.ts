@@ -16,8 +16,6 @@ import { COUNTS } from "./parity-data"
 // way (see web/playwright.config.ts).
 test.describe.configure({ mode: "serial" })
 
-// The scratch rows are consumed by the Activity spec's bulk-delete flow, which
-// runs before this file, so they are deliberately not counted here.
 const SEEDED = COUNTS.priced + COUNTS.unpriced + COUNTS.errors
 
 // The fixture lands inside the last 20 hours, so on the 1st (UTC) part of it
