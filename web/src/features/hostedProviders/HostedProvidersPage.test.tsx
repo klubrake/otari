@@ -43,6 +43,7 @@ function hostedProvider(
     enabled: true,
     restricted_to_organization_id: null,
     serves_unlisted_models: false,
+    session_affinity: false,
     created_at: "2026-10-01T00:00:00Z",
     updated_at: null,
     ...overrides,
@@ -538,6 +539,74 @@ describe("HostedProvidersPage", () => {
     expect(hostedRequests(requests, "PATCH")[0].body).toEqual({
       api_base: "",
       serves_unlisted_models: false,
+    })
+  })
+
+  it("adds a provider that forwards its callers' session affinity", async () => {
+    const requests = mockApi({ providers: [] })
+    const user = userEvent.setup()
+    await renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Add provider" }))[0],
+    )
+    const dialog = await screen.findByRole("dialog")
+    await user.click(within(dialog).getByRole("combobox", { name: "Provider" }))
+    await user.click(await screen.findByRole("option", { name: "Anthropic" }))
+    await user.type(within(dialog).getByLabelText("API key"), "sk-ant-secret")
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: "Session affinity" }),
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add provider" }),
+    )
+
+    await waitFor(() =>
+      expect(hostedRequests(requests, "POST")).toHaveLength(1),
+    )
+    expect(hostedRequests(requests, "POST")[0].body).toMatchObject({
+      session_affinity: true,
+    })
+  })
+
+  it("switches session affinity from the edit dialog, and offers it only where the client can carry it", async () => {
+    const requests = mockApi({
+      providers: [
+        hostedProvider({ session_affinity: true }),
+        hostedProvider({
+          id: "22222222-2222-4222-8222-222222222222",
+          provider: "mistral",
+        }),
+      ],
+    })
+    const user = userEvent.setup()
+    await renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Edit mistral" }),
+    )
+    expect(
+      within(await screen.findByRole("dialog")).queryByRole("checkbox", {
+        name: "Session affinity",
+      }),
+    ).toBeNull()
+    await user.keyboard("{Escape}")
+
+    await user.click(await screen.findByRole("button", { name: "Edit openai" }))
+    const dialog = await screen.findByRole("dialog")
+    const box = within(dialog).getByRole("checkbox", {
+      name: "Session affinity",
+    })
+    expect(box).toBeChecked()
+    await user.click(box)
+    await user.click(within(dialog).getByRole("button", { name: "Save" }))
+
+    await waitFor(() =>
+      expect(hostedRequests(requests, "PATCH")).toHaveLength(1),
+    )
+    expect(hostedRequests(requests, "PATCH")[0].body).toEqual({
+      api_base: "",
+      session_affinity: false,
     })
   })
 

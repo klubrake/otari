@@ -363,7 +363,9 @@ class HostedProviderCreateRequest(SQLModel):
     every other one is served as if it were not configured.
     ``serves_unlisted_models`` serves a model the roster does not list, as a
     ``config.yml`` instance does, and switches on every model it offers
-    whether or not something prices it.
+    whether or not something prices it. ``session_affinity`` forwards the
+    caller's scoped prompt cache key as an ``x-session-affinity`` header, for an
+    ``openai`` or ``anthropic`` provider only.
     """
 
     model_config = {"json_schema_extra": {"example": {"provider": "openai", "api_key": "<your OpenAI API key>"}}}
@@ -376,6 +378,7 @@ class HostedProviderCreateRequest(SQLModel):
     enabled: bool = True
     restricted_to_organization_id: uuid.UUID | None = None
     serves_unlisted_models: bool = False
+    session_affinity: bool = False
 
 
 class HostedProviderUpdateRequest(SQLModel):
@@ -401,6 +404,7 @@ class HostedProviderUpdateRequest(SQLModel):
     enabled: bool | None = None
     restricted_to_organization_id: uuid.UUID | None = None
     serves_unlisted_models: bool | None = None
+    session_affinity: bool | None = None
 
 
 class HostedProviderPublic(SQLModel):
@@ -422,7 +426,8 @@ class HostedProviderPublic(SQLModel):
     and ``decryptable`` false for one whose key or extras no configured
     ``OTARI_SECRET_KEY`` reads, which serves nothing until re-entered.
     ``serves_unlisted_models`` is true for one that serves a model its roster
-    does not list.
+    does not list, and ``session_affinity`` for one that forwards the scoped
+    prompt cache key as ``x-session-affinity``.
     """
 
     id: uuid.UUID | None = None
@@ -437,6 +442,7 @@ class HostedProviderPublic(SQLModel):
     enabled: bool
     restricted_to_organization_id: uuid.UUID | None = None
     serves_unlisted_models: bool = False
+    session_affinity: bool = False
     shadows_config: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -471,6 +477,7 @@ class HostedProviderPublic(SQLModel):
             enabled=row.enabled,
             restricted_to_organization_id=row.restricted_to_organization_id,
             serves_unlisted_models=row.serves_unlisted_models,
+            session_affinity=row.session_affinity,
             shadows_config=shadows_config,
             created_at=row.created_at,
             updated_at=row.updated_at,

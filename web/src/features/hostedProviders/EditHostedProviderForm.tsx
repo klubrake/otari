@@ -30,6 +30,10 @@ import {
 
 import { movesToAnotherOrigin } from "./endpointOrigin"
 import { ServesUnlistedModelsField } from "./ServesUnlistedModelsField"
+import {
+  SessionAffinityField,
+  supportsSessionAffinity,
+} from "./SessionAffinityField"
 
 // The editor for one hosted provider. Its name and implementation are immutable
 // (the update body cannot change them), so they are named in the description.
@@ -49,6 +53,7 @@ interface EditDraft {
   /** Typed secrets already stored, so blank means "keep it", not "clear it". */
   redacted: string[]
   servesUnlistedModels: boolean
+  sessionAffinity: boolean
 }
 
 function draftFrom(provider: HostedProvider): EditDraft {
@@ -63,6 +68,7 @@ function draftFrom(provider: HostedProvider): EditDraft {
     clientArgs: formatClientArgs(rest),
     redacted,
     servesUnlistedModels: provider.serves_unlisted_models,
+    sessionAffinity: provider.session_affinity,
   }
 }
 
@@ -141,6 +147,9 @@ export function EditHostedProviderForm({
           ...(draft.servesUnlistedModels === provider.serves_unlisted_models
             ? {}
             : { serves_unlisted_models: draft.servesUnlistedModels }),
+          ...(draft.sessionAffinity === provider.session_affinity
+            ? {}
+            : { session_affinity: draft.sessionAffinity }),
         },
       },
       { onSuccess: onClose },
@@ -194,6 +203,14 @@ export function EditHostedProviderForm({
           setDraft({ ...draft, servesUnlistedModels })
         }
       />
+      {supportsSessionAffinity(provider.provider) ? (
+        <SessionAffinityField
+          isSelected={draft.sessionAffinity}
+          onChange={(sessionAffinity) =>
+            setDraft({ ...draft, sessionAffinity })
+          }
+        />
+      ) : null}
       <ProviderCredentialFields
         provider={provider.provider}
         values={draft.credentials}

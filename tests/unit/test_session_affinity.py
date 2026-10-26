@@ -2,7 +2,7 @@
 
 import json
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -13,7 +13,15 @@ from any_llm import LLMProvider, acompletion, amessages, aresponses
 from gateway.api.routes._pipeline import RequestContext, _local_attempt_kwargs, scope_prompt_cache_key
 from gateway.api.routes._tools import _strip_gateway_fields
 from gateway.core.config import GatewayConfig
-from gateway.services.provider_kwargs import SESSION_AFFINITY_HEADER, get_provider_kwargs, with_session_affinity
+from gateway.services.provider_kwargs import (
+    SESSION_AFFINITY_HEADER,
+    configure_hosted_session_affinity,
+    get_provider_kwargs,
+    with_session_affinity,
+)
+from gateway.services.providers import hosted_session_affinity, reset_hosted_name_index
+from gateway.services.providers._configured_provider_import import plan_import
+from gateway.services.providers._hosted_name_index import forget_hosted_name, remember_session_affinity
 from gateway.types.attempt import Attempt
 
 BASETEN = {
@@ -259,3 +267,47 @@ async def test_header_reaches_the_wire(entry_point: str, stream: bool, path: str
     assert len(seen) == 1
     assert seen[0].url.path == path
     assert seen[0].headers[SESSION_AFFINITY_HEADER] == "scoped"
+
+
+@pytest.fixture
+def hosted_affinity() -> Iterator[None]:
+    """Register the hosted index as the composition root does, and leave it empty afterwards."""
+    reset_hosted_name_index()
+    configure_hosted_session_affinity(hosted_session_affinity)
+    yield
+    configure_hosted_session_affinity(None)
+    reset_hosted_name_index()
+
+
+@pytest.mark.usefixtures("hosted_affinity")
+def test_a_hosted_provider_that_opts_in_gets_the_header() -> None:
+    remember_session_affinity("baseten", True)
+    kwargs = with_session_affinity({"prompt_cache_key": "scoped"}, _config(), "baseten")
+    assert _sent_headers(kwargs) == {SESSION_AFFINITY_HEADER: "scoped"}
+
+    remember_session_affinity("baseten", False)
+    assert with_session_affinity({"prompt_cache_key": "scoped"}, _config(), "baseten") == {"prompt_cache_key": "scoped"}
+
+
+@pytest.mark.usefixtures("hosted_affinity")
+def test_a_config_entry_of_the_same_name_answers_for_it() -> None:
+    """The ``providers:`` entry is served ahead of the hosted provider, so its setting is the one that applies."""
+    remember_session_affinity("baseten", True)
+    config = _config(baseten={**BASETEN, "session_affinity": False})
+    assert with_session_affinity({"prompt_cache_key": "scoped"}, config, "baseten") == {"prompt_cache_key": "scoped"}
+
+
+@pytest.mark.usefixtures("hosted_affinity")
+def test_removing_a_hosted_provider_drops_its_setting() -> None:
+    remember_session_affinity("baseten", True)
+    forget_hosted_name("baseten")
+    assert hosted_session_affinity("baseten") is False
+
+
+def test_an_imported_entry_keeps_its_setting() -> None:
+    plan = plan_import("baseten", {**BASETEN, "api_base": "https://inference.baseten.co/v1"}, hosted_names=set())
+    assert plan.create is not None
+    assert plan.create.session_affinity is True
+    plain = plan_import("plain", {"provider_type": "openai", "api_key": "k"}, hosted_names=set())
+    assert plain.create is not None
+    assert plain.create.session_affinity is False

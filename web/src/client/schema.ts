@@ -11789,7 +11789,9 @@ export interface components {
          *     every other one is served as if it were not configured.
          *     ``serves_unlisted_models`` serves a model the roster does not list, as a
          *     ``config.yml`` instance does, and switches on every model it offers
-         *     whether or not something prices it.
+         *     whether or not something prices it. ``session_affinity`` forwards the
+         *     caller's scoped prompt cache key as an ``x-session-affinity`` header, for an
+         *     ``openai`` or ``anthropic`` provider only.
          * @example {
          *       "api_key": "<your OpenAI API key>",
          *       "provider": "openai"
@@ -11820,6 +11822,11 @@ export interface components {
              * @default false
              */
             serves_unlisted_models: boolean;
+            /**
+             * Session Affinity
+             * @default false
+             */
+            session_affinity: boolean;
         };
         /**
          * HostedProviderPublic
@@ -11841,7 +11848,8 @@ export interface components {
          *     and ``decryptable`` false for one whose key or extras no configured
          *     ``OTARI_SECRET_KEY`` reads, which serves nothing until re-entered.
          *     ``serves_unlisted_models`` is true for one that serves a model its roster
-         *     does not list.
+         *     does not list, and ``session_affinity`` for one that forwards the scoped
+         *     prompt cache key as ``x-session-affinity``.
          */
         HostedProviderPublic: {
             /** Api Base */
@@ -11879,6 +11887,11 @@ export interface components {
              * @default false
              */
             serves_unlisted_models: boolean;
+            /**
+             * Session Affinity
+             * @default false
+             */
+            session_affinity: boolean;
             /**
              * Shadows Config
              * @default false
@@ -11975,6 +11988,8 @@ export interface components {
             restricted_to_organization_id?: string | null;
             /** Serves Unlisted Models */
             serves_unlisted_models?: boolean | null;
+            /** Session Affinity */
+            session_affinity?: boolean | null;
         };
         /**
          * HostedProvidersPublic

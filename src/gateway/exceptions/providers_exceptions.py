@@ -312,6 +312,16 @@ class HostedProviderInvalidNameError(TenancyValidationError):
         super().__init__(f"The hosted provider name '{name}' {problem}")
 
 
+class HostedProviderSessionAffinityUnsupportedError(TenancyValidationError):
+    """``session_affinity`` on a provider whose SDK client cannot carry the header."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "session_affinity is supported only for provider_type openai or anthropic "
+            "(including their -compatible forms)."
+        )
+
+
 class HostedProviderKeyRequiredError(TenancyValidationError):
     """The base was repointed at another origin without the key being entered again.
 

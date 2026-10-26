@@ -26,7 +26,7 @@ from typing import Any
 
 from any_llm.types.model import Model
 
-from gateway.core.config import GatewayConfig, hosted_key_optional
+from gateway.core.config import GatewayConfig, hosted_key_optional, session_affinity_supported
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions import TenancyError
 from gateway.exceptions.providers_exceptions import (
@@ -40,6 +40,7 @@ from gateway.exceptions.providers_exceptions import (
     HostedProviderKeyRequiredError,
     HostedProviderNotFoundError,
     HostedProviderReadOnlyError,
+    HostedProviderSessionAffinityUnsupportedError,
     HostedProviderUnknownOrganizationError,
     HostedProviderUnsafeApiBaseError,
 )
@@ -96,7 +97,11 @@ from gateway.services.providers._hosted_credentials import (
     reencrypted,
     unmask_api_base,
 )
-from gateway.services.providers._hosted_name_index import forget_hosted_name, remember_hosted_name
+from gateway.services.providers._hosted_name_index import (
+    forget_hosted_name,
+    remember_hosted_name,
+    remember_session_affinity,
+)
 from gateway.services.providers._hosted_offers import HostedOffers
 from gateway.services.providers._hosted_runtime import HostedProviderRuntime
 from gateway.services.providers._hosted_sources import HostedSource, HostedSources
@@ -217,6 +222,8 @@ class HostedProviderService:
         api_base = normalize_api_base(request.api_base)
         if request.api_key is None and not hosted_key_optional(implementation, api_base):
             raise HostedProviderApiKeyMissingError(implementation)
+        if request.session_affinity and not session_affinity_supported(name, implementation):
+            raise HostedProviderSessionAffinityUnsupportedError
         await self._validate_api_base(api_base)
         encrypted = encrypt_key(request.api_key)
         encrypted_client_args = encrypt_client_args(request.client_args)
@@ -244,6 +251,7 @@ class HostedProviderService:
                     enabled=request.enabled,
                     restricted_to_organization_id=request.restricted_to_organization_id,
                     serves_unlisted_models=request.serves_unlisted_models,
+                    session_affinity=request.session_affinity,
                 )
             except HostedProviderConflict as conflict:
                 # The pre-check races the insert; the unique constraint decides.
@@ -259,6 +267,7 @@ class HostedProviderService:
                 shadows_config=shadows_config,
             )
         remember_hosted_name(name, implementation)
+        remember_session_affinity(name, request.session_affinity)
         return public
 
     async def update_provider(self, provider: str, request: HostedProviderUpdateRequest) -> HostedProviderPublic:
@@ -318,6 +327,10 @@ class HostedProviderService:
                 row.enabled = request.enabled
             if request.serves_unlisted_models is not None:
                 row.serves_unlisted_models = request.serves_unlisted_models
+            if request.session_affinity is not None:
+                if request.session_affinity and not session_affinity_supported(row.name, row.provider):
+                    raise HostedProviderSessionAffinityUnsupportedError
+                row.session_affinity = request.session_affinity
             if "restricted_to_organization_id" in request.model_fields_set:
                 await self._require_organization(request.restricted_to_organization_id)
                 row.restricted_to_organization_id = request.restricted_to_organization_id
@@ -325,6 +338,7 @@ class HostedProviderService:
             public = self._public(source)
         # The cached listing was made on what this request may just have changed.
         get_model_cache().clear(row.name)
+        remember_session_affinity(row.name, row.session_affinity)
         return public
 
     async def delete_provider(self, provider: str) -> None:

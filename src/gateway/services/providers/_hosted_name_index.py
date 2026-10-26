@@ -9,7 +9,9 @@ every other worker within ``HOSTED_NAME_INDEX_TTL_SECONDS``. A name that is its
 implementation's own needs no entry: any-llm already reads it.
 
 Only the names live here, never a credential: the credential is resolved per
-request through ``ModelProviderPort``, as for any hosted provider.
+request through ``ModelProviderPort``, as for any hosted provider. Beside them
+sit the names that opted into session affinity, read on the same path and kept
+current the same way.
 """
 
 import asyncio
@@ -29,11 +31,29 @@ _names: dict[str, str] = {}
 # (write number, implementation, or None for a name removed).
 _write_count = 0
 _recent_writes: dict[str, tuple[int, str | None]] = {}
+# Each hosted provider that forwards the scoped prompt cache key as
+# ``x-session-affinity``, with this worker's own writes kept as above.
+_affinity: frozenset[str] = frozenset()
+_recent_affinity: dict[str, tuple[int, bool]] = {}
 
 
 def hosted_implementation(name: str) -> str | None:
     """The implementation serving the hosted provider ``name``, or None when ``name`` is no such provider."""
     return _names.get(name)
+
+
+def hosted_session_affinity(name: str) -> bool:
+    """Whether the hosted provider ``name`` forwards the scoped prompt cache key as ``x-session-affinity``."""
+    return name in _affinity
+
+
+def remember_session_affinity(name: str, enabled: bool) -> None:
+    """Record a hosted provider's session affinity setting, as this worker just wrote it."""
+    global _write_count, _affinity  # noqa: PLW0603
+
+    _write_count += 1
+    _recent_affinity[name] = (_write_count, enabled)
+    _affinity = _affinity | {name} if enabled else _affinity - {name}
 
 
 def _record_write(name: str, implementation: str | None) -> None:
@@ -55,6 +75,7 @@ def remember_hosted_name(name: str, implementation: str) -> None:
 def forget_hosted_name(name: str) -> None:
     """Drop a hosted provider this worker just removed."""
     _record_write(name, None)
+    remember_session_affinity(name, False)
 
 
 async def refresh_hosted_name_index(uow: UnitOfWork, config: GatewayConfig) -> None:
@@ -64,7 +85,7 @@ async def refresh_hosted_name_index(uow: UnitOfWork, config: GatewayConfig) -> N
     this worker made while the read was in flight is newer than what the read
     saw, so it is replayed over the snapshot rather than lost.
     """
-    global _names, _recent_writes  # noqa: PLW0603
+    global _names, _recent_writes, _affinity, _recent_affinity  # noqa: PLW0603
 
     read_from = _write_count
     async with uow:
@@ -79,13 +100,22 @@ async def refresh_hosted_name_index(uow: UnitOfWork, config: GatewayConfig) -> N
         else:
             fresh[name] = implementation
     _names, _recent_writes = fresh, newer
+    affinity = {row.name for row in rows if row.session_affinity}
+    newer_affinity = {name: write for name, write in _recent_affinity.items() if write[0] > read_from}
+    for name, (_, enabled) in newer_affinity.items():
+        if enabled:
+            affinity.add(name)
+        else:
+            affinity.discard(name)
+    _affinity, _recent_affinity = frozenset(affinity), newer_affinity
 
 
 def reset_hosted_name_index() -> None:
     """Drop the map so the next load starts clean (startup and tests)."""
-    global _names, _recent_writes  # noqa: PLW0603
+    global _names, _recent_writes, _affinity, _recent_affinity  # noqa: PLW0603
 
     _names, _recent_writes = {}, {}
+    _affinity, _recent_affinity = frozenset(), {}
 
 
 async def _refresh_on_a_session_of_its_own(config: GatewayConfig) -> None:

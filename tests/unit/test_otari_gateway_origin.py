@@ -35,6 +35,7 @@ def test_only_the_otari_provider_is_rewritten() -> None:
 
 def test_a_hosted_otari_provider_dispatches_on_the_origin() -> None:
     """A Deployment providers row moved onto a hosted provider keeps the stopgap it had."""
+
     def served(implementation: str) -> dict[str, object]:
         credential = HostedCredential(
             api_key="k",

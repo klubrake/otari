@@ -31,6 +31,10 @@ import {
 import { useProviderDetail } from "@/shared/api/providers"
 
 import { ServesUnlistedModelsField } from "./ServesUnlistedModelsField"
+import {
+  SessionAffinityField,
+  supportsSessionAffinity,
+} from "./SessionAffinityField"
 
 // The form that configures a new hosted provider, in the shape of the
 // organization Providers page's key form: the provider picked from the catalog,
@@ -53,6 +57,7 @@ interface ProviderDraft {
   credentials: CredentialFieldValues
   clientArgs: string
   servesUnlistedModels: boolean
+  sessionAffinity: boolean
 }
 
 const EMPTY_DRAFT: ProviderDraft = {
@@ -63,6 +68,7 @@ const EMPTY_DRAFT: ProviderDraft = {
   credentials: {},
   clientArgs: "",
   servesUnlistedModels: false,
+  sessionAffinity: false,
 }
 
 export function AddHostedProviderForm({
@@ -84,6 +90,9 @@ export function AddHostedProviderForm({
   const apiBase = draft.apiBase.trim()
   const needsKey = (selected?.requires_api_key ?? true) && apiBase === ""
   const nameHasDelimiter = /[:/]/.test(name)
+  // Sent only where the implementation can carry it, so switching to one that
+  // cannot never submits a setting the gateway refuses.
+  const offersAffinity = supportsSessionAffinity(draft.provider.trim())
   const effectiveName = name || draft.provider.trim()
 
   const spec = credentialSpecFor(draft.provider)
@@ -127,7 +136,13 @@ export function AddHostedProviderForm({
     const payload = buildPayload()
     if (!canSubmit || payload === null) return
     create.mutate(
-      { ...payload, serves_unlisted_models: draft.servesUnlistedModels },
+      {
+        ...payload,
+        serves_unlisted_models: draft.servesUnlistedModels,
+        ...(offersAffinity && draft.sessionAffinity
+          ? { session_affinity: true }
+          : {}),
+      },
       { onSuccess: onClose },
     )
   }
@@ -212,6 +227,14 @@ export function AddHostedProviderForm({
           setDraft({ ...draft, servesUnlistedModels })
         }
       />
+      {offersAffinity ? (
+        <SessionAffinityField
+          isSelected={draft.sessionAffinity}
+          onChange={(sessionAffinity) =>
+            setDraft({ ...draft, sessionAffinity })
+          }
+        />
+      ) : null}
       <ProviderCredentialFields
         provider={draft.provider}
         values={draft.credentials}

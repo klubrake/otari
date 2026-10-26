@@ -385,7 +385,7 @@ export type HostedProvider = Schemas["HostedProviderPublic"]
 export type HostedProviders = Schemas["HostedProvidersPublic"]
 export type CreateHostedProviderRequest = Defaulted<
   Schemas["HostedProviderCreateRequest"],
-  "enabled"
+  "enabled" | "session_affinity"
 >
 export type UpdateHostedProviderRequest = Schemas["HostedProviderUpdateRequest"]
 export type HostedModel = Schemas["HostedModelPublic"]

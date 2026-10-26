@@ -110,11 +110,13 @@ from gateway.services.pricing_refresh_service import (
 from gateway.services.pricing_service import configure_default_pricing, configure_provider_types
 from gateway.services.provider_kwargs import (
     configure_hosted_names,
+    configure_hosted_session_affinity,
     settle_configured_providers,
     warn_about_ignored_provider_variables,
 )
 from gateway.services.providers import (
     hosted_implementation,
+    hosted_session_affinity,
     load_hosted_names_at_startup,
     load_provider_endpoints_at_startup,
     refuse_unsafe_configured_endpoints,
@@ -888,6 +890,7 @@ def _create_lifespan() -> Callable[[FastAPI], Any]:
             lambda name: config.provider_pricing_implementation(name) or hosted_implementation(name)
         )
         configure_hosted_names(hosted_implementation)
+        configure_hosted_session_affinity(hosted_session_affinity)
         _validate_provider_user_identifier_key(config)
         log_writer: LogWriter
         workers: list[tuple[asyncio.Task[None], _LifespanWorker]] = []

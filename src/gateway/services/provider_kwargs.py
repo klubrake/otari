@@ -375,6 +375,21 @@ def configure_hosted_names(resolver: Callable[[str], str | None] | None) -> None
     _hosted_names = resolver or _no_hosted_names
 
 
+def _no_hosted_session_affinity(_name: str) -> bool:
+    return False
+
+
+# Whether a hosted provider opted into session affinity, registered at startup
+# beside ``_hosted_names`` and for the same reason.
+_hosted_session_affinity: Callable[[str], bool] = _no_hosted_session_affinity
+
+
+def configure_hosted_session_affinity(resolver: Callable[[str], bool] | None) -> None:
+    """Register the lookup of a hosted provider's session affinity setting; None unregisters it."""
+    global _hosted_session_affinity  # noqa: PLW0603
+    _hosted_session_affinity = resolver or _no_hosted_session_affinity
+
+
 def uncredentialed_env_names(config: GatewayConfig, instance: str, entry: Mapping[str, Any]) -> tuple[str, ...] | None:
     """The variables a ``providers:`` entry could have taken its credential from, or ``None``.
 
@@ -626,7 +641,9 @@ def with_session_affinity(call_kwargs: dict[str, Any], config: GatewayConfig, in
     Reads ``prompt_cache_key`` from the merged call kwargs, where the route has
     already replaced the caller's key with its identity-scoped hash, so the raw
     caller value never reaches the header. A call with no key, or an instance
-    without ``session_affinity: true``, is returned unchanged.
+    without ``session_affinity: true``, is returned unchanged. A ``providers:``
+    entry answers for its name, as it is served ahead of a hosted provider of
+    the same name; otherwise the hosted provider's own setting does.
 
     The header goes on the client (``client_args.default_headers``) rather than
     in ``extra_headers``: any-llm's ``aresponses`` validates its kwargs strictly
@@ -634,8 +651,11 @@ def with_session_affinity(call_kwargs: dict[str, Any], config: GatewayConfig, in
     client default is still per request.
     """
     key = call_kwargs.get("prompt_cache_key")
+    if not isinstance(key, str) or not key:
+        return call_kwargs
     entry = config.providers.get(instance)
-    if not isinstance(key, str) or not key or not isinstance(entry, dict) or entry.get("session_affinity") is not True:
+    opted = entry.get("session_affinity") is True if isinstance(entry, dict) else _hosted_session_affinity(instance)
+    if not opted:
         return call_kwargs
     client_args = dict(call_kwargs.get("client_args") or {})
     client_args["default_headers"] = {**(client_args.get("default_headers") or {}), SESSION_AFFINITY_HEADER: key}

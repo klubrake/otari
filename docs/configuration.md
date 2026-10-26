@@ -550,11 +550,13 @@ policy according to that candidate's own instance. The header is set on the
 provider SDK client, so the flag is accepted only on an `openai` or `anthropic`
 instance (including the `-compatible` forms); startup refuses it elsewhere.
 
-A provider stored through the Providers page sets the same flag with its
-**Session affinity** checkbox, which the page offers only where it applies, or
-with `session_affinity` on `/api/v1/provider-credentials`, which refuses it on any
-other provider type. A stored entry replaces a config-file entry of the same
-name, flag included.
+A hosted provider sets the same flag with the **Session affinity** checkbox on
+the Hosted providers page, which the page offers only where it applies, or with
+`session_affinity` on `/api/v1/hosted-providers`, which refuses it on any other
+implementation. A `providers:` entry of the same name is served ahead of the
+hosted provider, so its own setting is the one that applies. A provider the
+retired Providers page stored, and a `providers:` entry copied onto a hosted
+provider at startup, keep the setting they had.
 
 ### Provider retries
 

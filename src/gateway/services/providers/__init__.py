@@ -16,6 +16,7 @@ from gateway.services.providers._hosted_catalog_update import (
 )
 from gateway.services.providers._hosted_name_index import (
     hosted_implementation,
+    hosted_session_affinity,
     load_hosted_names_at_startup,
     reset_hosted_name_index,
     run_hosted_name_refresher,
@@ -77,6 +78,7 @@ __all__ = [
     "dispatch_on_hosted_credential",
     "hosted_credential_for",
     "hosted_implementation",
+    "hosted_session_affinity",
     "hosted_models_for",
     "load_hosted_names_at_startup",
     "load_provider_endpoints_at_startup",

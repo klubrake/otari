@@ -12,7 +12,7 @@ service creates the hosted provider and removes the row.
 from dataclasses import dataclass, field
 from typing import Any
 
-from gateway.core.config import PROVIDER_TYPE_ALIASES, hosted_key_optional
+from gateway.core.config import PROVIDER_TYPE_ALIASES, hosted_key_optional, session_affinity_supported
 from gateway.exceptions import TenancyError
 from gateway.models.providers import ProviderCredential
 from gateway.schemas.providers import DeploymentProviderMigrationRowPublic, HostedProviderCreateRequest
@@ -110,6 +110,7 @@ def plan_move(credential: ProviderCredential, *, hosted_names: set[str], configu
         api_base=credential.api_base,
         client_args=credential.client_args or None,
         serves_unlisted_models=True,
+        session_affinity=credential.session_affinity and session_affinity_supported(name, implementation),
     )
     return PlannedMove(public, create=create, name=name, updated_at=credential.updated_at)
 
