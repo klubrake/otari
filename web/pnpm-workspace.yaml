@@ -15,3 +15,7 @@ overrides:
   seroval: ^1.6.3
   # GHSA-68fv-2mgg-jv7q, via vite's postcss.
   source-map-js: ^1.2.2
+  # GHSA-mrhx-c7xc-m3w5, via @tanstack/router-plugin.
+  zod: ^4.6.6
+  # GHSA-xjj6-f33q-929c, via jsdom.
+  undici: ^8.12.2
