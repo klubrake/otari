@@ -478,7 +478,8 @@ deployment that declares a key does not mint and print one.
 > start, and the hosted provider serves the name from then on, with a serving
 > switch, a test, its models and removal like any other. The start asks the
 > provider for its models and switches on every one it lists, priced or not,
-> and a later refresh keeps them on; one that lists none is not copied, and keeps serving from `config.yml`. The start then logs
+> and a later refresh keeps them on; in this fork it also serves a model it does
+> not list, as the entry did. One that lists none is not copied, and keeps serving from `config.yml`. The start then logs
 > that the entry is no longer read, so it can be taken out of `config.yml`;
 > rotate its key on the Hosted providers page rather than in the environment.
 > Removing the copied provider on the page sticks: the entry is not copied
@@ -716,13 +717,14 @@ routing policy or alias naming it keeps working. The start asks each provider
 for its models, so the first start after the upgrade can take a little longer,
 and offers every model it lists switched on, priced or not, as the stored
 provider served it, and a later refresh keeps them on, on every path: completions, routing-policy fallbacks, the
-pass-through endpoints and batches. A model it does not list is refused until
-it is added on the Hosted providers page, or until "Serve models not on its
-list" is turned on there.
+pass-through endpoints and batches. In this fork the moved provider also has
+"Serve models not on its list" on, so a model it does not list is still served,
+as the stored provider served it; turn the setting off on the Hosted providers
+page to serve only its list.
 
 A provider the move cannot take is logged at startup and listed on the Hosted
 providers page with the reason (`GET /api/v1/hosted-providers/migration`), and
-serves nothing until it is added again: a provider that lists no models, a
+serves nothing until it is added again: a
 name a hosted provider already holds, a key no configured `OTARI_SECRET_KEY`
 reads, an instance named after another provider (`groq` declared as
 `openai`), or a keyless Bedrock or SageMaker provider served on the server's

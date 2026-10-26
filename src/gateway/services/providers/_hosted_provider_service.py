@@ -595,10 +595,8 @@ class HostedProviderService:
         """Move the deployment providers stored through the dashboard onto hosted providers, or preview it.
 
         Each becomes a hosted provider of the same name, every model it lists
-        offered and switched on, priced or not, as the deployment provider
-        served them. The deployment provider is removed once the hosted one
-        offers a model, so a provider that will not list keeps serving as it
-        did until the operator adds its models. One that cannot move (a name a
+        offered and switched on, priced or not, and it serves the models it does
+        not list too, as the deployment provider did. One that cannot move (a name a
         hosted provider already holds, a key no configured key reads) is
         reported and left where it is; so is one edited while this ran.
 
@@ -703,11 +701,7 @@ class HostedProviderService:
         async with self.uow:
             row.models = len(await self.models.names_for_provider(plan.name))
             if row.models == 0:
-                row.notes.append(
-                    "The provider listed no models, so the deployment provider is kept. Add its models on the "
-                    "hosted provider, then remove the deployment provider."
-                )
-                return False
+                row.notes.append("The provider listed no models; it serves any model a request names.")
             source = await self.providers.get_deployment_provider(row.instance)
             if source is None or source.updated_at != plan.updated_at:
                 row.notes.append(

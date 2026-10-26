@@ -60,6 +60,8 @@ def plan_import(name: str, entry: Mapping[str, Any], *, hosted_names: set[str]) 
             api_key=str(api_key) if api_key is not None else None,
             api_base=str(api_base) if api_base is not None else None,
             client_args=dict(client_args) if client_args is not None else None,
+            # As the entry did: a model it does not list is still served.
+            serves_unlisted_models=True,
         )
     except ValidationError as exc:
         # Named by field, never by value: the input refused may be the key.
