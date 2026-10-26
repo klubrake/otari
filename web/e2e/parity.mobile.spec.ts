@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test"
 
-import { gotoRoute, login, pageHeading, table } from "./helpers"
+import { gotoRoute, login, pageHeading } from "./helpers"
 
 // The screenshot suite's phone (see web/playwright.config.ts), so a coarse
 // pointer sizes the controls up the way it does on a device: the pager's 44px
@@ -36,10 +36,10 @@ const PAGES = [
   {
     route: "/",
     heading: "Overview",
-    // The spend chart's date labels are what overhung the plot.
+    // The month's spend chart, whose date labels are what could overhang it.
     ready: (page: Page) =>
       expect(
-        page.getByRole("heading", { name: "Spend, last 30 days" }),
+        page.getByRole("heading", { name: /^Billed spend, / }),
       ).toBeVisible(),
   },
   {
@@ -51,13 +51,11 @@ const PAGES = [
   {
     route: "/activity",
     heading: "Activity",
-    // A paginated table: the pager row is what could not wrap.
-    ready: async (page: Page) => {
-      await expect(table(page, "Activity log")).toBeVisible()
-      await expect(
-        page.getByRole("button", { name: /Last page/ }),
-      ).toBeVisible()
-    },
+    // A phone gets the request list as rows, ending in the button that loads more.
+    ready: (page: Page) =>
+      expect(
+        page.getByRole("button", { name: /^Load \d+ more$/ }),
+      ).toBeVisible(),
   },
 ] as const
 
