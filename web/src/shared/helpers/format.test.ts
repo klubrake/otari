@@ -18,10 +18,13 @@ import {
   formatReleaseDate,
   formatScore,
   formatSeconds,
+  formatSpend,
   formatTokens,
+  formatTokensCompact,
   formatUnitRate,
   formatUsd,
   formatUsdAxis,
+  formatUsdCompact,
   formatUsdHeadline,
   formatUsdLimit,
   formatUtcDateTime,
@@ -56,6 +59,18 @@ describe("formatUsdLimit", () => {
     expect(formatUsdLimit(1000)).toBe("$1,000")
     expect(formatUsdLimit(25)).toBe("$25")
     expect(formatUsdLimit(12.5)).toBe("$12.50")
+  })
+})
+
+describe("formatSpend", () => {
+  it("reads in cents from a cent up", () => {
+    expect(formatSpend(5.600345)).toBe("$5.60")
+    expect(formatSpend(0.01)).toBe("$0.01")
+  })
+
+  it("keeps a cost under a cent from reading $0.00", () => {
+    expect(formatSpend(0.001566)).toBe("$0.0016")
+    expect(formatSpend(0)).toBe("$0.00")
   })
 })
 
@@ -99,6 +114,16 @@ describe("usage chart and tile figures", () => {
     expect(formatDuration(55 * 60_000)).toBe("55m")
     expect(formatDuration(2 * 3_600_000)).toBe("2h")
     expect(formatDuration(6 * 3_600_000 + 40 * 60_000)).toBe("6h 40m")
+  })
+})
+
+describe("formatTokensCompact and formatUsdCompact", () => {
+  it("keep three significant figures", () => {
+    expect(formatTokensCompact(1_234_567_890)).toBe("1.23B")
+    expect(formatTokensCompact(98_765_432)).toBe("98.8M")
+    expect(formatTokensCompact(10_000_000)).toBe("10M")
+    expect(formatUsdCompact(12_345_678.9)).toBe("$12.3M")
+    expect(formatUsdCompact(100_000)).toBe("$100K")
   })
 })
 
@@ -374,7 +399,7 @@ describe("formatters are locale-pinned", () => {
     expect([...new Set(offenders)].sort()).toEqual([
       // The date call site this sweep does not decide. It renders a
       // timestamp, where the open question is US versus the reader's own, and
-      // is a `new Date(...)` rather than a number.
+      // it is a `new Date(...)` rather than a number.
       "features/keys/KeysPage.tsx",
       "shared/helpers/format.ts",
     ])

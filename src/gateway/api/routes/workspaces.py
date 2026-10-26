@@ -1,4 +1,4 @@
-"""Workspaces and workspace membership (standalone mode only).
+"""Workspaces and workspace membership.
 
 Thin composition over `gateway.services.tenancy.workspace_service`. Every path
 resolves its workspace inside the caller's active organization, so a workspace id
@@ -22,7 +22,7 @@ from gateway.models.tenancy import (
     WorkspacesPublic,
     WorkspaceUpdate,
 )
-from gateway.schemas.organizations import WorkspaceVisibility, WorkspaceVisibilityUpdate
+from gateway.schemas.organizations import OrganizationRefusal, WorkspaceVisibility, WorkspaceVisibilityUpdate
 
 # Auth is declared on the router, not left to arrive through `CurrentIdentity`:
 # every handler here happens to take one today, and a future handler that did
@@ -112,7 +112,20 @@ async def list_workspace_members(
     )
 
 
-@router.post("/{workspace_id}/members/{user_id}", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{workspace_id}/members/{user_id}",
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "model": OrganizationRefusal,
+            "description": "The workspace does not exist, or was deleted during the add.",
+        },
+        status.HTTP_409_CONFLICT: {
+            "model": OrganizationRefusal,
+            "description": "The user is already a member of the workspace.",
+        },
+    },
+)
 async def add_workspace_member(
     service: WorkspaceServiceDep,
     current_identity: CurrentIdentity,
@@ -120,7 +133,11 @@ async def add_workspace_member(
     user_id: uuid.UUID,
     role: Annotated[WorkspaceMemberRole, Query(description=WORKSPACE_ROLE_DESCRIPTION)] = "member",
 ) -> WorkspaceMemberPublic:
-    """Add an existing organization member to a workspace."""
+    """Add an existing organization member to a workspace.
+
+    The 404 for a workspace deleted during the add describes PostgreSQL. SQLite does not name the
+    foreign key it enforced, so it surfaces that race as a 500.
+    """
     return await service.add_member(
         user=current_identity,
         workspace_id=workspace_id,

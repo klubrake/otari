@@ -1,6 +1,7 @@
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 
+import { reloadOnStaleChunk } from "@/app/AutoUpdate"
 import { createBootLoader, firstSettled } from "@/app/boot"
 import { DeploymentGate } from "@/app/DeploymentGate"
 import { Provider } from "@/app/provider"
@@ -8,6 +9,8 @@ import { apiFetch } from "@/shared/api/client"
 import { prepareRequests } from "@/shared/api/overlayRequestPolicy"
 import type { WireBootstrap } from "@/shared/helpers/bootstrap"
 import "@/styles/globals.css"
+
+reloadOnStaleChunk()
 
 const container = document.getElementById("root")
 if (!container) {

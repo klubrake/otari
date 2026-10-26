@@ -183,6 +183,8 @@ export function TrendChart({
   xTickInterval,
   // Recharts' default is 5. A short strip wants fewer.
   yTickCount,
+  // For counts: no "0.5 sessions" tick.
+  integerY = false,
   onSelectRange,
 }: {
   data: StackedPoint[]
@@ -195,6 +197,7 @@ export function TrendChart({
   showTotal?: boolean
   xTickInterval?: number
   yTickCount?: number
+  integerY?: boolean
   onSelectRange?: (startIndex: number, endIndex: number) => void
 }) {
   const [drag, setDrag] = useState<{ start: number; end: number }>()
@@ -280,6 +283,7 @@ export function TrendChart({
           {showYAxis ? (
             <YAxis
               tickCount={yTickCount}
+              allowDecimals={!integerY}
               width={52}
               tickLine={false}
               axisLine={false}

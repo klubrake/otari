@@ -7,7 +7,6 @@ The sweep takes no row lock, and the conditional UPDATE in :func:`try_terminate`
 A row never commits before the holds it records, so the sweep never releases an amount that nobody holds.
 A hold whose row never landed is reclaimed by clamping its counter to the active rows.
 A claim and the release it authorizes commit in one transaction, so a terminal row never has an outstanding hold.
-This module runs in standalone mode only, because in hybrid mode the platform holds against its own ledger.
 """
 
 from __future__ import annotations

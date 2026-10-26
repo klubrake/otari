@@ -1,7 +1,9 @@
 """Forwarding the scoped prompt cache key as Baseten's ``x-session-affinity`` header."""
 
 import json
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncIterator, Iterator
+from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
@@ -11,9 +13,15 @@ from any_llm import LLMProvider, acompletion, amessages, aresponses
 from gateway.api.routes._pipeline import RequestContext, _local_attempt_kwargs, scope_prompt_cache_key
 from gateway.api.routes._tools import _strip_gateway_fields
 from gateway.core.config import GatewayConfig
-from gateway.models.providers import ProviderCredential
-from gateway.services.provider_kwargs import SESSION_AFFINITY_HEADER, get_provider_kwargs, with_session_affinity
-from gateway.services.provider_store_service import _row_to_entry
+from gateway.services.provider_kwargs import (
+    SESSION_AFFINITY_HEADER,
+    configure_hosted_session_affinity,
+    get_provider_kwargs,
+    with_session_affinity,
+)
+from gateway.services.providers import hosted_session_affinity, reset_hosted_name_index
+from gateway.services.providers._configured_provider_import import plan_import
+from gateway.services.providers._hosted_name_index import forget_hosted_name, remember_session_affinity
 from gateway.types.attempt import Attempt
 
 BASETEN = {
@@ -36,17 +44,15 @@ def _sent_headers(kwargs: dict[str, Any]) -> dict[str, str] | None:
 def _scoped(caller_key: str, config: GatewayConfig) -> str:
     ctx = RequestContext(
         config=config,
-        db=None,
-        uow=None,
+        db=cast(Any, None),
+        uow=cast(Any, None),
         log_writer=cast(Any, None),
-        hybrid_mode=False,
-        route=None,
-        user_token=None,
         api_key_id=None,
         user_id="user-a",
         rate_limit_info=None,
         reservation=None,
         started_at=0.0,
+        workspace_id=uuid.uuid4(),
     )
     fields: dict[str, Any] = {"prompt_cache_key": caller_key}
     scope_prompt_cache_key(fields, ctx)
@@ -153,17 +159,19 @@ class _Adapter:
 
 
 class _ToolContext:
-    def request_fields_for(self, provider: str, base_request_fields: dict[str, Any]) -> dict[str, Any]:
+    def request_fields_for(self, provider: str, model: str, base_request_fields: dict[str, Any]) -> dict[str, Any]:
         return base_request_fields
 
 
 def test_each_routed_candidate_uses_its_own_instance_setting() -> None:
     config = _config(baseten=BASETEN, fallback={"provider_type": "openai", "api_key": "k"})
-    build = _local_attempt_kwargs(cast(Any, _Adapter()), config, cast(Any, _ToolContext()))
+    ctx = cast(Any, SimpleNamespace(config=config, request_extras=None))
+    build = _local_attempt_kwargs(cast(Any, _Adapter()), cast(Any, _ToolContext()), ctx)
     fields = {"prompt_cache_key": "scoped"}
 
-    baseten = Attempt(position=1, instance="baseten", provider=LLMProvider.OPENAI, model="glm")
-    fallback = Attempt(position=2, instance="fallback", provider=LLMProvider.OPENAI, model="gpt")
+    key = {"api_key": "k"}
+    baseten = Attempt(position=1, instance="baseten", provider=LLMProvider.OPENAI, model="glm", kwargs=key)
+    fallback = Attempt(position=2, instance="fallback", provider=LLMProvider.OPENAI, model="gpt", kwargs=key)
 
     assert _sent_headers(build(baseten, fields)) == {SESSION_AFFINITY_HEADER: "scoped"}
     assert "default_headers" not in build(fallback, fields).get("client_args", {})
@@ -261,8 +269,45 @@ async def test_header_reaches_the_wire(entry_point: str, stream: bool, path: str
     assert seen[0].headers[SESSION_AFFINITY_HEADER] == "scoped"
 
 
-def test_a_stored_provider_carries_the_flag_into_the_overlay() -> None:
-    on = ProviderCredential(instance="baseten", provider_type="openai", session_affinity=True, client_args={})
-    off = ProviderCredential(instance="plain", provider_type="openai", session_affinity=False, client_args={})
-    assert _row_to_entry(on)["session_affinity"] is True
-    assert "session_affinity" not in _row_to_entry(off)
+@pytest.fixture
+def hosted_affinity() -> Iterator[None]:
+    """Register the hosted index as the composition root does, and leave it empty afterwards."""
+    reset_hosted_name_index()
+    configure_hosted_session_affinity(hosted_session_affinity)
+    yield
+    configure_hosted_session_affinity(None)
+    reset_hosted_name_index()
+
+
+@pytest.mark.usefixtures("hosted_affinity")
+def test_a_hosted_provider_that_opts_in_gets_the_header() -> None:
+    remember_session_affinity("baseten", True)
+    kwargs = with_session_affinity({"prompt_cache_key": "scoped"}, _config(), "baseten")
+    assert _sent_headers(kwargs) == {SESSION_AFFINITY_HEADER: "scoped"}
+
+    remember_session_affinity("baseten", False)
+    assert with_session_affinity({"prompt_cache_key": "scoped"}, _config(), "baseten") == {"prompt_cache_key": "scoped"}
+
+
+@pytest.mark.usefixtures("hosted_affinity")
+def test_a_config_entry_of_the_same_name_answers_for_it() -> None:
+    """The ``providers:`` entry is served ahead of the hosted provider, so its setting is the one that applies."""
+    remember_session_affinity("baseten", True)
+    config = _config(baseten={**BASETEN, "session_affinity": False})
+    assert with_session_affinity({"prompt_cache_key": "scoped"}, config, "baseten") == {"prompt_cache_key": "scoped"}
+
+
+@pytest.mark.usefixtures("hosted_affinity")
+def test_removing_a_hosted_provider_drops_its_setting() -> None:
+    remember_session_affinity("baseten", True)
+    forget_hosted_name("baseten")
+    assert hosted_session_affinity("baseten") is False
+
+
+def test_an_imported_entry_keeps_its_setting() -> None:
+    plan = plan_import("baseten", {**BASETEN, "api_base": "https://inference.baseten.co/v1"}, hosted_names=set())
+    assert plan.create is not None
+    assert plan.create.session_affinity is True
+    plain = plan_import("plain", {"provider_type": "openai", "api_key": "k"}, hosted_names=set())
+    assert plain.create is not None
+    assert plain.create.session_affinity is False

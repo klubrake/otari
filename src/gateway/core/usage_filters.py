@@ -30,40 +30,19 @@ UsageCondition = ColumnElement[bool]
 UsageChannel = Literal["imported", "playground", "api"]
 
 
-def minted_key(api_key_id: Any) -> ColumnElement[bool]:
-    """Match rows made under a key this deployment minted for itself (its ``internal_secret`` is set).
-
-    A set test rather than a lookup per row, so the planner reads the few minted
-    keys once. False, never NULL, for a row with no key, so its negation keeps that row.
-    """
-    minted = select(APIKey.id).where(APIKey.internal_secret.is_not(None))
-    return and_(api_key_id.is_not(None), api_key_id.in_(minted))
+def playground_traffic(endpoint: Any) -> ColumnElement[bool]:
+    """Match rows the dashboard's own Playground made, which carry ``PLAYGROUND_USAGE_ENDPOINT``."""
+    return cast("ColumnElement[bool]", endpoint == PLAYGROUND_USAGE_ENDPOINT)
 
 
-def playground_traffic(endpoint: Any, minted: ColumnElement[bool]) -> ColumnElement[bool]:
-    """Match rows the dashboard's own Playground made, under either of its two shapes.
-
-    Where this deployment runs the completion itself, the row carries
-    ``PLAYGROUND_USAGE_ENDPOINT``. Where a hosted control plane forwards to its
-    data-plane gateway, the row is labeled like every other usage report and only
-    the credential tells it apart: ``minted`` says the row's key carries an
-    ``internal_secret``, however the caller reaches it (a join where the query
-    groups by it, :func:`minted_key` where it filters).
-    """
-    return or_(endpoint == PLAYGROUND_USAGE_ENDPOINT, minted)
-
-
-def usage_channel(source: Any, endpoint: Any, minted: ColumnElement[bool]) -> ColumnElement[str]:
-    """Which :data:`UsageChannel` a row came in by, the one rule the breakdown and the filter share.
-
-    ``minted`` is as :func:`playground_traffic` takes it.
-    """
+def usage_channel(source: Any, endpoint: Any) -> ColumnElement[str]:
+    """Which :data:`UsageChannel` a row came in by, the one rule the breakdown and the filter share."""
     imported: UsageChannel = "imported"
     playground: UsageChannel = "playground"
     api: UsageChannel = "api"
     return case(
         (source != SERVED_HERE_SLUG, imported),
-        (playground_traffic(endpoint, minted), playground),
+        (playground_traffic(endpoint), playground),
         else_=api,
     )
 
@@ -365,7 +344,7 @@ def refinement_conditions(refine: UsageRefinements) -> list[ColumnElement[bool]]
     if refine.routed is not None:
         conditions.append(UsageLog.policy_name.is_not(None) if refine.routed else UsageLog.policy_name.is_(None))
     if refine.channel or refine.exclude_channel:
-        channel = usage_channel(UsageLog.source, UsageLog.endpoint, minted_key(UsageLog.api_key_id))
+        channel = usage_channel(UsageLog.source, UsageLog.endpoint)
         if refine.channel:
             conditions.append(channel.in_(_as_list(refine.channel)))
         if refine.exclude_channel:
@@ -486,15 +465,8 @@ def api_key_label(api_key_id: Any) -> LabelJoin:
 USER_LABEL = user_label(UsageLog.user_id)
 API_KEY_LABEL = api_key_label(UsageLog.api_key_id)
 
-# The row's API key, aliased so it never collides with the key label join, for the
-# credential half of the Playground rule. The channel breakdown groups by the channel,
-# so it reads the key through this join, where the channel filter only tests rows and
-# uses the set test ``minted_key``; only the channel breakdown, and the series split
-# by channel, join it.
-CHANNEL_KEY = APIKey.__table__.alias("row_key")
-
-# Which way a request reached the log, read through ``CHANNEL_KEY``.
-CHANNEL = usage_channel(UsageLog.source, UsageLog.endpoint, CHANNEL_KEY.c.internal_secret.is_not(None))
+# Which way a request reached the log.
+CHANNEL = usage_channel(UsageLog.source, UsageLog.endpoint)
 
 
 # The aggregate reads are range-bounded, unlike the raw list. Absent a start_date

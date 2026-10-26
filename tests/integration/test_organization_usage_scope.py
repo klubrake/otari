@@ -634,6 +634,21 @@ def test_the_series_splits_only_the_callers_own_rows(client: TestClient, world: 
     assert keys == set(_ALPHA_ONE_MEMBER_MODELS)
 
 
+def test_the_deployment_publishes_and_scopes_the_surface(client: TestClient, world: _World) -> None:
+    """Every test here is the several-organization case.
+
+    The dashboard gates its page on the bootstrap, so both the published surface
+    and the reads behind it are pinned: each of the deployment's organizations
+    sees only its own rows.
+    """
+    answered = client.get(f"{API_ROOT}/bootstrap").json()
+    assert "organization_usage" in answered["surfaces"]
+
+    # A plain member reads only their own rows in the workspace they belong to.
+    assert _models_listed(client, world, "alpha_member") == set(_ALPHA_ONE_MEMBER_MODELS)
+    assert _models_listed(client, world, "beta_owner") == set(_BETA_MODELS)
+
+
 # =============================================================================
 # Controls: the deployment-wide route is untouched
 # =============================================================================

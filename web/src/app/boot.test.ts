@@ -10,7 +10,7 @@ import {
   retryDelayMs,
 } from "./boot"
 
-const BOOTSTRAP = { deployment_type: "standalone" } as WireBootstrap
+const BOOTSTRAP: WireBootstrap = { surfaces: [] }
 const DOWN = new ApiError(0, "Network error: could not reach the gateway.")
 
 // No jitter, so a test can name the wait: the first retry waits 500ms, the

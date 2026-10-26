@@ -11,7 +11,6 @@ import type {
   DeploymentUser,
   DeploymentUserPassword,
   DeploymentUsers,
-  GatewayHealth,
   PasswordLink,
   UpdateDeploymentUserRequest,
 } from "@/client"
@@ -27,9 +26,6 @@ import {
   DEPLOYMENT_ADMIN,
   GATEWAY_LIVENESS,
   GATEWAY_LIVENESS_RECHECK_MS,
-  HEALTH,
-  HEALTH_POLL_MS,
-  NO_RETRY,
   ORGANIZATION_MEMBERS,
 } from "@/shared/api/queryKeys"
 
@@ -48,29 +44,6 @@ export function useDashboardBuild() {
     // A failed check is not worth reporting: the tab keeps working, and the next
     // poll retries anyway.
     retry: false,
-  })
-}
-
-/**
- * Whether this gateway is answering, and whether it can reach its control plane.
- *
- * `/health` is public and served in both modes, which is what makes it the one
- * read a hybrid gateway's landing page can make: it hosts no management API, so
- * every other endpoint the dashboard knows is a 404 there. A failure is the
- * answer here rather than an error to retry past, so the page can say the
- * gateway is not responding on the first attempt instead of ~three requests
- * later.
- */
-export function useGatewayHealth() {
-  return useQuery({
-    ...NO_RETRY,
-    queryKey: [HEALTH],
-    queryFn: () => apiFetch<GatewayHealth>("/health"),
-    refetchInterval: HEALTH_POLL_MS,
-    // A tab left open in the background holds the stalest answer of all, so ask
-    // again the moment someone looks at it.
-    refetchOnWindowFocus: true,
-    staleTime: 0,
   })
 }
 
@@ -185,7 +158,6 @@ function isDown(state: {
 }): boolean {
   return state.errorUpdatedAt > state.dataUpdatedAt
 }
-
 // Every model the configured credentials can reach, per provider. Distinct from
 // useModels: that is the catalog served to API callers (curated by
 // model_discovery, aliases listed, targets withheld), while this is what an
@@ -224,12 +196,8 @@ export function useDeploymentAdminAccess() {
       ),
     staleTime: 60_000,
     // No `enabled` parameter: both callers sit behind routes whose surfaces
-    // (`admin`, `hosted_providers`) are published on the same deployments, so
-    // one that does not host `/admin` never renders either, and the 404 never
-    // becomes a second reading of `surfaces`.
-    // Deliberately not inferred from a 404 here either, which is the scattered
-    // mode check the surface axis replaced; the ordinary retry policy applies,
-    // and a failure is a failure.
+    // (`admin`, `hosted_providers`) every gateway publishes. Not inferred from a
+    // 404 either: the ordinary retry policy applies, and a failure is a failure.
   })
 }
 

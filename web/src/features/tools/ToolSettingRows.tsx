@@ -7,7 +7,6 @@ import { SettingRow } from "@/design-system/layout/SettingRow"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { useTestService } from "@/shared/api/tools"
 import { commitOnEnter, useAutosave } from "@/shared/hooks/useAutosave"
-import { parsePerCall, perCallToStored, storedToPerCall } from "./toolPrice"
 
 // Every field fills `SettingRow`'s lane rather than picking a width of its own,
 // which is what keeps the column's edges straight whether a row holds a URL, a
@@ -477,76 +476,5 @@ export function ToolSettingRow({
   }
   return (
     <TextRow field={field} copy={copy} commit={commit} disabled={disabled} />
-  )
-}
-
-/** Per-call price for a tool Otari runs itself, in the same row grammar. */
-export function ToolPriceRow({
-  pricingKey,
-  configured,
-  commit,
-  disabled,
-  loadError,
-}: {
-  pricingKey: string
-  configured: number | null
-  commit: (perMillion: number) => Promise<unknown>
-  disabled: boolean
-  /** Set when the current rate could not be read, so nothing may overwrite it. */
-  loadError?: string
-}) {
-  const committed =
-    configured === null ? "" : String(storedToPerCall(configured))
-  const [draft, setDraft] = useDraft(committed)
-  const save = useAutosave()
-  const errorId = useId()
-
-  const trimmed = draft.trim()
-  // Money, so unlike the other numeric rows it admits a decimal point.
-  const parsed = parsePerCall(trimmed) ?? Number.NaN
-  const invalid =
-    trimmed !== "" && !(Number.isFinite(parsed) && parsed >= 0)
-      ? "An amount in dollars, such as 0.01."
-      : ""
-  const message = loadError || save.error || invalid
-
-  return (
-    <SettingRow
-      label="Price per call"
-      configKey={pricingKey}
-      help="Unpriced calls are recorded and billed nothing; refused when require_pricing is on."
-      error={message}
-      errorId={errorId}
-      control={
-        <div className="flex items-center gap-1.5">
-          <span className="shrink-0 text-mono-overline text-subtle">USD</span>
-          <input
-            type="text"
-            inputMode="decimal"
-            aria-label={`Price per call for ${pricingKey}`}
-            aria-invalid={message ? true : undefined}
-            aria-describedby={message ? errorId : undefined}
-            value={draft}
-            disabled={disabled || save.isSaving}
-            placeholder="0.00"
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={commitOnEnter}
-            onBlur={() => {
-              if (invalid || trimmed === committed) return
-              // Blank cannot be sent: `/pricing` only writes a rate, so
-              // there is no way to make a priced tool unpriced again from
-              // here. Putting the stored value back says that without a
-              // message that would nag on every pass through the field.
-              if (trimmed === "") {
-                setDraft(committed)
-                return
-              }
-              void save.run(() => commit(perCallToStored(parsed)))
-            }}
-            className={`otari-machine-field min-w-0 flex-1 text-right tabular-nums ${INPUT_CLASS}`}
-          />
-        </div>
-      }
-    />
   )
 }

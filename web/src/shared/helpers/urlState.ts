@@ -1,4 +1,5 @@
 import {
+  type HistoryState,
   useLocation,
   useMatch,
   useNavigate,
@@ -172,11 +173,11 @@ export function useUrlState<K extends string>(
       const from = router.latestLocation.href
       navigate({
         to: ".",
-        search: (prev) => nextSearch(prev as DashboardSearch, updates),
+        search: (prev: DashboardSearch) => nextSearch(prev, updates),
         // A rewrite keeps the entry's record of where it was pushed from, so
         // stepping through what was pushed can still be closed by going back.
         state: options.push
-          ? (prev) => ({ ...prev, urlStatePushedFrom: from })
+          ? (prev: HistoryState) => ({ ...prev, urlStatePushedFrom: from })
           : true,
         replace: !options.push,
       })

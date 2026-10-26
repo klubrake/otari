@@ -38,7 +38,6 @@ from gateway.repositories.usage import UsageReadRepository, UsageRollupRepositor
 from gateway.services.overview.overview_service import Month, OverviewService, OverviewSummary, judge
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.organization_service import OrganizationService
-from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 from gateway.services.tenancy.workspace_service import WorkspaceService
 from gateway.services.usage import UsageReadService
 
@@ -471,7 +470,7 @@ def _usage_reads(db: AsyncSession) -> UsageReadService:
 def _service(db: AsyncSession) -> OverviewService:
     return OverviewService(
         OverviewRepository(db),
-        OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener()),
+        OrganizationService(db, membership_listener=None),
         DeploymentUserService(db),
         WorkspaceService(db, **membership_writes(db)),
         visibility_service(db),

@@ -9,6 +9,7 @@ import {
   FiPlay,
   FiRefreshCw,
   FiTrash2,
+  FiUserCheck,
 } from "react-icons/fi"
 import type { ApiKey } from "@/client"
 import { TOOLTIP_OPEN_DELAY_MS } from "@/design-system/overlays/Tooltip"
@@ -28,6 +29,7 @@ export function KeyActionsMenu({
   onRegenerate,
   onDelete,
   onViewUsage,
+  onWorkloadIdentity,
 }: {
   apiKey: ApiKey
   triggerRef?: RefObject<HTMLButtonElement | null>
@@ -55,6 +57,8 @@ export function KeyActionsMenu({
    * hosts no usage surface, so the menu offers no dead end.
    */
   onViewUsage?: () => void
+  /** Absent where the deployment lets no one manage this key's federation rules. */
+  onWorkloadIdentity?: () => void
 }) {
   const trigger = useRef<HTMLButtonElement>(null)
   const name = apiKey.key_name ?? "(unnamed)"
@@ -87,6 +91,18 @@ export function KeyActionsMenu({
       isDisabled: false,
       run: onEdit,
     },
+    ...(onWorkloadIdentity
+      ? [
+          {
+            id: "workload-identity",
+            label: "Workload identity…",
+            hint: "Use it without the secret",
+            icon: FiUserCheck,
+            isDisabled: false,
+            run: onWorkloadIdentity,
+          },
+        ]
+      : []),
     {
       id: "regenerate",
       label: "Regenerate…",

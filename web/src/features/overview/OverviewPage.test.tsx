@@ -24,8 +24,8 @@ import {
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import {
   bootstrap,
-  HOSTED_SURFACES,
   organizationContext,
+  SURFACES,
   seriesPoint,
   usageTotals,
   workspaceActivation,
@@ -198,6 +198,8 @@ interface Bodies {
   failureCount?: number
   health?: unknown
   providers?: unknown
+  /** The hosted providers' rows, none unless a test names some. */
+  hostedProviders?: unknown[]
   members?: unknown[]
   context?: Parameters<typeof organizationContext>[0]
   activation?: unknown
@@ -339,6 +341,10 @@ function mockApi(b: Bodies, { scoped = false } = {}): string[] {
         b.health ?? { providers: [], healthy: 0, degraded: 0, total: 0 },
       )
     }
+    if (url.includes(`${API_ROOT}/hosted-providers`)) {
+      const data = b.hostedProviders ?? []
+      return jsonResponse({ data, count: data.length })
+    }
     if (url.includes(`${API_ROOT}/providers`)) {
       await b.holdProviders
       return jsonResponse({
@@ -367,7 +373,7 @@ function LocationProbe() {
 }
 
 const ROUTES = [
-  { path: "/providers", element: <LocationProbe /> },
+  { path: "/admin/hosted-providers", element: <LocationProbe /> },
   { path: "/organization/provider-keys", element: <LocationProbe /> },
   { path: "/activity", element: <LocationProbe /> },
   { path: "/usage", element: <LocationProbe /> },
@@ -1073,7 +1079,7 @@ describe("what needs attention", () => {
       within(strip).getByRole("link", {
         name: "1 provider unreachable: fireworks",
       }),
-    ).toHaveAttribute("href", "/providers")
+    ).toHaveAttribute("href", "/admin/hosted-providers")
     expect(
       within(strip).getByRole("link", {
         name: "Workspace on pace to pass its budget ~Oct 19",
@@ -1182,8 +1188,7 @@ describe("what needs attention", () => {
     renderPage(<OverviewIndex />, {
       workspace: WORKSPACE_A,
       deployment: bootstrap({
-        deployment_type: "hosted",
-        surfaces: HOSTED_SURFACES,
+        surfaces: SURFACES.filter((surface) => surface !== "hosted_providers"),
       }),
     })
 
@@ -1973,16 +1978,17 @@ describe("OverviewIndex routing", () => {
     await user.click(
       screen.getByRole("link", { name: "Add your first provider" }),
     )
-    expect(await screen.findByTestId("loc")).toHaveTextContent("/providers")
+    expect(await screen.findByTestId("loc")).toHaveTextContent(
+      "/admin/hosted-providers",
+    )
   })
 
-  it("sends a hosted deployment to the organization's provider keys", async () => {
+  it("sends a deployment without hosted providers to the organization's provider keys", async () => {
     mockApi({ providers: [] })
     const user = userEvent.setup()
     renderPage(<OverviewIndex />, {
       deployment: bootstrap({
-        deployment_type: "hosted",
-        surfaces: HOSTED_SURFACES,
+        surfaces: SURFACES.filter((surface) => surface !== "hosted_providers"),
       }),
     })
 
@@ -1993,6 +1999,19 @@ describe("OverviewIndex routing", () => {
     expect(await screen.findByTestId("loc")).toHaveTextContent(
       "/organization/provider-keys",
     )
+  })
+
+  it("counts a hosted provider as one that serves, so the strip stays away and the guide asks", async () => {
+    const requested = mockApi({
+      providers: [],
+      hostedProviders: [{ name: "homelab", provider: "openai" }],
+    })
+    renderPage(<OverviewIndex />, { workspace: WORKSPACE_A })
+    await screen.findByRole("heading", { name: "Overview" })
+    await waitFor(() =>
+      expect(requested.some((url) => url.includes("/activation"))).toBe(true),
+    )
+    expect(screen.queryByText("Get started with Otari")).toBeNull()
   })
 
   it("keeps the strip away from a gateway with usage but no providers", async () => {
