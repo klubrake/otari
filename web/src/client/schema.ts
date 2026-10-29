@@ -2722,7 +2722,10 @@ export interface paths {
          *     built-in tools on each, beside its traffic: how many requests a backup served,
          *     and how many named one offering and so had no fallback. The traffic is the
          *     workspaces the caller may see in their active organization, by the rule the
-         *     organization's usage reads use.
+         *     organization's usage reads use. ``sent_by`` names the keys, and
+         *     ``api_key_id`` narrows to them, only among the requests the caller may see
+         *     as someone's: everyone's to an owner or admin, a workspace's to its own
+         *     owners and admins, and otherwise the caller's own.
          */
         get: operations["routing-list_automatic_fallbacks"];
         put?: never;
@@ -3881,6 +3884,33 @@ export interface paths {
          *     accepted here.
          */
         post: operations["routing-set_organization_routing_policy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me/routing-policies/traffic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Routing Traffic
+         * @description The last 30 days of traffic sent under each routing policy and alias name the caller may see.
+         *
+         *     Per workspace, name and person: the requests, the keys that sent them, and
+         *     what each step of the plan did (served, or failed and handed on). Whose
+         *     traffic follows the organization's usage reads: everyone's to an owner or
+         *     admin, a workspace's to its own owners and admins, and otherwise the
+         *     caller's own. The names are the stored policies and aliases of the
+         *     workspaces the caller may see and the config-file ones.
+         */
+        get: operations["routing-read_routing_traffic"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -8347,6 +8377,11 @@ export interface components {
              * @description Requests served in the window, each counted once however many attempts.
              */
             requests: number;
+            /**
+             * Sent By
+             * @description The keys that sent `requests`, most first: everyone's to an owner or admin, a workspace's to its own owners and admins, and otherwise the caller's own keys alone.
+             */
+            sent_by: components["schemas"]["KeyRequestsPublic"][];
         };
         /**
          * AutomaticFallbacksResponse
@@ -12305,6 +12340,16 @@ export interface components {
             workspace_id: string;
         };
         /**
+         * KeyRequestsPublic
+         * @description How many requests one key sent.
+         */
+        KeyRequestsPublic: {
+            /** Api Key Id */
+            api_key_id: string;
+            /** Requests */
+            requests: number;
+        };
+        /**
          * KnownProviderSchema
          * @description A selected provider's autofill hints for the add-provider form.
          */
@@ -13071,6 +13116,42 @@ export interface components {
             provider_raw?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * NameTrafficPublic
+         * @description The traffic one person sent under one policy or alias name in one workspace.
+         */
+        NameTrafficPublic: {
+            /**
+             * Name
+             * @description The name the requests sent as `model`.
+             */
+            name: string;
+            /**
+             * Requests
+             * @description Requests in the window, each counted once however many attempts.
+             */
+            requests: number;
+            /**
+             * Sent By
+             * @description The keys that sent them, most first.
+             */
+            sent_by: components["schemas"]["KeyRequestsPublic"][];
+            /**
+             * Steps
+             * @description By position in the plan, first first.
+             */
+            steps: components["schemas"]["StepOutcomePublic"][];
+            /**
+             * User Id
+             * @description Whose requests these are. A member's identity id for a member's own requests, so a policy of their own is matched on it.
+             */
+            user_id: string | null;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
         };
         /**
          * NoulCriteria
@@ -16532,6 +16613,22 @@ export interface components {
             workspace_id: string;
         };
         /**
+         * RoutingTrafficResponse
+         * @description The traffic sent under the routing policies and aliases the caller may see.
+         */
+        RoutingTrafficResponse: {
+            /**
+             * Names
+             * @description One entry per workspace, name and person: everyone's to an owner or admin, a workspace's to its own owners and admins, and otherwise the caller's own alone.
+             */
+            names: components["schemas"]["NameTrafficPublic"][];
+            /**
+             * Window Days
+             * @description How many days of traffic the counts cover.
+             */
+            window_days: number;
+        };
+        /**
          * SandboxCredentialPublic
          * @description Where the key a hosted sandbox provider leases with comes from. Never the key itself.
          */
@@ -17400,6 +17497,27 @@ export interface components {
             tool_name: string | null;
             /** Tool Type */
             tool_type: string | null;
+        };
+        /**
+         * StepOutcomePublic
+         * @description What one step of a plan did in the window.
+         */
+        StepOutcomePublic: {
+            /**
+             * Failed
+             * @description Attempts on this step that failed, whether a later step recovered or not.
+             */
+            failed: number;
+            /**
+             * Position
+             * @description The step's place in the plan, 1 for the first.
+             */
+            position: number;
+            /**
+             * Served
+             * @description Requests this step answered.
+             */
+            served: number;
         };
         /**
          * StoredSearchToolSchema
@@ -24461,7 +24579,10 @@ export interface operations {
     };
     "routing-list_automatic_fallbacks": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only traffic these API keys sent, by id; repeatable, at most 50. A key whose requests the caller may not see narrows to nothing rather than being refused. */
+                api_key_id?: string[] | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -24475,6 +24596,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutomaticFallbacksResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -26459,6 +26589,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "routing-read_routing_traffic": {
+        parameters: {
+            query?: {
+                /** @description Only stored entries in this workspace. Config-file entries are always included, being deployment-wide. Omit for every workspace this caller may see. */
+                workspace_id?: string | null;
+                /** @description Only traffic these API keys sent, by id; repeatable, at most 50. A key whose requests the caller may not see narrows to nothing rather than being refused. */
+                api_key_id?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingTrafficResponse"];
                 };
             };
             /** @description Validation Error */
