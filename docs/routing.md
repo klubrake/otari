@@ -299,6 +299,15 @@ policies and anyone else their own; a policy scoped to a user who is not a membe
 of the organization stays on the deployment-wide routes, where only an operator
 can change or delete it, along with every user-scoped alias.
 
+`GET /api/v1/organizations/me/routing-policies/traffic` reports the last 30 days
+sent under each policy and alias name: the requests, the keys that sent them,
+and what each step of the plan did (served, or failed and handed on). The
+automatic fallback read names the keys that sent each model the same way, and
+both take `api_key_id` to narrow to what given keys sent. Whose traffic either
+shows follows the organization's usage reads: everyone's to an owner or admin, a
+workspace's to its own owners and admins, and otherwise the caller's own, so a
+member never sees a colleague's keys there.
+
 The authenticating API key determines which workspace resolves a policy.
 User-scoped entries take precedence over wider entries. A config-file policy
 cannot be changed through the API.
