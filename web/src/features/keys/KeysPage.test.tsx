@@ -2556,3 +2556,135 @@ describe("KeysPage routing lanes", () => {
     expect(within(list).getByText("No backup")).toBeInTheDocument()
   })
 })
+
+describe("KeysPage forms", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it("reports in Edit what a key sent and which of its models have no backup", async () => {
+    stubRegionWidth(1440)
+    mockApi({
+      keys: [apiKey({ id: "key-1", key_name: "thymeline" })],
+      routing: [
+        {
+          api_key_id: "key-1",
+          model_count: 3,
+          no_backup_count: 2,
+          policies: [{ name: "kimi", requests: 212 }],
+          models: [
+            {
+              name: "claude-sonnet-5-5",
+              requests: 1310,
+              kind: "catalog",
+              backup: "no_backup",
+              reason: "single_offering",
+              provider: "thymeline-anthropic",
+            },
+            {
+              name: "kimi",
+              requests: 212,
+              kind: "policy",
+              backup: "no_backup",
+              reason: "single_target_policy",
+              provider: "fireworks",
+            },
+            {
+              name: "gpt-5.2",
+              requests: 18,
+              kind: "catalog",
+              backup: "has_backup",
+              reason: null,
+              provider: null,
+            },
+          ],
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    const row = (await screen.findByText("thymeline")).closest("tr")!
+    await chooseAction(user, row, "Edit")
+    const routing = await screen.findByRole("region", { name: "Routing" })
+    expect(within(routing).getByText("kimi (212)")).toBeInTheDocument()
+    expect(
+      within(routing).getByText("2 of 3 models have none"),
+    ).toBeInTheDocument()
+    expect(
+      within(routing).getByText("· only thymeline-anthropic serves it"),
+    ).toBeInTheDocument()
+    expect(
+      within(routing).getByText("· policy with one target"),
+    ).toBeInTheDocument()
+    expect(within(routing).queryByText("gpt-5.2")).not.toBeInTheDocument()
+    expect(
+      within(routing).getByRole("link", { name: "Set up routing" }),
+    ).toHaveAttribute("href", "/routing")
+  })
+
+  it("lets an organization admin create a key for a member", async () => {
+    const member = "55555555-5555-5555-5555-555555555555"
+    const fetchMock = mockApi({
+      keys: [],
+      deploymentOperator: false,
+      role: "admin",
+      members: [
+        organizationMember({
+          attribution_user_id: member,
+          full_name: "Priya Member",
+        }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Create your first key" }),
+    )
+    await pickOption(user, "Owner", "Priya Member")
+    await submitTheCreateDialog(user)
+
+    const post = fetchMock.mock.calls.find(
+      ([u, init]) =>
+        String(u).endsWith(`${API_ROOT}/organizations/me/keys`) &&
+        (init?.method ?? "") === "POST",
+    )
+    expect(JSON.parse(String(post?.[1]?.body)).user_id).toBe(member)
+  })
+
+  it("gives a member no owner to pick and no budget to set", async () => {
+    mockApi({ keys: [], deploymentOperator: false, role: "member" })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Create your first key" }),
+    )
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).queryByLabelText("Owner")).not.toBeInTheDocument()
+    expect(
+      within(dialog).queryByRole("region", { name: "Budget" }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(dialog).getByText("Limited to what your admin allows."),
+    ).toBeInTheDocument()
+  })
+
+  it("offers routing as the next step once a key is created", async () => {
+    mockApi({ keys: [], deploymentOperator: false, role: "member" })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Create your first key" }),
+    )
+    await submitTheCreateDialog(user)
+    expect(
+      await screen.findByRole("link", {
+        name: "Next: set up routing for this app",
+      }),
+    ).toHaveAttribute("href", "/routing")
+  })
+})
