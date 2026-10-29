@@ -23,9 +23,11 @@ from fastapi import status
 from fastapi.testclient import TestClient
 from sqlalchemy import update
 from sqlalchemy.orm import Session
+from sqlmodel import col
 
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.models.provider_keys import OrgProviderKey
+from gateway.models.routing import RoutingPolicy
 from gateway.models.tenancy import DashboardSession, Organization, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.models.users import User as BillingUser
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
@@ -334,6 +336,68 @@ def test_an_admin_cannot_scope_a_policy_to_someone_outside_the_organization(
     body = _policy(world, "outsider")
     body["member_id"] = str(world.users[target]) if target in world.users else str(uuid.uuid4())
     code, response = _call(client, world, "admin", "POST", _POLICIES, json=body)
+    assert code == status.HTTP_404_NOT_FOUND
+    assert response["detail"] == "No such member in this organization."
+
+
+def test_an_admin_cleans_up_after_a_member_who_left(
+    client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    code, body = _call(client, world, "member", "POST", _POLICIES, json=_policy(world, "left", member="member"))
+    assert code == status.HTTP_200_OK, body
+    session = db_session_factory()
+    try:
+        session.execute(
+            update(OrganizationMember)
+            .where(col(OrganizationMember.user_id) == world.users["member"])
+            .values(status="suspended")
+        )
+        session.commit()
+    finally:
+        session.close()
+    assert ("left", str(world.users["member"])) in _listed(client, world, "admin")
+
+    code, _ = _call(
+        client,
+        world,
+        "admin",
+        "DELETE",
+        f"{_POLICIES}/left",
+        params={"workspace_id": str(world.workspaces["alpha_one"]), "member_id": str(world.users["member"])},
+    )
+    assert code == status.HTTP_204_NO_CONTENT
+
+
+@pytest.mark.parametrize("target", ["beta_owner", "unknown"])
+def test_an_admin_cannot_delete_a_row_the_operator_scoped_to_a_non_member(
+    client: TestClient, world: _World, db_session_factory: Callable[[], Session], target: str
+) -> None:
+    outsider = str(world.users[target]) if target in world.users else str(uuid.uuid4())
+    session = db_session_factory()
+    try:
+        session.add(BillingUser(user_id=outsider, alias="Operator scoped"))
+        session.commit()
+        session.add(
+            RoutingPolicy(
+                name="operator-scoped",
+                spec={"select": [{"default": _TARGET}]},
+                user_id=outsider,
+                workspace_id=world.workspaces["alpha_one"],
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+    assert ("operator-scoped", outsider) not in _listed(client, world, "admin")
+
+    code, response = _call(
+        client,
+        world,
+        "admin",
+        "DELETE",
+        f"{_POLICIES}/operator-scoped",
+        params={"workspace_id": str(world.workspaces["alpha_one"]), "member_id": outsider},
+    )
     assert code == status.HTTP_404_NOT_FOUND
     assert response["detail"] == "No such member in this organization."
 

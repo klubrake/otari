@@ -290,13 +290,14 @@ a tenant's to set or interpret. A member may write their own while the
 workspace lets members create policies (`members_create_policies` on the
 workspace's visibility settings, on by default); turning it off keeps the ones
 they have working and theirs to edit or delete. An owner or admin may write any
-member's. `POST /api/v1/organizations/me/routing-policies/copy` makes the
+member's, and delete the policies of someone who has since left the
+organization. `POST /api/v1/organizations/me/routing-policies/copy` makes the
 caller's own version of a shared policy under the same name, and
 `replaces_alias` on a write turns the workspace's own alias of that name into a
 policy in one step. The policy list shows an owner or admin every member's
 policies and anyone else their own; a policy scoped to a user who is not a member
-of the organization stays on the deployment-wide routes, along with every
-user-scoped alias.
+of the organization stays on the deployment-wide routes, where only an operator
+can change or delete it, along with every user-scoped alias.
 
 The authenticating API key determines which workspace resolves a policy.
 User-scoped entries take precedence over wider entries. A config-file policy
