@@ -15,6 +15,7 @@ import type {
   ApiKey,
   Budget,
   DeploymentBootstrap,
+  KeyRouting,
   MembershipRole,
   OrganizationBudget,
   ScopedBudget,
@@ -143,6 +144,8 @@ function mockApi(
     ceilingStatus?: number
     /** The keys' own ceilings, as the deployment's list answers them. */
     ceilings?: ScopedBudget[]
+    /** What the routing read answers per key; none unless a case says otherwise. */
+    routing?: KeyRouting[]
   } = {},
 ) {
   let list = [...(opts.keys ?? [])]
@@ -155,6 +158,18 @@ function mockApi(
       const url = String(input)
       const method = (init?.method ?? "GET").toUpperCase()
 
+      // Before the keys list: its path is a child of the keys collection.
+      if (url.includes("/keys/routing?")) {
+        const asked = new URL(url, "http://localhost").searchParams.getAll(
+          "api_key_id",
+        )
+        return jsonResponse({
+          window_days: 30,
+          keys: (opts.routing ?? []).filter((row) =>
+            asked.includes(row.api_key_id),
+          ),
+        })
+      }
       if (KEYS_URL.test(url)) {
         if (url.endsWith("/rotate") && method === "POST") {
           const id = url.split("/").slice(-2)[0]
@@ -359,7 +374,7 @@ describe("KeysPage", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("keeps two faces in Owner and folds the lanes into the menu only once they leave the row", async () => {
+  it("names each key's owner under it and folds the lanes into the menu only once they leave the row", async () => {
     const member = "33333333-3333-3333-3333-333333333333"
     stubRegionWidth(1440)
     mockApi({
@@ -378,14 +393,16 @@ describe("KeysPage", () => {
     const usr = userEvent.setup()
     renderPage(<KeysPage />)
 
-    // A member is a person and takes the body face; a raw id is an identifier
-    // and takes the mono one, which is the only thing telling the two apart.
+    // The owner sits on the line under the name, by name where they are a
+    // member and by id otherwise; the id is always on hover.
     const named = await screen.findByText("Alice Example")
-    expect(named).toHaveClass("text-sm", "text-foreground")
     expect(named).toHaveAttribute("title", member)
-    expect(screen.getByText("ci-bot", { selector: "span" })).toHaveClass(
-      "text-mono-caption",
-    )
+    expect(
+      within(screen.getByText("raw").closest("tr")!).getByText("ci-bot"),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("columnheader", { name: "Owner" }),
+    ).not.toBeInTheDocument()
 
     // Last used and Expires are lanes here, and so are the name, the owner and
     // the fingerprint, so the menu repeats none of them. Created has no lane,
@@ -2087,7 +2104,9 @@ describe("KeysPage", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("shows a key's access scope in its row without a misleading count", async () => {
+  it("shows what a key's model list reaches, by provider and count", async () => {
+    // The Models lane is on the wide table; narrower, it folds into the menu.
+    stubRegionWidth(1440)
     mockApi({
       keys: [
         apiKey({
@@ -2102,10 +2121,14 @@ describe("KeysPage", () => {
     renderPage(<KeysPage />)
 
     const scoped = (await screen.findByText("scoped")).closest("tr")!
-    // A wildcard is many models, so the chip says "Selected models", not "2 models".
-    expect(within(scoped).getByText("Selected models")).toBeInTheDocument()
+    // Counted against the catalog, so a wildcard and a model it already covers
+    // are one model, not two entries.
+    expect(within(scoped).getByText("openai")).toBeInTheDocument()
+    expect(await within(scoped).findByText("1 model")).toBeInTheDocument()
     expect(
-      within(screen.getByText("open").closest("tr")!).getByText("All models"),
+      within(screen.getByText("open").closest("tr")!).getByText(
+        "All allowed models",
+      ),
     ).toBeInTheDocument()
     expect(
       within(screen.getByText("locked").closest("tr")!).getByText("No models"),
@@ -2127,7 +2150,7 @@ describe("KeysPage", () => {
     renderPage(<KeysPage />)
 
     const row = (await screen.findByText("old")).closest("tr")!
-    expect(within(row).getByText("Expired")).toBeInTheDocument()
+    expect(within(row).getByText(/^Expired /)).toBeInTheDocument()
     expect(within(row).getByText("virtual")).toBeInTheDocument()
   })
 
@@ -2339,5 +2362,195 @@ describe("KeysPage usage link", () => {
     expect(
       screen.queryByRole("menuitem", { name: /^View usage/ }),
     ).not.toBeInTheDocument()
+  })
+})
+
+describe("KeysPage routing lanes", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  function routing(overrides: Partial<KeyRouting> = {}): KeyRouting {
+    return {
+      api_key_id: "key-1",
+      models: [],
+      model_count: 0,
+      no_backup_count: 0,
+      policies: [],
+      ...overrides,
+    }
+  }
+
+  it("names the model each key sends most, and whether it has a backup", async () => {
+    stubRegionWidth(1440)
+    mockApi({
+      keys: [
+        apiKey({ id: "key-1", key_name: "thymeline" }),
+        apiKey({ id: "key-2", key_name: "giftmuse" }),
+        apiKey({ id: "key-3", key_name: "idle" }),
+      ],
+      routing: [
+        routing({
+          api_key_id: "key-1",
+          model_count: 3,
+          no_backup_count: 2,
+          models: [
+            {
+              name: "claude-sonnet-5-5",
+              requests: 1310,
+              kind: "catalog",
+              backup: "no_backup",
+              reason: "single_offering",
+              provider: "thymeline-anthropic",
+            },
+          ],
+        }),
+        routing({
+          api_key_id: "key-2",
+          model_count: 1,
+          models: [
+            {
+              name: "gpt-5.2",
+              requests: 40,
+              kind: "catalog",
+              backup: "has_backup",
+              reason: null,
+              provider: null,
+            },
+          ],
+        }),
+        routing({ api_key_id: "key-3" }),
+      ],
+    })
+    renderPage(<KeysPage />)
+
+    const thymeline = (await screen.findByText("thymeline")).closest("tr")!
+    expect(
+      await within(thymeline).findByText("claude-sonnet-5-5"),
+    ).toBeInTheDocument()
+    expect(within(thymeline).getByText("+2")).toBeInTheDocument()
+    expect(within(thymeline).getByText("No backup")).toBeInTheDocument()
+
+    const giftmuse = screen.getByText("giftmuse").closest("tr")!
+    expect(within(giftmuse).getByText("Has backup")).toBeInTheDocument()
+    expect(within(giftmuse).queryByText("No backup")).not.toBeInTheDocument()
+
+    expect(
+      within(screen.getByText("idle").closest("tr")!).getByText(
+        "Not used (30d)",
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Open Routing" })).toHaveAttribute(
+      "href",
+      "/routing",
+    )
+  })
+
+  const colleague = "44444444-4444-4444-4444-444444444444"
+  const colleagueKeys = [
+    apiKey({ id: "key-1", key_name: "theirs", user_id: colleague }),
+  ]
+  const colleagueMembers = [
+    organizationMember({
+      attribution_user_id: colleague,
+      full_name: "Sam Colleague",
+    }),
+  ]
+
+  it("shows an organization admin each key's owner", async () => {
+    stubRegionWidth(1440)
+    mockApi({
+      keys: colleagueKeys,
+      members: colleagueMembers,
+      deploymentOperator: false,
+      role: "admin",
+    })
+    renderPage(<KeysPage />)
+
+    expect(await screen.findByText("Sam Colleague")).toBeInTheDocument()
+    expect(
+      screen.getByText("Every key in this workspace, one per app.", {
+        exact: false,
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it("shows a member no owner, every key on their page being theirs", async () => {
+    stubRegionWidth(1440)
+    mockApi({
+      keys: colleagueKeys,
+      members: colleagueMembers,
+      deploymentOperator: false,
+      role: "member",
+    })
+    renderPage(<KeysPage />)
+
+    await screen.findByText("theirs")
+    expect(screen.queryByText("Sam Colleague")).not.toBeInTheDocument()
+    expect(
+      screen.getByText("Your keys for calling this gateway, one per app.", {
+        exact: false,
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it("opens a key's Edit from its Models lane", async () => {
+    stubRegionWidth(1440)
+    mockApi({
+      keys: [
+        apiKey({
+          id: "key-1",
+          key_name: "scoped",
+          allowed_models: ["openai:*"],
+        }),
+      ],
+    })
+    const usr = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    await usr.click(await screen.findByRole("button", { name: "openai" }))
+    expect(await screen.findByRole("dialog")).toHaveTextContent("scoped")
+  })
+
+  it("says what Edit changes in the key's menu", async () => {
+    stubRegionWidth(1440)
+    mockApi({ keys: [apiKey({ id: "key-1", key_name: "named" })] })
+    const usr = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    await usr.click(
+      await screen.findByRole("button", { name: "Actions for named" }),
+    )
+    expect(
+      await screen.findByRole("menuitem", { name: /^Edit…/ }),
+    ).toHaveTextContent("Name, models, budget, expiry")
+  })
+
+  it("keeps the most-used model on a phone's row", async () => {
+    stubRegionWidth(390)
+    mockApi({
+      keys: [apiKey({ id: "key-1", key_name: "thymeline" })],
+      routing: [
+        routing({
+          model_count: 1,
+          models: [
+            {
+              name: "kimi",
+              requests: 212,
+              kind: "policy",
+              backup: "no_backup",
+              reason: "single_target_policy",
+              provider: "fireworks",
+            },
+          ],
+        }),
+      ],
+    })
+    renderPage(<KeysPage />)
+
+    const list = await screen.findByRole("region", { name: "API keys" })
+    expect(await within(list).findByText("kimi")).toBeInTheDocument()
+    expect(within(list).getByText("No backup")).toBeInTheDocument()
   })
 })
