@@ -1,6 +1,7 @@
 import { Spinner } from "@heroui/react"
 import { Link, useNavigate } from "@tanstack/react-router"
 import {
+  Fragment,
   type RefObject,
   useCallback,
   useEffect,
@@ -13,6 +14,7 @@ import type {
   CreateKeyRequest,
   CreateKeyResponse,
   CreateOwnKeyRequest,
+  KeyRouting,
   UpdateKeyRequest,
   UpdateOwnKeyRequest,
   User,
@@ -22,6 +24,7 @@ import {
   CopyField,
   concealedFingerprint,
 } from "@/design-system/actions/CopyField"
+import { TEXT_LINK_CLASS } from "@/design-system/actions/TextButton"
 import { BulkActionBar } from "@/design-system/data/BulkActionBar"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
@@ -55,10 +58,12 @@ import {
   useCreateKey,
   useDeleteKey,
   useKeys,
+  useKeysRouting,
   useKeysScope,
   useRotateKey,
   useUpdateKey,
 } from "@/shared/api/apiKeys"
+import { useModels } from "@/shared/api/models"
 import { useOrganizationContext } from "@/shared/api/organizations"
 import { useUsers } from "@/shared/api/users"
 import { formatDate } from "@/shared/helpers/format"
@@ -88,6 +93,12 @@ import {
   keyBudgetIncomplete,
   useKeyBudgets,
 } from "./KeyBudgetField"
+import {
+  KeyBackupLine,
+  KeyModelsCell,
+  KeyMostUsedCell,
+} from "./KeyRoutingCells"
+import { summarizeKeyModels } from "./keyModels"
 import {
   NO_SERVICE_KEY,
   ServiceKeyFields,
@@ -1089,8 +1100,12 @@ function KeyBudgetCell({
 function StatusMark({ apiKey }: { apiKey: ApiKey }) {
   const { word, dot, ink } = !apiKey.is_active
     ? { word: "Disabled", dot: "bg-text-subtle", ink: "text-subtle" }
-    : isExpired(apiKey)
-      ? { word: "Expired", dot: "bg-danger", ink: "text-muted" }
+    : isExpired(apiKey) && apiKey.expires_at
+      ? {
+          word: `Expired ${formatDate(apiKey.expires_at)}`,
+          dot: "bg-danger",
+          ink: "text-muted",
+        }
       : { word: "Active", dot: "bg-success", ink: "text-muted" }
   return (
     <span className={`flex items-center gap-2 text-mono-caption ${ink}`}>
@@ -1101,46 +1116,51 @@ function StatusMark({ apiKey }: { apiKey: ApiKey }) {
 }
 
 /**
- * The metadata line under a key's name: what it can reach, and the two
- * behaviors that depart from the deployment default.
+ * The line under a key's name: its state, and for someone who manages other
+ * people's keys whose it is, then the behaviors that depart from the
+ * deployment default.
  *
- * Facts about the key rather than states of it, so they are set as metadata and
- * not as chips: 11px mono, uppercase, letterspaced, muted. `No models` is the
- * one that takes danger ink, because a key that can reach nothing is broken
- * rather than merely narrow. `Selected models` is muted like its siblings and
- * deliberately not link ink: it is a label, and nothing here is clickable.
+ * Facts about the key rather than states of it, so they are set as caption
+ * text joined by a middle dot and not as chips. What the key may reach has a
+ * lane of its own (Models), so it is not repeated here.
  */
-function KeyMetaLine({
+/** The phone row's Most-used line: the name and its backup state on one line. */
+function MostUsedLine({ routing }: { routing: KeyRouting | undefined }) {
+  const top = routing?.models[0]
+  if (!top) return null
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="truncate text-mono-caption text-foreground">
+        {top.name}
+      </span>
+      <span aria-hidden="true" className="text-caption text-subtle">
+        ·
+      </span>
+      <span className="shrink-0">
+        <KeyBackupLine model={top} />
+      </span>
+    </span>
+  )
+}
+
+function KeyStatusLine({
   apiKey,
-  face = "text-mono-overline",
+  owner,
+  lastUsed,
 }: {
   apiKey: ApiKey
-  /**
-   * The overline's uppercase mono is right beside a 16px name and wrong inside
-   * the folded caption line, where it would sit between two runs of sentence-case
-   * body text.
-   */
-  face?: string
+  /** The owner's name, for a caller who sees other people's keys; empty otherwise. */
+  owner: string
+  /** When it was last used, where the row has no lane for it; empty otherwise. */
+  lastUsed: string
 }) {
-  const { text, tone } = accessLabel(apiKey.allowed_models ?? undefined)
-  // Surface the exact entries on hover; the count would mislead (a wildcard is many).
-  const title =
-    apiKey.allowed_models && apiKey.allowed_models.length > 0
-      ? apiKey.allowed_models.join(", ")
-      : undefined
-  const facts: { key: string; text: string; ink: string; title?: string }[] = [
-    {
-      key: "access",
-      text,
-      ink: tone === "danger" ? "text-danger" : "text-muted",
-      title,
-    },
-  ]
+  const facts: { key: string; text: string; title?: string }[] = []
+  if (owner)
+    facts.push({ key: "owner", text: owner, title: apiKey.user_id ?? "" })
   if (apiKey.exclude_from_budget) {
     facts.push({
       key: "budget",
       text: "Budget-exempt",
-      ink: "text-muted",
       title:
         "Requests on this key are logged with cost but never counted toward budget",
     })
@@ -1150,7 +1170,6 @@ function KeyMetaLine({
     facts.push({
       key: "service",
       text: "Service key",
-      ink: "text-muted",
       title: `Bills the end users its requests name, on ${count} end-user budget${count === 1 ? "" : "s"}`,
     })
   }
@@ -1158,24 +1177,32 @@ function KeyMetaLine({
     facts.push({
       key: "user",
       text: apiKey.reject_user_mismatch ? "Strict user" : "Lenient user",
-      ink: "text-muted",
       title: apiKey.reject_user_mismatch
         ? "This key always rejects a request naming a different user, whatever the deployment setting says"
         : "This key always accepts a request naming a different user; spend still binds to its owner",
     })
   }
+  if (lastUsed) facts.push({ key: "used", text: `used ${lastUsed}` })
   return (
-    <span
-      className={`inline-flex max-w-full gap-3 overflow-hidden whitespace-nowrap align-bottom ${face}`}
-    >
+    <span className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+      <span className="shrink-0">
+        <StatusMark apiKey={apiKey} />
+      </span>
       {facts.map((fact) => (
-        <span
-          key={fact.key}
-          className={`truncate ${fact.ink}`}
-          title={fact.title}
-        >
-          {fact.text}
-        </span>
+        <Fragment key={fact.key}>
+          <span
+            aria-hidden="true"
+            className="shrink-0 text-caption text-subtle"
+          >
+            ·
+          </span>
+          <span
+            className="truncate text-caption text-subtle"
+            title={fact.title}
+          >
+            {fact.text}
+          </span>
+        </Fragment>
       ))}
     </span>
   )
@@ -1236,6 +1263,15 @@ export function KeysPage() {
   const createButtonRef = useRef<HTMLButtonElement>(null)
 
   const rows = keys.data ?? []
+  // Whoever sees other people's keys: the operator on the deployment-wide
+  // surface, and an organization owner or admin on the tenant one, which lists
+  // every key in the organization to them. Read from the role the shell already
+  // holds; the server decides what each surface returns either way.
+  const role = useOrganizationContext().data?.role
+  const manages = isDeploymentWide || role === "owner" || role === "admin"
+  const routing = useKeysRouting(rows.map((apiKey) => apiKey.id))
+  const catalog = useModels()
+  const modelIds = catalog.data?.data.map((model) => model.id)
   // An unresolved scope is a loading state: which surface the page reads, and
   // which affordances it draws, are both undecided until the organization
   // context answers, and a disabled query reports `isLoading` false.
@@ -1296,7 +1332,6 @@ export function KeysPage() {
   // surface lists to them, and the operator on any key in the organization.
   // The server enforces the same; this only keeps a member from being offered
   // a form that would answer 403.
-  const role = useOrganizationContext().data?.role
   const canFederate =
     useDeployment().federation_member_rules &&
     (isDeploymentWide || role === "owner" || role === "admin")
@@ -1356,7 +1391,7 @@ export function KeysPage() {
         apiKey={apiKey}
         triggerRef={lastAction === apiKey.id ? actionTriggerRef : undefined}
         onAction={() => setLastAction(apiKey.id)}
-        owner={isDeploymentWide ? ownerLabel(apiKey) : undefined}
+        owner={manages ? ownerLabel(apiKey) : undefined}
         hasIdentity={layout === "mobile"}
         // Those lanes are off the row below `wide`, so the menu is the only
         // place left that can show them whole.
@@ -1386,7 +1421,7 @@ export function KeysPage() {
     [
       lastAction,
       actionTriggerRef,
-      isDeploymentWide,
+      manages,
       ownerLabel,
       layout,
       updateKey.isPending,
@@ -1431,31 +1466,40 @@ export function KeysPage() {
                 </span>
               ) : null}
             </div>
-            {/* Folded, the line joins the owner and the last use to the meta
-              facts, so it takes one face throughout rather than setting an
-              uppercase mono run between two runs of body text. */}
-            <div className="truncate text-caption">
-              {layout === "compact" && isDeploymentWide ? (
-                <>
-                  <span>{ownerLabel(apiKey)}</span>
-                  {" · "}
-                </>
-              ) : null}
-              <KeyMetaLine
-                apiKey={apiKey}
-                face={layout === "compact" ? "text-caption" : undefined}
-              />
-              {layout === "compact"
-                ? ` · used ${relative(apiKey.last_used_at) ?? "never"}`
-                : null}
-            </div>
+            {/* Folded, the line also carries the last use, whose lane is
+              off the row. */}
+            <KeyStatusLine
+              apiKey={apiKey}
+              owner={manages ? ownerLabel(apiKey) : ""}
+              lastUsed={
+                layout === "compact"
+                  ? (relative(apiKey.last_used_at) ?? "never")
+                  : ""
+              }
+            />
           </div>
         ),
       },
       {
-        id: "status",
-        header: "Status",
-        cell: (apiKey) => <StatusMark apiKey={apiKey} />,
+        id: "models",
+        header: "Models",
+        cell: (apiKey) => (
+          <KeyModelsCell
+            summary={summarizeKeyModels(
+              apiKey.allowed_models ?? undefined,
+              modelIds,
+            )}
+            onOpen={() => {
+              setAddOpen(false)
+              setEditing(apiKey.id)
+            }}
+          />
+        ),
+      },
+      {
+        id: "most_used",
+        header: "Most-used model",
+        cell: (apiKey) => <KeyMostUsedCell routing={routing.get(apiKey.id)} />,
       },
       // Only for a caller who could change it: a member is refused every
       // ceiling read, so the column would be blank for them.
@@ -1470,50 +1514,6 @@ export function KeysPage() {
                   budgets={capBudgets}
                 />
               ),
-            } satisfies DataTableColumn<ApiKey>,
-          ]
-        : []),
-      // Every key on a member's page is their own, so an Owner column there
-      // would repeat one name down the table.
-      ...(isDeploymentWide
-        ? [
-            {
-              id: "owner",
-              header: "Owner",
-              // One column, two faces, deliberately: a member is a person and
-              // takes the body face, while a raw id like `ci-bot` is an
-              // identifier and takes the mono one. The face is what tells the two
-              // apart, so neither needs a chip to say which it is. The id stays
-              // in the title, so the value actually sent on a request is
-              // recoverable from a truncated cell.
-              cell: (apiKey: ApiKey) => {
-                const member =
-                  !isVirtualUser(apiKey.user_id) && apiKey.user_id
-                    ? memberLabels.get(apiKey.user_id)
-                    : undefined
-                if (member) {
-                  return (
-                    <span
-                      className="block truncate text-sm text-foreground"
-                      title={apiKey.user_id ?? ""}
-                    >
-                      {member}
-                    </span>
-                  )
-                }
-                return (
-                  <span
-                    className={`block truncate text-mono-caption ${
-                      isVirtualUser(apiKey.user_id)
-                        ? "text-subtle"
-                        : "text-muted"
-                    }`}
-                    title={apiKey.user_id ?? ""}
-                  >
-                    {ownerLabel(apiKey)}
-                  </span>
-                )
-              },
             } satisfies DataTableColumn<ApiKey>,
           ]
         : []),
@@ -1551,20 +1551,21 @@ export function KeysPage() {
     ],
     [
       layout,
-      isDeploymentWide,
-      memberLabels,
+      manages,
       ownerLabel,
       renderActions,
       canCap,
       ceilingByKey,
       capBudgets,
+      modelIds,
+      routing,
     ],
   )
   const visibleColumns = useMemo(
     () =>
       layout === "compact"
         ? columns.filter(
-            (column) => !["owner", "last_used", "expires"].includes(column.id),
+            (column) => !["models", "last_used", "expires"].includes(column.id),
           )
         : columns,
     [columns, layout],
@@ -1593,46 +1594,13 @@ export function KeysPage() {
           </Button>
         }
       >
-        {isDeploymentWide
-          ? "Issue and revoke the keys that authenticate callers to this gateway. Secrets are shown once at creation."
-          : "Create and manage your own keys for calling this gateway. Secrets are shown once at creation."}
+        {manages
+          ? "Every key in this workspace, one per app. Spend counts toward each key's owner."
+          : "Your keys for calling this gateway, one per app. Spend counts toward your budget."}
       </PageIntro>
 
       {/* Not the deletes: each reports inside its own confirm dialog. */}
       <ErrorBanner error={keys.error ?? updateKey.error} />
-
-      {/* A key's owner and its spending limit are both set elsewhere now, on the
-          organization rail. This page is where an operator arrives looking for
-          them, so it says where they went rather than leaving the sidebar to be
-          re-learned. A member's keys are their own and both destinations refuse
-          them, so their page states the ownership rule instead of pointing at
-          pages they cannot open. The two links stay in link ink: they are real
-          links inside a sentence, which is what that ink is for. */}
-      {isDeploymentWide ? (
-        <p className="max-w-[38.75rem] pb-5 text-sm text-muted">
-          A key spends against its owner's budget, and against a budget of its
-          own when you give it one. Owners live under{" "}
-          <Link
-            to="/organization/members"
-            className="font-medium text-link hover:text-link-hover"
-          >
-            Organization → Members &amp; roles
-          </Link>
-          , and their limits under{" "}
-          <Link
-            to="/budgets"
-            className="font-medium text-link hover:text-link-hover"
-          >
-            Spend &amp; budgets
-          </Link>
-          .
-        </p>
-      ) : (
-        <p className="max-w-[38.75rem] pb-5 text-sm text-muted">
-          These are your keys: requests on them are billed to you and spend
-          against your budget.
-        </p>
-      )}
 
       {regenerated ? (
         <RegeneratedSecretDialog
@@ -1800,20 +1768,12 @@ export function KeysPage() {
                     {apiKey.key_name ?? "(unnamed)"}
                   </span>
                   {renderFingerprint(apiKey)}
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="shrink-0">
-                      <StatusMark apiKey={apiKey} />
-                    </span>
-                    {isDeploymentWide ? (
-                      <span className="truncate text-caption">
-                        {ownerLabel(apiKey)}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="truncate text-caption">
-                    <KeyMetaLine apiKey={apiKey} face="text-caption" /> · used{" "}
-                    {relative(apiKey.last_used_at) ?? "never"}
-                  </div>
+                  <KeyStatusLine
+                    apiKey={apiKey}
+                    owner={manages ? ownerLabel(apiKey) : ""}
+                    lastUsed=""
+                  />
+                  <MostUsedLine routing={routing.get(apiKey.id)} />
                   {canCap ? (
                     <div className="truncate text-caption">
                       {keyBudgetLine(ceilingByKey.get(apiKey.id))}
@@ -1839,6 +1799,14 @@ export function KeysPage() {
             onSelectionChange={selection.onSelectionChange}
           />
         </TableScrollFrame>
+      )}
+      {showOnboarding ? null : (
+        <p className="pt-3 text-caption">
+          Most-used model is from the last 30 days.{" "}
+          <Link to="/routing" className={TEXT_LINK_CLASS}>
+            Open Routing
+          </Link>
+        </p>
       )}
 
       <ConfirmDialog
