@@ -2,6 +2,7 @@ import { Spinner } from "@heroui/react"
 import { Link, useNavigate } from "@tanstack/react-router"
 import {
   Fragment,
+  type ReactNode,
   type RefObject,
   useCallback,
   useEffect,
@@ -35,11 +36,13 @@ import { errorMessage } from "@/design-system/feedback/errorMessage"
 import { FormDialog } from "@/design-system/feedback/FormDialog"
 import { Checkbox } from "@/design-system/forms/Checkbox"
 import { Field } from "@/design-system/forms/Field"
+import { Select } from "@/design-system/forms/Select"
 import { useDirtySnapshot } from "@/design-system/forms/useDirtySnapshot"
 import { useConfirmationFocus } from "@/design-system/hooks/useConfirmationFocus"
 import { Dot } from "@/design-system/indicators/Dot"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
+import { Disclosure } from "@/design-system/navigation/Disclosure"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { Tooltip } from "@/design-system/overlays/Tooltip"
 import {
@@ -93,14 +96,17 @@ import {
   keyBudgetIncomplete,
   useKeyBudgets,
 } from "./KeyBudgetField"
+import { KeyFormSection } from "./KeyFormSection"
 import {
   KeyBackupLine,
   KeyModelsCell,
   KeyMostUsedCell,
+  KeyRoutingSummary,
 } from "./KeyRoutingCells"
 import { summarizeKeyModels } from "./keyModels"
 import {
   NO_SERVICE_KEY,
+  type ServiceKeyChoice,
   ServiceKeyFields,
   serviceKeyBody,
   serviceKeyChoice,
@@ -394,6 +400,156 @@ function UserMismatchPicker({
   )
 }
 
+/** The search-tool and user-matching choices, said in a word each for the folded row. */
+function accessSummary(
+  allowedTools: string[] | undefined,
+  mismatch: UserMismatchChoice,
+): string {
+  const tools =
+    allowedTools === undefined
+      ? "Same as owner"
+      : allowedTools.length === 0
+        ? "No search tools"
+        : "Only these tools"
+  const user =
+    mismatch === "inherit"
+      ? "Deployment default"
+      : mismatch === "reject"
+        ? "Reject"
+        : "Accept"
+  return `${tools} · ${user}`
+}
+
+/**
+ * What a key may call: the models, and folded beneath them the search tools and
+ * what happens to a request naming a different user. The same section on create
+ * and edit, so a key reads the same way however it was made.
+ */
+function KeyModelsSection({
+  isDeploymentWide,
+  manages,
+  ownerNote,
+  modelsInitial,
+  onModelsChange,
+  toolsInitial,
+  onToolsChange,
+  mismatch,
+  onMismatchChange,
+}: {
+  isDeploymentWide: boolean
+  manages: boolean
+  /** What the owner may reach, where the caller may read it; otherwise a line saying who sets it. */
+  ownerNote: ReactNode
+  modelsInitial: string[] | undefined
+  onModelsChange: (value: string[] | undefined, isValid: boolean) => void
+  toolsInitial: string[] | undefined
+  onToolsChange: (value: string[] | undefined, isValid: boolean) => void
+  mismatch: UserMismatchChoice
+  onMismatchChange: (value: UserMismatchChoice) => void
+}) {
+  const [tools, setTools] = useState(toolsInitial)
+  return (
+    <KeyFormSection
+      title="Models this key can call"
+      caption={
+        <>
+          A list of what this key may call; each request still names its own
+          model. Set main models and backups in{" "}
+          <Link to="/routing" className={TEXT_LINK_CLASS}>
+            Routing
+          </Link>
+          .
+        </>
+      }
+    >
+      <ModelScopeControl
+        title="Model access"
+        description={
+          isDeploymentWide
+            ? "It can never exceed its owner's allowed models."
+            : "It can never exceed the models you may use."
+        }
+        anyLabel="All allowed models"
+        onlyLabel="Only these"
+        blockLabel="None"
+        initial={modelsInitial}
+        onChange={onModelsChange}
+      />
+      {manages ? (
+        <div className="flex flex-wrap items-baseline gap-x-2 text-caption">
+          {ownerNote}
+          <Link to="/organization/members" className={TEXT_LINK_CLASS}>
+            Set in Members
+          </Link>
+        </div>
+      ) : (
+        <p className="text-caption">Limited to what your admin allows.</p>
+      )}
+      <Disclosure
+        isDefaultExpanded={toolsInitial !== undefined || mismatch !== "inherit"}
+        heading={
+          <span className="flex min-w-0 flex-1 items-baseline justify-between gap-3">
+            <span>Search tools and user matching</span>
+            <span className="truncate text-caption text-subtle">
+              {accessSummary(tools, mismatch)}
+            </span>
+          </span>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <ToolScopeControl
+            title="Search tools"
+            description="Which /v1/search tools this key can run. It can never exceed its owner's."
+            inheritLabel="Same as owner"
+            initial={toolsInitial}
+            onChange={(value, isValid) => {
+              setTools(value)
+              onToolsChange(value, isValid)
+            }}
+          />
+          <UserMismatchPicker value={mismatch} onChange={onMismatchChange} />
+        </div>
+      </Disclosure>
+    </KeyFormSection>
+  )
+}
+
+/** A key's own spending cap and, for the operator, the two settings that take it out of the owner's budget. */
+function KeyBudgetSection({
+  isDeploymentWide,
+  budgetField,
+  excludeFromBudget,
+  onExcludeChange,
+  serviceKey,
+  onServiceKeyChange,
+}: {
+  isDeploymentWide: boolean
+  budgetField: ReactNode
+  excludeFromBudget: boolean
+  onExcludeChange: (value: boolean) => void
+  serviceKey: ServiceKeyChoice
+  onServiceKeyChange: (value: ServiceKeyChoice) => void
+}) {
+  if (!budgetField && !isDeploymentWide) return null
+  return (
+    <KeyFormSection title="Budget">
+      {budgetField}
+      {/* Operator-only: an exempt key skips the operator's ceilings on the
+          organization as well as its owner's budget, and a service key bills
+          end users to deployment budgets. */}
+      {isDeploymentWide ? (
+        <>
+          <BudgetExemptToggle
+            checked={excludeFromBudget}
+            onChange={onExcludeChange}
+          />
+          <ServiceKeyFields value={serviceKey} onChange={onServiceKeyChange} />
+        </>
+      ) : null}
+    </KeyFormSection>
+  )
+}
+
 // `isDeploymentWide` is which key surface this caller acts on (useKeysScope): an
 // operator names an owner and may exempt the key from budget; a member's key is
 // always their own and always enforced, so neither control is rendered and the
@@ -413,12 +569,15 @@ function UserMismatchPicker({
  */
 function CreateKeyDialog({
   isDeploymentWide,
+  manages,
   isOpen,
   onOpenChange,
   memberLabels,
   returnFocusRef,
 }: {
   isDeploymentWide: boolean
+  /** An organization owner or admin on the tenant surface, who may name a member as the owner. */
+  manages: boolean
   isOpen: boolean
   onOpenChange: (open: boolean) => void
   memberLabels: ReadonlyMap<string, string>
@@ -450,7 +609,9 @@ function CreateKeyDialog({
     useSelectedWorkspace()
   const [keyName, setKeyName] = useState("")
   const [expiresAt, setExpiresAt] = useState("")
-  const [showAdvanced, setShowAdvanced] = useState(false)
+  // A member the tenant surface's owner or admin creates the key for, by
+  // identity id; empty is themselves.
+  const [pickedMember, setPickedMember] = useState("")
   // Undefined until the operator touches the picker; "" is a deliberate clear.
   const [pickedOwner, setPickedOwner] = useState<string>()
   const currentOwnerId = useCurrentOwnerId()
@@ -519,14 +680,13 @@ function CreateKeyDialog({
   // is a remount now (the page keys this on an open counter), so `resetForm`
   // answers for "Create another" alone, which is a reset inside an open dialog,
   // and putting every field back to its seed reads clean again without telling
-  // the guard anything. `showAdvanced` is in neither: it reveals fields rather
-  // than holding a value, and a disclosure left open is not unsaved work.
-  // `scopeValid` is, though: a model scope typed to something invalid is work
-  // the operator would lose.
+  // the guard anything. `scopeValid` is in it: a model scope typed to something
+  // invalid is work the operator would lose.
   const { isDirty } = useDirtySnapshot({
     keyName,
     expiresAt,
     pickedOwner,
+    pickedMember,
     allowedModels,
     allowedTools,
     excludeFromBudget,
@@ -540,7 +700,7 @@ function CreateKeyDialog({
   const resetForm = () => {
     setKeyName("")
     setExpiresAt("")
-    setShowAdvanced(false)
+    setPickedMember("")
     setPickedOwner(undefined)
     setAllowedModels(undefined)
     setAllowedTools(undefined)
@@ -590,7 +750,9 @@ function CreateKeyDialog({
           exclude_from_budget: excludeFromBudget,
           ...serviceKeyBody(serviceKey),
         }
-      : shared
+      : pickedMember
+        ? { ...shared, user_id: pickedMember }
+        : shared
     // An exempt key is never gated, so a cap on it would never bind.
     const cap = excludeFromBudget ? EMPTY_KEY_BUDGET : budgetDraft
     create.mutate(body, {
@@ -652,6 +814,15 @@ function CreateKeyDialog({
         ) : keyBudgets.applied ? (
           <p className="text-caption">Capped by {keyBudgets.applied}.</p>
         ) : null}
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-border-subtle pt-3">
+          <span className="min-w-0 flex-1 text-caption">
+            Optional: pick this app's main model and a backup, so a failure does
+            not reach your users.
+          </span>
+          <Link to="/routing" className={`text-sm ${TEXT_LINK_CLASS}`}>
+            Next: set up routing for this app
+          </Link>
+        </div>
       </FormDialog>
     )
   }
@@ -675,113 +846,99 @@ function CreateKeyDialog({
       error={create.error}
       isDirty={isDirty}
     >
-      <Field
-        label="Name"
-        value={keyName}
-        onChange={setKeyName}
-        placeholder="ci-bot"
-        autoFocus
-        description="A label to recognize this key later."
-        shouldReserveMessage
-      />
-      <ExpiryFields
-        label="Expires (optional)"
-        value={expiresAt}
-        onChange={setExpiresAt}
-        description={
-          expiresInPast ? (
-            <span className="text-danger">
-              That time is in the past; the key would be rejected immediately.
-            </span>
+      <KeyFormSection title="Basics">
+        <Field
+          label="Name"
+          value={keyName}
+          onChange={setKeyName}
+          placeholder="ci-bot"
+          autoFocus
+          description="Usually the app it's for."
+          shouldReserveMessage
+        />
+        {isDeploymentWide ? (
+          <UserComboBox
+            value={userId}
+            onChange={setPickedOwner}
+            users={ownerOptions}
+            isRequired
+          />
+        ) : manages ? (
+          <Select
+            label="Owner"
+            value={pickedMember}
+            onChange={setPickedMember}
+            description="Spend counts toward the owner's budget."
+            options={[
+              { value: "", label: "Me" },
+              ...[...memberLabels].map(([id, name]) => ({
+                value: id,
+                label: name,
+              })),
+            ]}
+          />
+        ) : (
+          <p className="text-caption">
+            This key is yours: requests on it are billed to you and count
+            against your budget.
+          </p>
+        )}
+        <ExpiryFields
+          label="Expires (optional)"
+          value={expiresAt}
+          onChange={setExpiresAt}
+          description={
+            expiresInPast ? (
+              <span className="text-danger">
+                That time is in the past; the key would be rejected immediately.
+              </span>
+            ) : (
+              "Leave blank for a key that never expires."
+            )
+          }
+        />
+      </KeyFormSection>
+      <KeyModelsSection
+        isDeploymentWide={isDeploymentWide}
+        manages={manages || isDeploymentWide}
+        ownerNote={
+          isDeploymentWide ? (
+            <OwnerAccessNote userId={userId} users={ownerOptions} />
           ) : (
-            "Leave blank for a key that never expires."
+            <span>Limited to what the owner may use.</span>
           )
         }
+        modelsInitial={allowedModels}
+        onModelsChange={(value, isValid) => {
+          setAllowedModels(value)
+          setScopeValid(isValid)
+        }}
+        toolsInitial={allowedTools}
+        onToolsChange={(value, isValid) => {
+          setAllowedTools(value)
+          setToolScopeValid(isValid)
+        }}
+        mismatch={rejectUserMismatch}
+        onMismatchChange={setRejectUserMismatch}
       />
-      {isDeploymentWide ? (
-        <UserComboBox
-          value={userId}
-          onChange={setPickedOwner}
-          users={ownerOptions}
-          isRequired
-        />
-      ) : (
-        <p className="text-caption">
-          This key is yours: requests on it are billed to you and count against
-          your budget.
-        </p>
-      )}
-      {keyBudgets.canCap ? (
-        <KeyBudgetField
-          value={budgetDraft}
-          onChange={setBudgetDraft}
-          budgets={keyBudgets.budgets}
-          isLoading={keyBudgets.isLoading}
-          isExempt={excludeFromBudget}
-        />
-      ) : null}
-      <button
-        type="button"
-        className="self-start text-xs font-medium text-link hover:text-link-hover"
-        onClick={() => setShowAdvanced((v) => !v)}
-      >
-        {showAdvanced ? "Hide advanced" : "Advanced"}
-      </button>
-      {showAdvanced ? (
-        <div className="flex flex-col gap-4 border border-control-border p-4">
-          {isDeploymentWide ? (
-            <OwnerAccessNote userId={userId} users={ownerOptions} />
-          ) : null}
-          <ModelScopeControl
-            title="Restrict this key's models"
-            description={
-              isDeploymentWide
-                ? "By default this key inherits its owner's access. Optionally narrow it to a subset; a key can never exceed its owner's allowed models."
-                : "By default this key inherits your model access. Optionally narrow it to a subset; a key can never exceed your allowed models."
-            }
-            anyLabel={
-              isDeploymentWide ? "Inherit owner access" : "Inherit your access"
-            }
-            initial={allowedModels}
-            onChange={(value, isValid) => {
-              setAllowedModels(value)
-              setScopeValid(isValid)
-            }}
-          />
-          <ToolScopeControl
-            title="Restrict this key's search tools"
-            description={
-              isDeploymentWide
-                ? "Which search tools this key may run on /v1/search. Left on Inherit, it takes its owner's list. With no list on either, it follows its model access, or its owner's when it has none: unrestricted runs every tool, restricted only one named there as provider:tool (deprecated). A key can never exceed its owner's."
-                : "Which search tools this key may run on /v1/search. Left on Inherit, it takes your list. With no list on either, it follows its model access, or yours when it has none: unrestricted runs every tool, restricted only one named there as provider:tool (deprecated). A key can never exceed yours."
-            }
-            inheritLabel={
-              isDeploymentWide ? "Inherit owner's tools" : "Inherit your tools"
-            }
-            initial={allowedTools}
-            onChange={(value, isValid) => {
-              setAllowedTools(value)
-              setToolScopeValid(isValid)
-            }}
-          />
-          {/* Exempting a key from a budget is the deployment operator's call,
-              never the owner's: on a member's own-key form this would let them
-              opt their own traffic out of their own budget. */}
-          {isDeploymentWide ? (
-            <BudgetExemptToggle
-              checked={excludeFromBudget}
-              onChange={setExcludeFromBudget}
+      <KeyBudgetSection
+        isDeploymentWide={isDeploymentWide}
+        budgetField={
+          keyBudgets.canCap ? (
+            <KeyBudgetField
+              value={budgetDraft}
+              onChange={setBudgetDraft}
+              budgets={keyBudgets.budgets}
+              isLoading={keyBudgets.isLoading}
+              isExempt={excludeFromBudget}
             />
-          ) : null}
-          {isDeploymentWide ? (
-            <ServiceKeyFields value={serviceKey} onChange={setServiceKey} />
-          ) : null}
-          <UserMismatchPicker
-            value={rejectUserMismatch}
-            onChange={setRejectUserMismatch}
-          />
-        </div>
-      ) : null}
+          ) : null
+        }
+        excludeFromBudget={excludeFromBudget}
+        onExcludeChange={setExcludeFromBudget}
+        serviceKey={serviceKey}
+        onServiceKeyChange={setServiceKey}
+      />
     </FormDialog>
   )
 }
@@ -832,14 +989,18 @@ function RegeneratedSecretDialog({
 
 function EditKeyForm({
   isDeploymentWide,
+  manages,
   apiKey,
   onClose,
 }: {
   isDeploymentWide: boolean
+  /** Sees other people's keys, so is told whose access this key narrows within. */
+  manages: boolean
   apiKey: ApiKey
   onClose: () => void
 }) {
   const update = useUpdateKey()
+  const routing = useKeysRouting([apiKey.id]).get(apiKey.id)
   const keyBudgets = useKeyBudgets(isDeploymentWide)
   const ceiling = keyBudgets.ceilings.find((row) => row.scope_id === apiKey.id)
   // Seeded from the key's ceiling once it has been read. Until it has, the
@@ -974,87 +1135,79 @@ function EditKeyForm({
       isDirty={isDirty}
       error={update.error ?? keyBudgets.applyError}
     >
-      <Field
-        label="Name"
-        value={keyName}
-        onChange={setKeyName}
-        placeholder="ci-bot"
-        autoFocus
-        shouldReserveMessage={false}
-      />
-      <ExpiryFields
-        label="Expires"
-        value={expiresAt}
-        onChange={setExpiresAt}
-        description="Blank clears the expiry."
-      />
-      {showBudget ? (
-        <KeyBudgetField
-          value={budgetDraft}
-          onChange={setBudgetDraft}
-          budgets={keyBudgets.budgets}
-          isLoading={keyBudgets.isLoading}
-          isExempt={excludeFromBudget}
-          current={
-            ceiling
-              ? {
-                  budgetId: ceiling.budget_id,
-                  label: ceilingLabel(ceiling, keyBudgets.budgets),
-                }
-              : undefined
-          }
+      <KeyFormSection title="Basics">
+        <Field
+          label="Name"
+          value={keyName}
+          onChange={setKeyName}
+          placeholder="ci-bot"
+          autoFocus
+          shouldReserveMessage={false}
         />
-      ) : null}
-      {isDeploymentWide && apiKey.user_id ? (
-        <OwnerAccessNote userId={apiKey.user_id} users={users.data ?? []} />
-      ) : null}
-      <ModelScopeControl
-        title="Restrict this key's models"
-        description={
-          isDeploymentWide
-            ? "This key inherits its owner's access by default. Narrow it to a subset here; it can never exceed the owner's allowed models."
-            : "This key inherits your model access by default. Narrow it to a subset here; it can never exceed your allowed models."
+        <ExpiryFields
+          label="Expires"
+          value={expiresAt}
+          onChange={setExpiresAt}
+          description="Blank means never."
+        />
+      </KeyFormSection>
+      <KeyModelsSection
+        isDeploymentWide={isDeploymentWide}
+        manages={manages}
+        ownerNote={
+          isDeploymentWide && apiKey.user_id ? (
+            <OwnerAccessNote userId={apiKey.user_id} users={users.data ?? []} />
+          ) : (
+            <span>Limited to what its owner may use.</span>
+          )
         }
-        anyLabel={
-          isDeploymentWide ? "Inherit owner access" : "Inherit your access"
-        }
-        initial={apiKey.allowed_models ?? undefined}
-        onChange={(value, isValid) => {
+        modelsInitial={apiKey.allowed_models ?? undefined}
+        onModelsChange={(value, isValid) => {
           setAllowedModels(value)
           setScopeValid(isValid)
         }}
-      />
-      <ToolScopeControl
-        title="Restrict this key's search tools"
-        description={
-          isDeploymentWide
-            ? "Which search tools this key may run on /v1/search. Left on Inherit, it takes its owner's list. With no list on either, it follows its model access, or its owner's when it has none: unrestricted runs every tool, restricted only one named there as provider:tool (deprecated). It can never exceed its owner's."
-            : "Which search tools this key may run on /v1/search. Left on Inherit, it takes your list. With no list on either, it follows its model access, or yours when it has none: unrestricted runs every tool, restricted only one named there as provider:tool (deprecated). It can never exceed yours."
-        }
-        inheritLabel={
-          isDeploymentWide ? "Inherit owner's tools" : "Inherit your tools"
-        }
-        initial={apiKey.allowed_tools ?? undefined}
-        onChange={(value, isValid) => {
+        // The draft, not the key: folding the section can remount the control,
+        // which seeds from this and must not drop an unsaved change.
+        toolsInitial={allowedTools}
+        onToolsChange={(value, isValid) => {
           setAllowedTools(value)
           setToolScopeValid(isValid)
         }}
+        mismatch={rejectUserMismatch}
+        onMismatchChange={setRejectUserMismatch}
       />
-      {/* Operator-only, as on the create form: a member editing their own key
-          must not be able to take it out of their own budget. */}
-      {isDeploymentWide ? (
-        <BudgetExemptToggle
-          checked={excludeFromBudget}
-          onChange={setExcludeFromBudget}
-        />
-      ) : null}
-      {isDeploymentWide ? (
-        <ServiceKeyFields value={serviceKey} onChange={setServiceKey} />
-      ) : null}
-      <UserMismatchPicker
-        value={rejectUserMismatch}
-        onChange={setRejectUserMismatch}
+      <KeyBudgetSection
+        isDeploymentWide={isDeploymentWide}
+        budgetField={
+          showBudget ? (
+            <KeyBudgetField
+              value={budgetDraft}
+              onChange={setBudgetDraft}
+              budgets={keyBudgets.budgets}
+              isLoading={keyBudgets.isLoading}
+              isExempt={excludeFromBudget}
+              current={
+                ceiling
+                  ? {
+                      budgetId: ceiling.budget_id,
+                      label: ceilingLabel(ceiling, keyBudgets.budgets),
+                    }
+                  : undefined
+              }
+            />
+          ) : null
+        }
+        excludeFromBudget={excludeFromBudget}
+        onExcludeChange={setExcludeFromBudget}
+        serviceKey={serviceKey}
+        onServiceKeyChange={setServiceKey}
       />
+      <KeyFormSection
+        title="Routing"
+        caption="Routing policies set the model an app's requests reach and the backups tried if it fails."
+      >
+        <KeyRoutingSummary routing={routing} />
+      </KeyFormSection>
     </FormDialog>
   )
 }
@@ -1636,6 +1789,7 @@ export function KeysPage() {
       <CreateKeyDialog
         key={openCount}
         isDeploymentWide={isDeploymentWide}
+        manages={manages && !isDeploymentWide}
         isOpen={addOpen}
         onOpenChange={setAddOpen}
         memberLabels={memberLabels}
@@ -1648,6 +1802,7 @@ export function KeysPage() {
         <EditKeyForm
           key={editingKey.id}
           isDeploymentWide={isDeploymentWide}
+          manages={manages}
           apiKey={editingKey}
           onClose={() => setEditing(undefined)}
         />

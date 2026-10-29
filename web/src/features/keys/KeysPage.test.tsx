@@ -85,6 +85,15 @@ function stubRegionWidth(width: number) {
   )
 }
 
+/** Unfold the search tools and user matching under a key form's models. */
+async function openAccessDetails(user: UserEvent) {
+  await user.click(
+    await screen.findByRole("button", {
+      name: /^Search tools and user matching/,
+    }),
+  )
+}
+
 async function chooseAction(user: UserEvent, row: HTMLElement, action: string) {
   await user.click(within(row).getByRole("button", { name: /^Actions for / }))
   await user.click(
@@ -944,7 +953,6 @@ describe("KeysPage", () => {
     // Focus off the picker before reaching for anything else: its popover is
     // open and react-aria aria-hides the rest of the dialog while it is.
     await usr.click(screen.getByLabelText("Name"))
-    await usr.click(screen.getByRole("button", { name: "Advanced" }))
     await usr.click(screen.getByLabelText("Exempt from budget"))
 
     // Out through the guard, which is the only way out of a dirty form.
@@ -953,7 +961,6 @@ describe("KeysPage", () => {
 
     await usr.click(screen.getByRole("button", { name: "Create key" }))
     expect(screen.getByPlaceholderText(/Pick a user/)).toHaveValue("")
-    await usr.click(screen.getByRole("button", { name: "Advanced" }))
     expect(screen.getByLabelText("Exempt from budget")).not.toBeChecked()
     // And nothing is unsaved on arrival, so Escape closes rather than guarding.
     await usr.keyboard("{Escape}")
@@ -971,7 +978,6 @@ describe("KeysPage", () => {
     await usr.click(
       screen.getByRole("button", { name: "Create your first key" }),
     )
-    await usr.click(screen.getByRole("button", { name: "Advanced" }))
     await usr.click(screen.getByLabelText("Exempt from budget"))
 
     await usr.keyboard("{Escape}")
@@ -1129,8 +1135,7 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
-    await user.click(screen.getByRole("button", { name: "Only selected" }))
+    await user.click(screen.getByRole("button", { name: "Only these" }))
     // The scope picker is a catalog combobox, not free text: type to filter, then
     // pick the discovered model.
     await user.type(screen.getByLabelText("Add a model"), "gpt-4o")
@@ -1164,7 +1169,6 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "mlpa")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
     await user.click(screen.getByLabelText("Service key"))
     await user.click(screen.getByRole("button", { name: "Create key" }))
 
@@ -1192,7 +1196,6 @@ describe("KeysPage", () => {
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
     // The exempt toggle lives under the Advanced disclosure.
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
     await user.click(screen.getByLabelText("Exempt from budget"))
     await user.click(screen.getByRole("button", { name: "Create key" }))
 
@@ -1546,7 +1549,6 @@ describe("KeysPage", () => {
       renderPage(<KeysPage />)
 
       await createWithBudget(user)
-      await user.click(screen.getByRole("button", { name: "Advanced" }))
       await user.click(screen.getByLabelText("Exempt from budget"))
       await submitTheCreateDialog(user)
 
@@ -1566,7 +1568,7 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
+    await openAccessDetails(user)
     await pickOption(user, "Mismatched user field", "Always accept")
     await user.click(screen.getByRole("button", { name: "Create key" }))
 
@@ -1727,8 +1729,7 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
-    await user.click(screen.getByRole("button", { name: "Block all" }))
+    await user.click(screen.getByRole("button", { name: "None" }))
     await user.click(screen.getByRole("button", { name: "Create key" }))
 
     const post = fetchMock.mock.calls.find(
@@ -1750,7 +1751,7 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
+    await openAccessDetails(user)
     await user.click(screen.getByRole("button", { name: "No tool" }))
     await user.click(screen.getByRole("button", { name: "Create key" }))
 
@@ -1764,7 +1765,7 @@ describe("KeysPage", () => {
     expect(body.allowed_models).toBeNull()
   })
 
-  it("shows the access it will send after Advanced is hidden and reopened", async () => {
+  it("keeps the access it will send when the search tools are folded away", async () => {
     const fetchMock = mockApi({ keys: [] })
     const user = userEvent.setup()
     renderPage(<KeysPage />)
@@ -1775,12 +1776,15 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
+    await openAccessDetails(user)
     await user.click(screen.getByRole("button", { name: "No tool" }))
-    await user.click(screen.getByRole("button", { name: "Block all" }))
-    await user.click(screen.getByRole("button", { name: "Hide advanced" }))
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
-
+    await user.click(screen.getByRole("button", { name: "None" }))
+    // Folded, the section says what it holds; reopened, it still holds it.
+    await openAccessDetails(user)
+    expect(
+      screen.getByRole("button", { name: /^Search tools and user matching/ }),
+    ).toHaveTextContent("No search tools")
+    await openAccessDetails(user)
     expect(
       screen.getByText(/search tool on \/v1\/search until you change/),
     ).toBeInTheDocument()
@@ -1810,8 +1814,7 @@ describe("KeysPage", () => {
     // Give it an owner so the only reason Create stays disabled is the empty scope.
     await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
-    await user.click(screen.getByRole("button", { name: "Only selected" }))
+    await user.click(screen.getByRole("button", { name: "Only these" }))
 
     expect(screen.getByRole("button", { name: "Create key" })).toBeDisabled()
   })
@@ -1938,12 +1941,11 @@ describe("KeysPage", () => {
     )
     await user.type(screen.getByPlaceholderText(/Pick a user/), "team-checkout")
     await user.keyboard("{Escape}")
-    await user.click(screen.getByRole("button", { name: "Advanced" }))
 
     // The "any" mode is labeled as inheritance, not unrestricted, and the owner's
     // access is surfaced for context (a new id starts unrestricted).
     expect(
-      screen.getByRole("button", { name: "Inherit owner access" }),
+      screen.getByRole("button", { name: "All allowed models" }),
     ).toBeInTheDocument()
     expect(screen.getByText(/starts unrestricted/)).toBeInTheDocument()
   })
@@ -2023,6 +2025,7 @@ describe("KeysPage", () => {
 
     const row = (await screen.findByText("ci-bot")).closest("tr")!
     await chooseAction(user, row, "Edit")
+    await openAccessDetails(user)
     await pickOption(user, "Mismatched user field", "Always accept")
     await user.click(screen.getByRole("button", { name: "Save" }))
 
@@ -2247,7 +2250,6 @@ describe("KeysPage", () => {
 
       // A member cannot write a ceiling, so there is no budget to pick.
       expect(screen.queryByText("Budget (optional)")).not.toBeInTheDocument()
-      await usr.click(screen.getByRole("button", { name: "Advanced" }))
       expect(
         screen.queryByLabelText("Exempt from budget"),
       ).not.toBeInTheDocument()
