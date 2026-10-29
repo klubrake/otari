@@ -3,7 +3,8 @@
 One organization with two members in one workspace, and a second organization.
 The member's key sends a catalog ID with two offerings, one with a single
 offering, a pinned offering, a policy with a backup, a policy without one, an
-alias and imported usage; a second key of theirs is narrowed to one provider.
+alias and imported usage; a second key of theirs is narrowed to one provider,
+which leaves a catalog ID and a policy one candidate each.
 Each assertion names what must be absent as well as what is there.
 """
 
@@ -78,7 +79,7 @@ def routing_client(
                     }
                 }
             ),
-            "aliases": {"fast": _GEMINI},
+            "aliases": {"fast": _CLAUDE},
         }
     )
     yield from build_test_client(config)
@@ -194,7 +195,7 @@ def world(
                 *_rows(alpha_one.id, app, "paired", _ANTHROPIC, count=4),
                 *_rows(alpha_one.id, app, "solo", _GEMINI_OFFERING, count=3),
                 *_rows(alpha_one.id, app, _GEMINI, _GEMINI_OFFERING, count=2),
-                *_rows(alpha_one.id, app, "fast", _GEMINI_OFFERING, count=2),
+                *_rows(alpha_one.id, app, "fast", _ANTHROPIC, count=2),
                 *_rows(alpha_one.id, app, _BEDROCK, _BEDROCK),
                 *_rows(alpha_one.id, app, "retired-name", _ANTHROPIC),
                 # Imported usage reports only the model that ran.
@@ -203,6 +204,7 @@ def world(
                 *_rows(alpha_one.id, app, "old-name", _ANTHROPIC, age=timedelta(days=40)),
                 *_rows(alpha_one.id, app, None, _GEMINI_OFFERING),
                 *_rows(alpha_one.id, narrow, _CLAUDE, _ANTHROPIC, count=2),
+                *_rows(alpha_one.id, narrow, "paired", _ANTHROPIC),
                 *_rows(alpha_one.id, theirs, _CLAUDE, _ANTHROPIC),
                 *_rows(beta_one.id, foreign, _CLAUDE, _ANTHROPIC),
             ]
@@ -254,7 +256,8 @@ def test_each_name_a_key_sent_says_whether_a_failure_has_a_backup(routing_client
     assert coverage(_GEMINI) == (2, "catalog", "no_backup", "single_offering", "gemini")
     assert coverage("paired") == (4, "policy", "has_backup", None, None)
     assert coverage("solo") == (3, "policy", "no_backup", "single_target_policy", "gemini")
-    assert coverage("fast") == (2, "alias", "no_backup", "single_offering", "gemini")
+    # An alias is sent as written, so the catalog ID it names fails over to nothing.
+    assert coverage("fast") == (2, "alias", "no_backup", "single_target_policy", None)
     assert coverage(_BEDROCK) == (1, "pinned", "no_backup", "pinned", "bedrock")
     assert coverage("retired-name") == (1, "unknown", "unknown", None, None)
     assert coverage("claude-opus-x") == (6, "unknown", "subscription", None, None)
@@ -267,11 +270,24 @@ def test_each_name_a_key_sent_says_whether_a_failure_has_a_backup(routing_client
 def test_a_catalog_id_counts_only_the_offerings_the_key_may_reach(routing_client: TestClient, world: _World) -> None:
     [narrow] = _read_as(routing_client, world, "member", [world.keys["narrow"]])
 
-    [claude] = narrow["models"]
+    claude = next(model for model in narrow["models"] if model["name"] == _CLAUDE)
     assert (claude["name"], claude["backup"], claude["reason"], claude["provider"]) == (
         _CLAUDE,
         "no_backup",
         "single_offering",
+        "anthropic",
+    )
+
+
+def test_a_policy_counts_only_the_candidates_the_key_may_reach(routing_client: TestClient, world: _World) -> None:
+    [narrow] = _read_as(routing_client, world, "member", [world.keys["narrow"]])
+
+    # `paired` backs Anthropic with Bedrock, which this key's allow-list refuses,
+    # so its compiled plan has the one candidate.
+    paired = next(model for model in narrow["models"] if model["name"] == "paired")
+    assert (paired["backup"], paired["reason"], paired["provider"]) == (
+        "no_backup",
+        "single_target_policy",
         "anthropic",
     )
 
