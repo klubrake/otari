@@ -5230,7 +5230,7 @@
         {
           "name": "List Automatic Fallbacks",
           "request": {
-            "description": "The models the caller's organization sent requests to in the last 30 days, and the fallback each gets.\n\nA request that sends a model's catalog ID moves to the model's next offering\nwhen one fails, with no policy. Each model lists its offerings in the order\nsuch a request tries them, priced for this organization, with who runs the\nbuilt-in tools on each, beside its traffic: how many requests a backup served,\nand how many named one offering and so had no fallback. The traffic is the\nworkspaces the caller may see in their active organization, by the rule the\norganization's usage reads use.",
+            "description": "The models the caller's organization sent requests to in the last 30 days, and the fallback each gets.\n\nA request that sends a model's catalog ID moves to the model's next offering\nwhen one fails, with no policy. Each model lists its offerings in the order\nsuch a request tries them, priced for this organization, with who runs the\nbuilt-in tools on each, beside its traffic: how many requests a backup served,\nand how many named one offering and so had no fallback. The traffic is the\nworkspaces the caller may see in their active organization, by the rule the\norganization's usage reads use. ``sent_by`` names the keys, and\n``api_key_id`` narrows to them, only among the requests the caller may see\nas someone's: everyone's to an owner or admin, a workspace's to its own\nowners and admins, and otherwise the caller's own.",
             "header": [],
             "method": "GET",
             "url": {
@@ -5244,7 +5244,15 @@
                 "me",
                 "automatic-fallbacks"
               ],
-              "raw": "{{baseUrl}}/api/v1/organizations/me/automatic-fallbacks"
+              "query": [
+                {
+                  "description": "Only traffic these API keys sent, by id; repeatable, at most 50. A key whose requests the caller may not see narrows to nothing rather than being refused.",
+                  "disabled": true,
+                  "key": "api_key_id",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/automatic-fallbacks?api_key_id="
             }
           }
         },
@@ -5351,6 +5359,42 @@
                 "copy"
               ],
               "raw": "{{baseUrl}}/api/v1/organizations/me/routing-policies/copy"
+            }
+          }
+        },
+        {
+          "name": "Read Routing Traffic",
+          "request": {
+            "description": "The last 30 days of traffic sent under each routing policy and alias name the caller may see.\n\nPer workspace, name and person: the requests, the keys that sent them, and\nwhat each step of the plan did (served, or failed and handed on). Whose\ntraffic follows the organization's usage reads: everyone's to an owner or\nadmin, a workspace's to its own owners and admins, and otherwise the\ncaller's own. The names are the stored policies and aliases of the\nworkspaces the caller may see and the config-file ones.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "routing-policies",
+                "traffic"
+              ],
+              "query": [
+                {
+                  "description": "Only stored entries in this workspace. Config-file entries are always included, being deployment-wide. Omit for every workspace this caller may see.",
+                  "disabled": true,
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "Only traffic these API keys sent, by id; repeatable, at most 50. A key whose requests the caller may not see narrows to nothing rather than being refused.",
+                  "disabled": true,
+                  "key": "api_key_id",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/routing-policies/traffic?workspace_id=&api_key_id="
             }
           }
         },
