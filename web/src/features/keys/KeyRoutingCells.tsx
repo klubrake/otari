@@ -1,6 +1,7 @@
+import { Link } from "@tanstack/react-router"
 import { FiAlertTriangle } from "react-icons/fi"
 import type { KeyRouting, KeyRoutingModel } from "@/client"
-import { TextButton } from "@/design-system/actions/TextButton"
+import { TEXT_LINK_CLASS, TextButton } from "@/design-system/actions/TextButton"
 import { Tooltip } from "@/design-system/overlays/Tooltip"
 import type { KeyModelsSummary } from "./keyModels"
 
@@ -134,5 +135,76 @@ export function KeyMostUsedCell({
       </span>
       <KeyBackupLine model={top} />
     </span>
+  )
+}
+
+/** How many of the names a key sent have no backup, as a sentence. */
+function backupSentence(routing: KeyRouting): string {
+  if (routing.model_count === 0) return "No requests in the last 30 days"
+  if (routing.no_backup_count === 0) return "Every model it sent has one"
+  return `${routing.no_backup_count} of ${modelCount(routing.model_count)} have none`
+}
+
+/**
+ * The Routing part of a key's Edit: what a key's requests are routed by, which
+ * a key does not own. Policies are chosen by the name a request sends, so this
+ * reports the policies the key sent and how many of its names have no backup,
+ * the three most used of those, and where routing is set.
+ */
+export function KeyRoutingSummary({
+  routing,
+}: {
+  routing: KeyRouting | undefined
+}) {
+  if (!routing) {
+    return <p className="text-caption">Reading what this key sent…</p>
+  }
+  const missing = routing.models.filter((model) => model.backup === "no_backup")
+  return (
+    <div className="flex flex-col gap-3">
+      <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-y-1 text-sm">
+        <dt className="text-subtle">Policies sent (30d)</dt>
+        <dd>
+          {routing.policies.length > 0
+            ? routing.policies
+                .map(
+                  (policy) =>
+                    `${policy.name} (${policy.requests.toLocaleString("en-US")})`,
+                )
+                .join(", ")
+            : "None, requests name models directly"}
+        </dd>
+        <dt className="text-subtle">Backups</dt>
+        <dd className={routing.no_backup_count > 0 ? "text-warning" : ""}>
+          {backupSentence(routing)}
+        </dd>
+      </dl>
+      {missing.length > 0 ? (
+        <ul className="flex flex-col">
+          {missing.slice(0, 3).map((model) => (
+            <li
+              key={model.name}
+              className="grid grid-cols-[1rem_minmax(0,1fr)_auto] items-baseline gap-2 border-t border-border-subtle py-1.5"
+            >
+              <FiAlertTriangle aria-hidden className="size-3 text-warning" />
+              <span className="min-w-0 truncate">
+                <span className="text-mono-caption text-foreground">
+                  {model.name}
+                </span>{" "}
+                <span className="text-caption">· {noBackupReason(model)}</span>
+              </span>
+              <span className="text-mono-caption text-subtle">
+                {model.requests.toLocaleString("en-US")} req
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <p className="text-sm">
+        <Link to="/routing" className={TEXT_LINK_CLASS}>
+          Set up routing
+        </Link>
+      </p>
+    </div>
   )
 }
