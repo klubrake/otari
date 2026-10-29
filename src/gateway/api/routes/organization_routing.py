@@ -284,10 +284,11 @@ async def _member_policy_scope(
     """The workspace and the attribution id a member-scoped policy write or delete acts on, refusing what it may not.
 
     Naming oneself takes only seeing the workspace. Naming someone else takes
-    managing the organization, and (unless ``require_active`` is off, for a
-    delete that cleans up after someone who left) that person being an active
-    member of it who may see the workspace: anyone else's id is the 404 an
-    unknown one is.
+    managing the organization, and that person being an active member of it who
+    may see the workspace. With ``require_active`` off, for a delete that cleans
+    up after someone who left, any membership of theirs will do, which is the
+    set the list shows. Anyone else's id is the 404 an unknown one is, so a row
+    the operator scoped to a non-member is never destroyed from here.
     """
     if member_id == caller.identity.id:
         owner = caller.identity
@@ -301,7 +302,11 @@ async def _member_policy_scope(
         is_member = found is not None and await caller.organizations.user_has_active_membership(
             organization_id=caller.organization.id, user_id=found.id
         )
-        if require_active and not is_member:
+        was_member = is_member or (
+            await caller.organizations.members.get_by_organization_and_user(caller.organization.id, member_id)
+            is not None
+        )
+        if not (is_member if require_active else was_member):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such member in this organization.")
         owner = found if found is not None and is_member else caller.identity
     workspace = await resolve_workspace_in_organization(
