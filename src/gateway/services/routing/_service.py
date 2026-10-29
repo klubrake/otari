@@ -13,6 +13,7 @@ from gateway.services.api_keys import KeyReach
 from gateway.services.catalog import catalog_models, resolve_catalog_offerings
 from gateway.services.model_access import is_model_allowed
 from gateway.services.policy_store import resolve_effective_policy
+from gateway.services.routing.compiler import reachable_candidates
 from gateway.services.tools import provider_tools
 from gateway.services.usage import KeyNameTraffic, UsageReadService
 from gateway.services.usage_and_telemetry import ServedTraffic, UsageService
@@ -136,8 +137,9 @@ class RoutingService:
         it resolved when sent: a routing policy in force for the key's owner in its
         workspace, then an alias, then a catalog ID, whose offerings are narrowed
         to the ones the key may reach. A policy has a backup when it can try a
-        second candidate; a catalog ID when two offerings serve it. A pinned
-        ``provider:model`` never has one. A name every request of which was
+        second candidate the key may reach; a catalog ID when two offerings serve
+        it. An alias's target is sent as written, so like a pinned
+        ``provider:model`` it never has one. A name every request of which was
         imported is a subscription's, which the gateway never routed.
         """
         now = datetime.now(UTC)
@@ -179,30 +181,40 @@ class RoutingService:
     def _coverage(self, key: KeyReach, name: str) -> _Coverage:
         policy = resolve_effective_policy(self._config, name, key.user_id, workspace_id=key.workspace_id)
         if policy is not None:
-            pool = policy.router_candidates
-            if (len(pool) if pool else 1) + len(policy.on_failure) > 1:
+            # The candidates a request from this key could try, after the same
+            # allow-list and organization-key filters its compiled plan applies.
+            reachable = reachable_candidates(
+                self._config,
+                name,
+                [*(policy.router_candidates or [policy.default_target]), *policy.on_failure],
+                allowlist=key.allowlist,
+                workspace_id=key.workspace_id,
+            )
+            if len(reachable) > 1:
                 return _Coverage("policy", "has_backup")
-            return _Coverage("policy", "no_backup", "single_target_policy", _instance(policy.default_target))
+            if reachable:
+                return _Coverage("policy", "no_backup", "single_target_policy", reachable[0].instance)
+            return _Coverage("policy", "no_backup", "no_allowed_offering")
         target = resolve_effective_alias(self._config, name, key.user_id, workspace_id=key.workspace_id)
         if target is not None:
-            return self._model_coverage(key, target, kind="alias")
-        return self._model_coverage(key, name, kind=None)
+            # A one-target policy: the request path never fails an alias over to a catalog ID's other offerings.
+            return _Coverage("alias", "no_backup", "single_target_policy", _instance(target))
+        return self._model_coverage(key, name)
 
-    def _model_coverage(self, key: KeyReach, selector: str, *, kind: NameKind | None) -> _Coverage:
+    def _model_coverage(self, key: KeyReach, selector: str) -> _Coverage:
         offerings = resolve_catalog_offerings(
             selector, workspace_id=key.workspace_id, organization_id=key.organization_id
         )
         if offerings:
             reachable = [offering for offering in offerings if is_model_allowed(key.allowlist, offering)]
-            name_kind: NameKind = kind or "catalog"
             if len(reachable) > 1:
-                return _Coverage(name_kind, "has_backup")
+                return _Coverage("catalog", "has_backup")
             if reachable:
-                return _Coverage(name_kind, "no_backup", "single_offering", _instance(reachable[0]))
-            return _Coverage(name_kind, "no_backup", "no_allowed_offering")
+                return _Coverage("catalog", "no_backup", "single_offering", _instance(reachable[0]))
+            return _Coverage("catalog", "no_backup", "no_allowed_offering")
         if ":" in selector:
-            return _Coverage(kind or "pinned", "no_backup", "pinned", _instance(selector))
-        return _Coverage(kind or "unknown", "unknown")
+            return _Coverage("pinned", "no_backup", "pinned", _instance(selector))
+        return _Coverage("unknown", "unknown")
 
     async def automatic_fallbacks(
         self, *, organization_id: uuid.UUID, workspace_ids: Collection[uuid.UUID]

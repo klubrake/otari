@@ -161,8 +161,8 @@ class KeyModelPublic(BaseModel):
     )
     reason: Literal["single_offering", "single_target_policy", "pinned", "no_allowed_offering"] | None = Field(
         description="Why there is no backup, when `backup` is `no_backup`: one offering serves it among those the "
-        "key may reach, a policy with one candidate, a request that named the provider, or no offering the key "
-        "may reach."
+        "key may reach, a policy or alias with one candidate, a request that named the provider, or no offering "
+        "the key may reach."
     )
     provider: str | None = Field(description="The one instance that serves the name, when exactly one does.")
 
