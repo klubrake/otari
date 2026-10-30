@@ -305,7 +305,10 @@ request schemas.
 - Targets must be concrete provider or instance selectors. Policies and aliases
   cannot chain.
 - Policy names cannot contain `:` or `/` or collide with an alias or provider
-  instance.
+  instance. On the organization routes, a name collides only with the
+  configured entries and those stored in the workspace being written, since a
+  name never resolves outside its workspace; another organization's names are
+  neither refused nor reported. The operator routes check every workspace.
 - `routing.enabled: false` disables policy resolution but still validates the
   configured policies.
 - Caller model allow-lists apply to every candidate.

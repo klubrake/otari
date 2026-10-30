@@ -94,9 +94,9 @@ from gateway.models.tenancy import User as TenancyUser
 from gateway.models.tenancy import Workspace
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.schemas.routing import AutomaticFallbackPublic, AutomaticFallbacksResponse
-from gateway.services.alias_service import all_alias_names
+from gateway.services.alias_service import alias_names_in
 from gateway.services.model_access import is_model_allowed
-from gateway.services.policy_store import all_policy_names
+from gateway.services.policy_store import policy_names_in
 from gateway.services.provider_kwargs import normalize_pricing_key
 from gateway.services.routing import FALLBACK_WINDOW
 from gateway.services.tenancy import OrganizationService
@@ -167,7 +167,9 @@ async def _writable_workspace_id(
         organization=organization,
         organizations=organizations,
     )
-    await _require_reachable_targets(db, config, user=user, targets=targets, model_provider=model_provider)
+    await _require_reachable_targets(
+        db, config, user=user, workspace_id=workspace.id, targets=targets, model_provider=model_provider
+    )
     return workspace.id
 
 
@@ -176,6 +178,7 @@ async def _require_reachable_targets(
     config: GatewayConfig,
     *,
     user: TenancyUser,
+    workspace_id: uuid.UUID,
     targets: list[str],
     model_provider: ModelProviderPort | None,
 ) -> None:
@@ -189,11 +192,13 @@ async def _require_reachable_targets(
     A target that names another alias or policy is left alone, because the write
     helpers refuse chaining a step later and say so precisely. Checking it here
     first would answer "not available to this organization", which is true of an
-    indirection name and useless for fixing it.
+    indirection name and useless for fixing it. Only the workspace's own names
+    count as one, so another organization's alias is answered like any model the
+    organization cannot reach.
     """
     if not targets:
         return
-    indirections = all_alias_names(config) | all_policy_names(config)
+    indirections = alias_names_in(config, workspace_id) | policy_names_in(config, workspace_id)
     allowlist = await resolve_session_model_allowlist(db, config, user=user, model_provider=model_provider)
     unreachable = [
         target
@@ -336,7 +341,7 @@ async def set_organization_routing_policy(
         targets=validated_spec(request.name, request.spec).static_selectors(),
         model_provider=model_provider,
     )
-    return await upsert_policy_in_workspace(request, db, config, workspace_id=workspace_id)
+    return await upsert_policy_in_workspace(request, db, config, workspace_id=workspace_id, tenant_names=True)
 
 
 @policies_router.delete("/{name:path}", status_code=status.HTTP_204_NO_CONTENT)
@@ -420,7 +425,7 @@ async def set_organization_alias(
         targets=[request.target],
         model_provider=model_provider,
     )
-    return await upsert_alias_in_workspace(request, db, config, workspace_id=workspace_id)
+    return await upsert_alias_in_workspace(request, db, config, workspace_id=workspace_id, tenant_names=True)
 
 
 @aliases_router.delete("/{name:path}", status_code=status.HTTP_204_NO_CONTENT)

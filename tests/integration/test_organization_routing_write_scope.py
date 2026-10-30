@@ -451,3 +451,75 @@ def test_the_alias_list_omits_user_scoped_rows_too(
     }
     assert ("shared-alias", None) in scopes
     assert ("shared-alias", "alias-user") not in scopes
+
+
+# =============================================================================
+# Names another organization uses (otari#78)
+# =============================================================================
+
+
+@pytest.fixture
+def beta_names(client: TestClient, world: _World) -> None:
+    """Beta stores an alias and a policy under names Alpha's admin will try."""
+    beta = {"workspace_id": str(world.workspaces["beta_one"])}
+    alias = _post(client, world, "beta_owner", _ALIASES, {"name": "beta-alias", "target": _BETA_TARGET, **beta})
+    assert alias.status_code == status.HTTP_200_OK, alias.text
+    policy = _post(
+        client,
+        world,
+        "beta_owner",
+        _POLICIES,
+        {"name": "beta-policy", "spec": {"select": [{"default": _BETA_TARGET}]}, **beta},
+    )
+    assert policy.status_code == status.HTTP_200_OK, policy.text
+
+
+def test_another_organizations_names_are_free_here(client: TestClient, world: _World, beta_names: None) -> None:
+    """A name resolves only in its own workspace, so Beta's do not collide here, and refusing would leak them."""
+    policy = _post(client, world, "alpha_admin", _POLICIES, _policy_body(world, name="beta-alias"))
+    assert policy.status_code == status.HTTP_200_OK, policy.text
+    alias = _post(client, world, "alpha_admin", _ALIASES, _alias_body(world, name="beta-policy"))
+    assert alias.status_code == status.HTTP_200_OK, alias.text
+
+
+def test_another_organizations_name_as_a_target_reads_like_any_unreachable_model(
+    client: TestClient, world: _World, beta_names: None
+) -> None:
+    """Answered as the unknown name is, so the refusal says nothing about whether Beta uses it."""
+    details = []
+    for target in ("beta-alias", "no-such-name-anywhere"):
+        refused = _post(
+            client, world, "alpha_admin", _POLICIES, _policy_body(world, name=f"via-{target}", target=target)
+        )
+        assert refused.status_code == status.HTTP_400_BAD_REQUEST, refused.text
+        details.append(refused.json()["detail"].replace(target, "<target>"))
+    assert details[0] == details[1]
+    assert "not available to this organization" in details[0]
+
+
+def test_a_name_in_the_workspace_itself_is_still_refused(client: TestClient, world: _World) -> None:
+    """The collision the check exists for, in the one workspace where it can happen."""
+    alias = _post(client, world, "alpha_admin", _ALIASES, _alias_body(world, name="mine"))
+    assert alias.status_code == status.HTTP_200_OK, alias.text
+    refused = _post(client, world, "alpha_admin", _POLICIES, _policy_body(world, name="mine"))
+    assert refused.status_code == status.HTTP_400_BAD_REQUEST, refused.text
+    assert "already an alias" in refused.json()["detail"]
+
+    policy = _post(client, world, "alpha_admin", _POLICIES, _policy_body(world, name="mine-too"))
+    assert policy.status_code == status.HTTP_200_OK, policy.text
+    refused = _post(client, world, "alpha_admin", _ALIASES, _alias_body(world, name="mine-too"))
+    assert refused.status_code == status.HTTP_400_BAD_REQUEST, refused.text
+    assert "already a routing policy" in refused.json()["detail"]
+
+
+def test_the_operator_still_checks_names_across_the_deployment(
+    client: TestClient, world: _World, beta_names: None, master_key_header: dict[str, str]
+) -> None:
+    """The operator sees every tenant anyway, and their check keeps its deployment-wide reach."""
+    refused = client.post(
+        f"{API_ROOT}/routing/policies",
+        json={"name": "beta-alias", "spec": {"select": [{"default": _ALPHA_TARGET}]}},
+        headers=master_key_header,
+    )
+    assert refused.status_code == status.HTTP_400_BAD_REQUEST, refused.text
+    assert "already an alias" in refused.json()["detail"]
