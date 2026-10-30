@@ -11,9 +11,8 @@ from gateway.core.config import GatewayConfig
 from gateway.services.alias_service import resolve_effective_alias
 from gateway.services.api_keys import KeyReach
 from gateway.services.catalog import catalog_models, resolve_catalog_offerings
-from gateway.services.model_access import is_model_allowed
 from gateway.services.policy_store import resolve_effective_policy
-from gateway.services.routing.compiler import reachable_candidates
+from gateway.services.routing.compiler import compile_catalog_plan, reachable_candidates
 from gateway.services.tools import provider_tools
 from gateway.services.usage import KeyNameTraffic, UsageReadService
 from gateway.services.usage_and_telemetry import ServedTraffic, UsageService
@@ -136,7 +135,7 @@ class RoutingService:
         A name is judged as a request from the key would resolve it now, not as
         it resolved when sent: a routing policy in force for the key's owner in its
         workspace, then an alias, then a catalog ID, whose offerings are narrowed
-        to the ones the key may reach. A policy has a backup when it can try a
+        to the ones a request from the key may reach. A policy has a backup when it can try a
         second candidate the key may reach; a catalog ID when two offerings serve
         it. An alias's target is sent as written, so like a pinned
         ``provider:model`` it never has one. A name every request of which was
@@ -206,11 +205,19 @@ class RoutingService:
             selector, workspace_id=key.workspace_id, organization_id=key.organization_id
         )
         if offerings:
-            reachable = [offering for offering in offerings if is_model_allowed(key.allowlist, offering)]
-            if len(reachable) > 1:
+            # The plan a request sending the catalog ID compiles to: the same
+            # filters (the key's allow-list, the organization key's restriction in
+            # this workspace) and the same fallback to the plain path.
+            plan = compile_catalog_plan(
+                self._config, selector, user_id=key.user_id, allowlist=key.allowlist, workspace_id=key.workspace_id
+            )
+            if plan is not None and len(plan.attempts) > 1:
                 return _Coverage("catalog", "has_backup")
+            reachable = reachable_candidates(
+                self._config, selector, offerings, allowlist=key.allowlist, workspace_id=key.workspace_id
+            )
             if reachable:
-                return _Coverage("catalog", "no_backup", "single_offering", _instance(reachable[0]))
+                return _Coverage("catalog", "no_backup", "single_offering", reachable[0].instance)
             return _Coverage("catalog", "no_backup", "no_allowed_offering")
         if ":" in selector:
             return _Coverage("pinned", "no_backup", "pinned", _instance(selector))
