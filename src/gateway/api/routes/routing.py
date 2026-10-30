@@ -34,10 +34,11 @@ from gateway.core.surface import Surface
 from gateway.log_config import logger
 from gateway.models.routing import PolicySpec, RoutingPolicy
 from gateway.repositories.users_repository import get_active_user
-from gateway.services.alias_service import all_alias_names
+from gateway.services.alias_service import alias_names_in, all_alias_names
 from gateway.services.policy_store import (
     all_policy_names,
     list_stored_policies,
+    policy_names_in,
     refresh_policy_cache,
     resolve_effective_policy,
 )
@@ -236,7 +237,14 @@ def validated_spec(name: str, spec: dict[str, Any]) -> PolicySpec:
         ) from exc
 
 
-def _validate_write(config: GatewayConfig, name: str, spec: PolicySpec, user_id: str | None) -> None:
+def _validate_write(
+    config: GatewayConfig,
+    name: str,
+    spec: PolicySpec,
+    user_id: str | None,
+    *,
+    names_in: uuid.UUID | None = None,
+) -> None:
     """Apply the startup policy rules to a runtime write, as a 400.
 
     A configured policy wins over a *workspace-wide* stored one during resolution,
@@ -244,7 +252,15 @@ def _validate_write(config: GatewayConfig, name: str, spec: PolicySpec, user_id:
     never take effect. Refusing is the only answer that does not lie about what the gateway
     will do. A user-scoped policy is exempt: it outranks both other layers, so
     shadowing a configured name is a working override rather than dead data.
+
+    ``names_in`` limits the alias and chaining checks to the names in force in
+    that workspace, for a tenant's write: the deployment-wide sets would answer
+    for every other organization too, so a refusal would tell the caller a name
+    is taken somewhere they cannot see. ``None`` keeps the operator's check,
+    which spans the deployment.
     """
+    aliases = all_alias_names(config) if names_in is None else alias_names_in(config, names_in)
+    policies = all_policy_names(config) if names_in is None else policy_names_in(config, names_in)
     if user_id is None and name in config.routing.policies:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -254,7 +270,7 @@ def _validate_write(config: GatewayConfig, name: str, spec: PolicySpec, user_id:
                 "edit config.yml."
             ),
         )
-    if name in all_alias_names(config):
+    if name in aliases:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -266,7 +282,7 @@ def _validate_write(config: GatewayConfig, name: str, spec: PolicySpec, user_id:
     # Chaining is refused across every scope, matching the alias rule: a policy
     # pointing at another policy or an alias is just as broken whichever side each
     # came from, and resolution is single-pass.
-    indirections = all_policy_names(config) | all_alias_names(config) | {name}
+    indirections = policies | aliases | {name}
     for selector in spec.static_selectors():
         try:
             config.validate_alias(name, selector, alias_names=indirections, hosted_implementation=hosted_implementation)
@@ -441,6 +457,7 @@ async def upsert_policy_in_workspace(
     config: GatewayConfig,
     *,
     workspace_id: uuid.UUID,
+    tenant_names: bool = False,
 ) -> PolicyResponse:
     """Create or update a stored policy in an already-resolved workspace.
 
@@ -461,12 +478,15 @@ async def upsert_policy_in_workspace(
     the new spec. The new name is validated exactly as a fresh one is, because a
     rename can walk a policy into every collision a create can. Sending the field
     asserts the named policy is stored, so it never falls back to creating one.
+
+    ``tenant_names`` checks the name against this workspace's names alone; see
+    ``_validate_write``.
     """
     if request.user_id is not None:
         await _require_user(db, request.user_id)
     spec = validated_spec(request.name, request.spec)
     await refresh_policy_cache(db)
-    _validate_write(config, request.name, spec, request.user_id)
+    _validate_write(config, request.name, spec, request.user_id, names_in=workspace_id if tenant_names else None)
     await _validate_router_pricing(config, db, spec, workspace_id)
 
     # Both scopes are part of the identity: the upsert must not turn one
