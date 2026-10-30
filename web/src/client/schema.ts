@@ -3947,6 +3947,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/organizations/me/routing-policies/unpriced": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Unpriced Router Candidates
+         * @description Which of these models have no pricing, so a Smart router naming them would be refused.
+         *
+         *     The check the write runs, asked before it: the dashboard marks each pool model
+         *     that needs a price and holds the save, rather than letting it fail. Any member
+         *     who may see the workspace may ask, since a member may write a policy of their
+         *     own there; the answer names no price, only whether one exists.
+         */
+        get: operations["routing-read_unpriced_router_candidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organizations/me/routing-policies/{name}": {
         parameters: {
             query?: never;
@@ -18151,6 +18176,17 @@ export interface components {
             [key: string]: unknown;
         };
         /**
+         * UnpricedSelectorsResponse
+         * @description Which models a router that scores by cost could not price.
+         */
+        UnpricedSelectorsResponse: {
+            /**
+             * Unpriced
+             * @description The selectors asked about that have no pricing in the workspace, in the order asked. A Smart router (`knn`) policy naming one is refused on save.
+             */
+            unpriced: string[];
+        };
+        /**
          * UpdateBudgetRequest
          * @description Request model for updating a budget.
          */
@@ -26761,6 +26797,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RoutingTrafficResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "routing-read_unpriced_router_candidates": {
+        parameters: {
+            query: {
+                /** @description The workspace a policy naming these models would be stored in. */
+                workspace_id: string;
+                /** @description A model a Smart router pool would name, as `provider:model`. Repeat it, up to a policy's cap on models. */
+                selector: string[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnpricedSelectorsResponse"];
                 };
             };
             /** @description Validation Error */

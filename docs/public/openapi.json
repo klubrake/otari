@@ -22361,6 +22361,24 @@
         "title": "UnitChargeLine",
         "type": "object"
       },
+      "UnpricedSelectorsResponse": {
+        "description": "Which models a router that scores by cost could not price.",
+        "properties": {
+          "unpriced": {
+            "description": "The selectors asked about that have no pricing in the workspace, in the order asked. A Smart router (`knn`) policy naming one is refused on save.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Unpriced",
+            "type": "array"
+          }
+        },
+        "required": [
+          "unpriced"
+        ],
+        "title": "UnpricedSelectorsResponse",
+        "type": "object"
+      },
       "UpdateBudgetRequest": {
         "description": "Request model for updating a budget.",
         "properties": {
@@ -40014,6 +40032,76 @@
           }
         ],
         "summary": "Read Routing Traffic",
+        "tags": [
+          "routing"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/routing-policies/unpriced": {
+      "get": {
+        "description": "Which of these models have no pricing, so a Smart router naming them would be refused.\n\nThe check the write runs, asked before it: the dashboard marks each pool model\nthat needs a price and holds the save, rather than letting it fail. Any member\nwho may see the workspace may ask, since a member may write a policy of their\nown there; the answer names no price, only whether one exists.",
+        "operationId": "routing-read_unpriced_router_candidates",
+        "parameters": [
+          {
+            "description": "The workspace a policy naming these models would be stored in.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "description": "The workspace a policy naming these models would be stored in.",
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A model a Smart router pool would name, as `provider:model`. Repeat it, up to a policy's cap on models.",
+            "in": "query",
+            "name": "selector",
+            "required": true,
+            "schema": {
+              "description": "A model a Smart router pool would name, as `provider:model`. Repeat it, up to a policy's cap on models.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 5,
+              "minItems": 1,
+              "title": "Selector",
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnpricedSelectorsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Read Unpriced Router Candidates",
         "tags": [
           "routing"
         ]

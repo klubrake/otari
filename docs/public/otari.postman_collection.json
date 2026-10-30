@@ -5399,6 +5399,42 @@
           }
         },
         {
+          "name": "Read Unpriced Router Candidates",
+          "request": {
+            "description": "Which of these models have no pricing, so a Smart router naming them would be refused.\n\nThe check the write runs, asked before it: the dashboard marks each pool model\nthat needs a price and holds the save, rather than letting it fail. Any member\nwho may see the workspace may ask, since a member may write a policy of their\nown there; the answer names no price, only whether one exists.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "me",
+                "routing-policies",
+                "unpriced"
+              ],
+              "query": [
+                {
+                  "description": "The workspace a policy naming these models would be stored in.",
+                  "disabled": false,
+                  "key": "workspace_id",
+                  "value": ""
+                },
+                {
+                  "description": "A model a Smart router pool would name, as `provider:model`. Repeat it, up to a policy's cap on models.",
+                  "disabled": false,
+                  "key": "selector",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/api/v1/organizations/me/routing-policies/unpriced?workspace_id=&selector="
+            }
+          }
+        },
+        {
           "name": "Delete Organization Routing Policy",
           "request": {
             "description": "Delete a stored policy from one of the organization's workspaces.\n\nA workspace-wide policy is an owner's or admin's to delete. A member deletes\ntheir own, whatever ``members_create_policies`` says, and an owner or admin\nanyone's.",
