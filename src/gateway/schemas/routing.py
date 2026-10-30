@@ -190,3 +190,12 @@ class RoutingTrafficResponse(BaseModel):
         description="One entry per workspace, name and person: everyone's to an owner or admin, a workspace's to "
         "its own owners and admins, and otherwise the caller's own alone."
     )
+
+
+class UnpricedSelectorsResponse(BaseModel):
+    """Which models a router that scores by cost could not price."""
+
+    unpriced: list[str] = Field(
+        description="The selectors asked about that have no pricing in the workspace, in the order asked. A Smart "
+        "router (`knn`) policy naming one is refused on save."
+    )

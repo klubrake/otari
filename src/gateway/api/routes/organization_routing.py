@@ -91,7 +91,7 @@ from gateway.core.config import GatewayConfig
 from gateway.core.sql import MAX_FILTER_VALUES
 from gateway.log_config import logger
 from gateway.models.providers import ModelAlias
-from gateway.models.routing import PolicySpec, RoutingPolicy
+from gateway.models.routing import MAX_CANDIDATES, PolicySpec, RoutingPolicy
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.tenancy import Workspace
 from gateway.ports.model_provider_port import ModelProviderPort
@@ -100,12 +100,13 @@ from gateway.schemas.routing import (
     AutomaticFallbacksResponse,
     NameTrafficPublic,
     RoutingTrafficResponse,
+    UnpricedSelectorsResponse,
 )
 from gateway.services.alias_service import all_alias_names
 from gateway.services.model_access import is_model_allowed
 from gateway.services.policy_store import all_policy_names
 from gateway.services.provider_kwargs import normalize_pricing_key
-from gateway.services.routing import FALLBACK_WINDOW
+from gateway.services.routing import FALLBACK_WINDOW, unpriced_router_candidates
 from gateway.services.tenancy import OrganizationService
 from gateway.services.tenancy.authorization import (
     VisibleWorkspaceScope,
@@ -390,6 +391,41 @@ async def read_routing_traffic(
     return RoutingTrafficResponse(
         window_days=FALLBACK_WINDOW.days,
         names=[NameTrafficPublic.model_validate(item) for item in traffic],
+    )
+
+
+@policies_router.get("/unpriced")
+async def read_unpriced_router_candidates(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    config: Annotated[GatewayConfig, Depends(get_config)],
+    current_identity: CurrentIdentity,
+    workspace_id: Annotated[
+        uuid.UUID, Query(description="The workspace a policy naming these models would be stored in.")
+    ],
+    selector: Annotated[
+        list[str],
+        Query(
+            min_length=1,
+            max_length=MAX_CANDIDATES,
+            description="A model a Smart router pool would name, as `provider:model`. Repeat it, up to a policy's "
+            "cap on models.",
+        ),
+    ],
+) -> UnpricedSelectorsResponse:
+    """Which of these models have no pricing, so a Smart router naming them would be refused.
+
+    The check the write runs, asked before it: the dashboard marks each pool model
+    that needs a price and holds the save, rather than letting it fail. Any member
+    who may see the workspace may ask, since a member may write a policy of their
+    own there; the answer names no price, only whether one exists.
+    """
+    organizations = OrganizationService(db, membership_listener=None)
+    organization = await organizations.get_active_organization_for_user(current_identity)
+    workspace = await resolve_workspace_in_organization(
+        db, user=current_identity, workspace_id=workspace_id, organization=organization, organizations=organizations
+    )
+    return UnpricedSelectorsResponse(
+        unpriced=await unpriced_router_candidates(config, db, selector, workspace_id=workspace.id)
     )
 
 

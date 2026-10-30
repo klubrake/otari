@@ -297,6 +297,12 @@ shows follows the organization's usage reads: everyone's to an owner or admin, a
 workspace's to its own owners and admins, and otherwise the caller's own, so a
 member never sees a colleague's keys there.
 
+A Smart router (`knn`) scores by cost, so a write naming a pool model with no
+pricing is refused. `GET /api/v1/organizations/me/routing-policies/unpriced`
+asks the same question first: given a workspace the caller may see and up to
+five `selector` values, it lists the ones with no pricing there, which is how
+the dashboard marks them before Save.
+
 The authenticating API key determines which workspace resolves a policy.
 User-scoped entries take precedence over wider entries. A config-file policy
 cannot be changed through the API.
