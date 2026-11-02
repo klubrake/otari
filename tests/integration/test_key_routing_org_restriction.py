@@ -63,10 +63,12 @@ def world(
             session, email="member@alpha.test", organization_id=alpha.id, workspace_ids=(alpha_one.id,)
         )
         app = _key(session, alpha_one.id, member)
+        bedrock_only = _key(session, alpha_one.id, member, allowed_models=["bedrock:*"])
         session.add_all(_rows(alpha_one.id, app, _CLAUDE, "anthropic:claude-x-1", count=3))
+        session.add_all(_rows(alpha_one.id, bedrock_only, _CLAUDE, "bedrock:anthropic.claude-x-1", count=2))
         session.commit()
         selectors.set_selector_index(selectors.build_selector_index(_ROWS, _IDENTITIES, names=_NAMES))
-        return {"workspace": alpha_one.id, "cookie": cookie, "key": app}
+        return {"workspace": alpha_one.id, "cookie": cookie, "key": app, "bedrock_only": bedrock_only}
     finally:
         session.close()
 
@@ -83,8 +85,8 @@ def organization_keys(world: dict[str, Any]) -> Iterator[tuple[uuid.UUID, str]]:
         org_store._org_model_restrictions.pop(key, None)
 
 
-def _claude(client: TestClient, world: dict[str, Any]) -> dict[str, Any]:
-    response = client.get(_PATH, params={"api_key_id": [world["key"]]}, cookies={SESSION_COOKIE_NAME: world["cookie"]})
+def _claude(client: TestClient, world: dict[str, Any], key: str = "key") -> dict[str, Any]:
+    response = client.get(_PATH, params={"api_key_id": [world[key]]}, cookies={SESSION_COOKIE_NAME: world["cookie"]})
     assert response.status_code == status.HTTP_200_OK, response.text
     [routing] = response.json()["keys"]
     [claude] = routing["models"]
@@ -110,3 +112,16 @@ def test_an_offering_the_organization_key_refuses_is_no_backup(
         "single_offering",
         "bedrock",
     )
+
+
+def test_with_no_plan_the_read_judges_the_offering_the_plain_path_serves(
+    undeclared_client: TestClient, world: dict[str, Any]
+) -> None:
+    """No key holds a Bedrock credential, so no failover plan compiles and a request takes the plain path.
+
+    That path serves the catalog ID's first offering, Anthropic, which this key's
+    `bedrock:*` list refuses: the request is refused, so the read must not offer
+    Bedrock as the model that serves.
+    """
+    claude = _claude(undeclared_client, world, "bedrock_only")
+    assert (claude["backup"], claude["reason"], claude["provider"]) == ("no_backup", "no_allowed_offering", None)

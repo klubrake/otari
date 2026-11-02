@@ -213,8 +213,11 @@ class RoutingService:
             )
             if plan is not None and len(plan.attempts) > 1:
                 return _Coverage("catalog", "has_backup")
+            if plan is not None:
+                return _Coverage("catalog", "no_backup", "single_offering", plan.attempts[0].instance)
+            # No plan: the request takes the plain path, which serves the first offering alone.
             reachable = reachable_candidates(
-                self._config, selector, offerings, allowlist=key.allowlist, workspace_id=key.workspace_id
+                self._config, selector, offerings[:1], allowlist=key.allowlist, workspace_id=key.workspace_id
             )
             if reachable:
                 return _Coverage("catalog", "no_backup", "single_offering", reachable[0].instance)
