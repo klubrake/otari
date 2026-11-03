@@ -1277,25 +1277,6 @@ function StatusMark({ apiKey }: { apiKey: ApiKey }) {
  * text joined by a middle dot and not as chips. What the key may reach has a
  * lane of its own (Models), so it is not repeated here.
  */
-/** The phone row's Most-used line: the name and its backup state on one line. */
-function MostUsedLine({ routing }: { routing: KeyRouting | undefined }) {
-  const top = routing?.models[0]
-  if (!top) return null
-  return (
-    <span className="flex min-w-0 items-center gap-1.5">
-      <span className="truncate text-mono-caption text-foreground">
-        {top.name}
-      </span>
-      <span aria-hidden="true" className="text-caption text-subtle">
-        ·
-      </span>
-      <span className="shrink-0">
-        <KeyBackupLine model={top} />
-      </span>
-    </span>
-  )
-}
-
 function KeyStatusLine({
   apiKey,
   owner,
@@ -1357,6 +1338,25 @@ function KeyStatusLine({
           </span>
         </Fragment>
       ))}
+    </span>
+  )
+}
+
+/** The phone row's Most-used line: the name and its backup state on one line. */
+function MostUsedLine({ routing }: { routing: KeyRouting | undefined }) {
+  const top = routing?.models[0]
+  if (!top) return null
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="truncate text-mono-caption text-foreground">
+        {top.name}
+      </span>
+      <span aria-hidden="true" className="text-caption text-subtle">
+        ·
+      </span>
+      <span className="shrink-0">
+        <KeyBackupLine model={top} />
+      </span>
     </span>
   )
 }
