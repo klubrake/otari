@@ -101,9 +101,9 @@ from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.repositories.tenancy.organization_member_repository import OrganizationMemberRepository
 from gateway.repositories.users_repository import get_or_create_live_attribution_user
 from gateway.schemas.routing import AutomaticFallbackPublic, AutomaticFallbacksResponse
-from gateway.services.alias_service import all_alias_names
+from gateway.services.alias_service import alias_names_in
 from gateway.services.model_access import is_model_allowed
-from gateway.services.policy_store import all_policy_names
+from gateway.services.policy_store import policy_names_in
 from gateway.services.provider_kwargs import normalize_pricing_key
 from gateway.services.routing import FALLBACK_WINDOW
 from gateway.services.tenancy import OrganizationService
@@ -174,7 +174,9 @@ async def _writable_workspace_id(
         organization=organization,
         organizations=organizations,
     )
-    await _require_reachable_targets(db, config, user=user, targets=targets, model_provider=model_provider)
+    await _require_reachable_targets(
+        db, config, user=user, workspace_id=workspace.id, targets=targets, model_provider=model_provider
+    )
     return workspace.id
 
 
@@ -183,6 +185,7 @@ async def _require_reachable_targets(
     config: GatewayConfig,
     *,
     user: TenancyUser,
+    workspace_id: uuid.UUID,
     targets: list[str],
     model_provider: ModelProviderPort | None,
 ) -> None:
@@ -196,11 +199,13 @@ async def _require_reachable_targets(
     A target that names another alias or policy is left alone, because the write
     helpers refuse chaining a step later and say so precisely. Checking it here
     first would answer "not available to this organization", which is true of an
-    indirection name and useless for fixing it.
+    indirection name and useless for fixing it. Only the workspace's own names
+    count as one, so another organization's alias is answered like any model the
+    organization cannot reach.
     """
     if not targets:
         return
-    indirections = all_alias_names(config) | all_policy_names(config)
+    indirections = alias_names_in(config, workspace_id) | policy_names_in(config, workspace_id)
     allowlist = await resolve_session_model_allowlist(db, config, user=user, model_provider=model_provider)
     unreachable = [
         target
@@ -485,7 +490,7 @@ async def set_organization_routing_policy(
         )
         body = PolicyRequest(**request.model_dump(include=set(PolicyRequest.model_fields)))
         return await upsert_policy_in_workspace(
-            body, db, config, workspace_id=workspace_id, replacing_alias=request.replaces_alias
+            body, db, config, workspace_id=workspace_id, replacing_alias=request.replaces_alias, tenant_names=True
         )
     if request.replaces_alias:
         raise HTTPException(
@@ -499,7 +504,9 @@ async def set_organization_routing_policy(
     lookup = request.rename_from if request.rename_from is not None else request.name
     if not await _stored_policy_exists(db, workspace_id=workspace.id, name=lookup, user_id=user_id):
         _require_members_create(caller, workspace)
-    await _require_reachable_targets(db, config, user=current_identity, targets=targets, model_provider=model_provider)
+    await _require_reachable_targets(
+        db, config, user=current_identity, workspace_id=workspace.id, targets=targets, model_provider=model_provider
+    )
     await _require_live_owner(db, user_id, None)
     body = PolicyRequest(
         name=request.name,
@@ -508,7 +515,7 @@ async def set_organization_routing_policy(
         workspace_id=workspace.id,
         rename_from=request.rename_from,
     )
-    return await upsert_policy_in_workspace(body, db, config, workspace_id=workspace.id)
+    return await upsert_policy_in_workspace(body, db, config, workspace_id=workspace.id, tenant_names=True)
 
 
 @policies_router.post("/copy")
@@ -556,10 +563,12 @@ async def copy_organization_routing_policy(
         )
     _require_members_create(caller, workspace)
     targets = validated_spec(request.name, spec).static_selectors()
-    await _require_reachable_targets(db, config, user=current_identity, targets=targets, model_provider=model_provider)
+    await _require_reachable_targets(
+        db, config, user=current_identity, workspace_id=workspace.id, targets=targets, model_provider=model_provider
+    )
     await _require_live_owner(db, user_id, current_identity.full_name or current_identity.email)
     body = PolicyRequest(name=request.name, spec=spec, user_id=user_id, workspace_id=workspace.id)
-    return await upsert_policy_in_workspace(body, db, config, workspace_id=workspace.id)
+    return await upsert_policy_in_workspace(body, db, config, workspace_id=workspace.id, tenant_names=True)
 
 
 @policies_router.delete("/{name:path}", status_code=status.HTTP_204_NO_CONTENT)
@@ -662,7 +671,7 @@ async def set_organization_alias(
         targets=[request.target],
         model_provider=model_provider,
     )
-    return await upsert_alias_in_workspace(request, db, config, workspace_id=workspace_id)
+    return await upsert_alias_in_workspace(request, db, config, workspace_id=workspace_id, tenant_names=True)
 
 
 @aliases_router.delete("/{name:path}", status_code=status.HTTP_204_NO_CONTENT)

@@ -495,3 +495,30 @@ def test_replacing_an_alias_is_an_admins_and_workspace_wide(client: TestClient, 
     assert code == status.HTTP_422_UNPROCESSABLE_CONTENT
     code, _ = _call(client, world, "member", "POST", _POLICIES, json=_policy(world, "fast", replaces_alias=True))
     assert code == status.HTTP_403_FORBIDDEN
+
+
+# =============================================================================
+# Names another organization uses (otari#78)
+# =============================================================================
+
+
+def _beta_alias(client: TestClient, world: _World, name: str) -> None:
+    alias = {"name": name, "target": _TARGET, "workspace_id": str(world.workspaces["beta_one"])}
+    code, body = _call(client, world, "beta_owner", "POST", _ALIASES, json=alias)
+    assert code == status.HTTP_200_OK, body
+
+
+def test_a_members_own_policy_may_take_a_name_another_organization_uses(client: TestClient, world: _World) -> None:
+    _beta_alias(client, world, "beta-alias")
+    code, body = _call(client, world, "member", "POST", _POLICIES, json=_policy(world, "beta-alias", member="member"))
+    assert code == status.HTTP_200_OK, body
+
+
+def test_replacing_an_alias_ignores_another_organizations_alias_of_that_name(client: TestClient, world: _World) -> None:
+    _beta_alias(client, world, "fast")
+    alias = {"name": "fast", "target": _TARGET, "workspace_id": str(world.workspaces["alpha_one"])}
+    code, body = _call(client, world, "admin", "POST", _ALIASES, json=alias)
+    assert code == status.HTTP_200_OK, body
+
+    code, body = _call(client, world, "admin", "POST", _POLICIES, json=_policy(world, "fast", replaces_alias=True))
+    assert code == status.HTTP_200_OK, body
