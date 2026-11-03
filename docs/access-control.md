@@ -105,7 +105,10 @@ once. Neither can exempt a key from budget or make it a service key: an exempt
 key also skips the ceilings the operator sets on the organization, so both stay
 with the deployment operator (`/api/v1/keys`), and an existing exempt or
 service key, or one with no owner, is left out of an owner's or admin's view
-unless it is their own. An owner or admin can
+unless it is their own. So is a key the operator minted into one of the
+organization's workspaces for someone who has never been a member of it, since
+that is their spend and their credential; a former member's keys stay in view,
+so they can be removed after the person leaves. An owner or admin can
 also read the search tool names a key's access list may use
 (`GET /api/v1/organizations/me/search-tools`), without their endpoints or keys.
 

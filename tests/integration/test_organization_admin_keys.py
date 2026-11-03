@@ -352,6 +352,72 @@ def test_an_admin_cannot_reach_a_key_only_the_operator_may_hand_out(
         assert key in _listed(admin_client, world, owner)
 
 
+@pytest.mark.parametrize("billed_to", ["outsider", "beta_owner"])
+def test_an_admin_cannot_reach_a_key_billed_to_someone_outside_the_organization(
+    admin_client: TestClient, world: _World, db_session_factory: Callable[[], Session], billed_to: str
+) -> None:
+    """An operator can mint a key into Alpha's workspace for anyone; one billed outside Alpha is not Alpha's to manage.
+
+    Rotating it would hand an Alpha admin that user's credential, and editing it
+    would spend against their budget. A deployment user with no membership
+    anywhere, and a member of another organization, are both outside.
+    """
+    session = db_session_factory()
+    try:
+        owner = "deployment-user" if billed_to == "outsider" else str(world.users[billed_to])
+        if billed_to == "outsider":
+            session.add(BillingUser(user_id=owner, alias="Deployment user"))
+            session.commit()
+        key = str(uuid.uuid4())
+        session.add(
+            APIKey(
+                id=key,
+                workspace_id=world.workspaces["alpha_one"],
+                key_hash=hash_key(key),
+                key_name="theirs",
+                user_id=owner,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    assert key not in _listed(admin_client, world, "admin")
+    code, body = _call(admin_client, world, "admin", "GET", f"{_KEYS}/routing", params={"api_key_id": [key]})
+    assert code == status.HTTP_200_OK, body
+    assert body["keys"] == []
+    for method, suffix, json in [
+        ("PATCH", "", {"key_name": "taken"}),
+        ("POST", "/rotate", None),
+        ("DELETE", "", None),
+    ]:
+        code, _ = _call(admin_client, world, "admin", method, f"{_KEYS}/{key}{suffix}", json=json)
+        assert code == status.HTTP_404_NOT_FOUND, (method, suffix)
+
+
+def test_an_admin_still_cleans_up_after_a_member_who_left(
+    admin_client: TestClient, world: _World, db_session_factory: Callable[[], Session]
+) -> None:
+    """A suspended membership is still a membership: the keys someone leaves behind are the organization's to remove."""
+    session = db_session_factory()
+    try:
+        session.execute(
+            update(OrganizationMember)
+            .where(OrganizationMember.user_id == world.users["colleague"])  # type: ignore[arg-type]
+            .values(status="suspended")
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    key = world.keys["colleague"]
+    assert key in _listed(admin_client, world, "admin")
+    code, body = _call(admin_client, world, "admin", "PATCH", f"{_KEYS}/{key}", json={"is_active": False})
+    assert code == status.HTTP_200_OK, body
+    code, _ = _call(admin_client, world, "admin", "DELETE", f"{_KEYS}/{key}")
+    assert code == status.HTTP_204_NO_CONTENT
+
+
 # =============================================================================
 # Creating a key for a member
 # =============================================================================

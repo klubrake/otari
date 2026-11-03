@@ -14,8 +14,9 @@ established for usage reads (otari#837), applied to a write surface:
   keys on), and every load for a member carries that owner predicate, so
   somebody else's key answers the 404 a nonexistent one does.
 * **An organization owner or admin manages the organization's keys.** Their
-  loads widen the owner predicate to any member's key that is neither
-  budget-exempt nor a service key (see ``_CallerScope.key_condition``), and their create
+  loads widen the owner predicate to the key of anyone who holds or held a
+  membership in the organization, unless it is budget-exempt or a service key
+  (see ``_CallerScope.key_condition``), and their create
   may name ``user_id``: an active member of the organization who may see the
   workspace themselves, never an arbitrary or new id. A member naming
   ``user_id`` is refused. Either way an owner an operator has revoked through
@@ -79,6 +80,7 @@ from gateway.models.tenancy import MANAGEMENT_ROLES, Organization, Workspace
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.users import User
 from gateway.ports.growth_signal_port import GrowthActivationEvent
+from gateway.repositories.tenancy.organization_member_repository import OrganizationMemberRepository
 from gateway.repositories.users_repository import get_or_create_attribution_user
 from gateway.schemas.api_keys import FederationRuleCreate, FederationRulePublic
 from gateway.schemas.routing import KeyRoutingResponse
@@ -191,10 +193,14 @@ class _CallerScope:
     def key_condition(self) -> ColumnElement[bool]:
         """What a key in the organization must satisfy for the caller to touch it.
 
-        Always their own. For a manager also any other key with an owner that is
-        neither budget-exempt nor a service key: rotating an exempt or service key
-        hands over a credential only the operator may mint, and a key with no
-        owner has nobody for an edit to narrow against.
+        Always their own. For a manager also any other key that is neither
+        budget-exempt nor a service key and is billed to someone who holds, or
+        held, a membership in the organization: rotating an exempt or service key
+        hands over a credential only the operator may mint, a key with no owner
+        has nobody for an edit to narrow against, and one billed to a user from
+        outside the organization (an operator can mint one into its workspace) is
+        that user's spend and that user's key, not the organization's. A former
+        member still counts, so their keys can be cleaned up after they leave.
         """
         own = col(APIKey.user_id) == self.own_user_id
         if not self.manages:
@@ -202,7 +208,7 @@ class _CallerScope:
         return or_(
             own,
             and_(
-                col(APIKey.user_id).is_not(None),
+                col(APIKey.user_id).in_(OrganizationMemberRepository.attribution_ids(self.organization.id)),
                 col(APIKey.exclude_from_budget).is_(False),
                 col(APIKey.is_service_key).is_(False),
             ),
