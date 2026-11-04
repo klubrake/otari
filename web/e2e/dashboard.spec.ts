@@ -378,8 +378,10 @@ test.describe("dashboard core flows", () => {
       .filter({ has: page.getByRole("rowheader", { name: "chained" }) })
     await expect(chained).toBeVisible()
     await expect(
-      chained.getByRole("list", { name: "Backups" }).getByRole("listitem"),
-    ).toHaveText(["claude-3-5-haiku-latest · Anthropic"])
+      chained
+        .getByRole("list", { name: "Tried in order" })
+        .getByRole("listitem"),
+    ).toHaveText(["gpt-4o OpenAI", "claude-3-5-haiku-latest Anthropic"])
   })
 
   test("renames a policy in place", async ({ page }) => {
@@ -401,13 +403,17 @@ test.describe("dashboard core flows", () => {
       .getByRole("row")
       .filter({ has: page.getByRole("rowheader", { name: "chained" }) })
     await chained.getByRole("button", { name: "Edit" }).click()
-    // Edit opens the policy's own page, where the name is a section of its own.
+    // Edit opens the policy's own page, where a rename saves with the rest.
     await expect(pageHeading(page, "chained")).toBeVisible()
-    await page.getByRole("textbox", { name: /^Name/ }).fill("renamed")
     await page.getByRole("button", { name: "Rename" }).click()
+    await page.getByRole("textbox", { name: /^Name/ }).fill("renamed")
+    await page.getByRole("button", { name: "Save", exact: true }).click()
     // The page follows the policy to its new address.
     await expect(pageHeading(page, "renamed")).toBeVisible()
-    await page.getByRole("link", { name: "← Routing" }).click()
+    await page
+      .getByRole("navigation", { name: "Breadcrumb" })
+      .getByRole("link", { name: "Routing" })
+      .click()
 
     // A rename moves the row rather than copying it, so the old name has to be
     // gone: two rows would mean callers could still reach the policy either way.
@@ -416,8 +422,10 @@ test.describe("dashboard core flows", () => {
       .filter({ has: page.getByRole("rowheader", { name: "renamed" }) })
     await expect(renamed).toBeVisible()
     await expect(
-      renamed.getByRole("list", { name: "Backups" }).getByRole("listitem"),
-    ).toHaveCount(1)
+      renamed
+        .getByRole("list", { name: "Tried in order" })
+        .getByRole("listitem"),
+    ).toHaveCount(2)
     await expect(page.getByRole("rowheader", { name: "chained" })).toBeHidden()
   })
 

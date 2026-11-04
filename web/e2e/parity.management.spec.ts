@@ -322,37 +322,43 @@ test.describe("fallback routing", () => {
     await fillModelBox(page, /^Backup 2/, "groq:llama-3.3-70b-versatile")
     await dialog.getByRole("button", { name: "Create policy" }).click()
 
-    // The table lists the backups in order, so both chips are the assertion
-    // that both were saved and not just the first.
+    // The table lists the model then its backups in order, so both backups
+    // are the assertion that both were saved and not just the first.
     const policy = row(page, "Routing policies", POLICY)
-    const backups = policy
-      .getByRole("list", { name: "Backups" })
+    const steps = policy
+      .getByRole("list", { name: "Tried in order" })
       .getByRole("listitem")
-    await expect(backups).toHaveText([
-      "claude-3-5-haiku-latest · Anthropic",
-      "llama-3.3-70b-versatile · Groq",
+    await expect(steps).toHaveText([
+      "gpt-4o OpenAI",
+      "claude-3-5-haiku-latest Anthropic",
+      "llama-3.3-70b-versatile Groq",
     ])
 
     // Shrinking has to be possible too: a chain that could only grow would strand
     // an operator who added a candidate by mistake. Edit opens the policy's own
-    // page, where the chain is a section with its own Save.
+    // page, which saves the whole policy from one bar.
     await policy.getByRole("button", { name: "Edit" }).click()
     await expect(pageHeading(page, POLICY)).toBeVisible()
-    const fallbackTwo = page.getByRole("combobox", { name: /^Backup 2/ })
-    await expect(fallbackTwo).toBeVisible()
+    const planned = page
+      .getByRole("list", { name: "Tried in order" })
+      .getByRole("listitem")
+    await expect(planned).toHaveCount(3)
     // Each backup's Remove names its row, so the press cannot land on another.
     await page.getByRole("button", { name: "Remove backup 2" }).click()
-    await expect(page.getByRole("combobox", { name: /^Backup 2/ })).toHaveCount(
-      0,
-    )
-    await page.getByRole("button", { name: "Save fallback chain" }).click()
-    await expect(page.getByText("Unsaved changes")).toHaveCount(0)
-    await page.getByRole("link", { name: "← Routing" }).click()
+    await expect(planned).toHaveCount(2)
+    const save = page.getByRole("button", { name: "Save", exact: true })
+    await save.click()
+    // Disabled again once the saved policy is read back.
+    await expect(save).toBeDisabled()
+    await page
+      .getByRole("navigation", { name: "Breadcrumb" })
+      .getByRole("link", { name: "Routing" })
+      .click()
     await expect(
       row(page, "Routing policies", POLICY)
-        .getByRole("list", { name: "Backups" })
+        .getByRole("list", { name: "Tried in order" })
         .getByRole("listitem"),
-    ).toHaveText(["claude-3-5-haiku-latest · Anthropic"])
+    ).toHaveText(["gpt-4o OpenAI", "claude-3-5-haiku-latest Anthropic"])
 
     await row(page, "Routing policies", POLICY)
       .getByRole("button", { name: "Delete" })

@@ -1,9 +1,10 @@
 import { Link } from "@tanstack/react-router"
 import { Fragment } from "react"
-import { FiAlertTriangle, FiArrowRight } from "react-icons/fi"
+import { FiArrowRight } from "react-icons/fi"
 
 import type { AutomaticFallback, FallbackOffering } from "@/client"
 import { CopyableValue } from "@/design-system/actions/CopyField"
+import { TextButton } from "@/design-system/actions/TextButton"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { SettingsGroup } from "@/design-system/layout/SettingsGroup"
@@ -12,14 +13,7 @@ import { docsSourceHref } from "@/shared/helpers/docs"
 import { formatNumber } from "@/shared/helpers/format"
 import { providerDisplayName } from "@/shared/helpers/providers"
 
-function Warning({ children }: { children: string }) {
-  return (
-    <span className="flex items-center gap-1 text-sm text-warning">
-      <FiAlertTriangle aria-hidden className="size-3 shrink-0" />
-      {children}
-    </span>
-  )
-}
+import { SentByCell, Warning } from "./PolicyCells"
 
 /** Who runs the built-in tools on one offering, or nothing where nobody does. */
 function toolsCaption(offering: FallbackOffering): string | undefined {
@@ -86,7 +80,14 @@ function Chain({ offerings }: { offerings: FallbackOffering[] }) {
  * fix it by sending the catalog ID. A model counts as pinned once most of its
  * requests are, so a handful sent by catalog ID does not make it read covered.
  */
-function OrderCell({ row }: { row: AutomaticFallback }) {
+function OrderCell({
+  row,
+  onAddBackup,
+}: {
+  row: AutomaticFallback
+  /** Start a policy on the one offering this model's traffic reaches. */
+  onAddBackup?: (selector: string) => void
+}) {
   const { offerings } = row
   const hasBackup = byProvider(offerings).length > 1
   const isPinned = hasBackup && row.pinned * 2 > row.requests
@@ -102,11 +103,16 @@ function OrderCell({ row }: { row: AutomaticFallback }) {
     <span className="flex flex-wrap items-start gap-x-2">
       {reached ? <Chain offerings={[reached]} /> : null}
       <Warning>{isPinned ? "No backup · pinned" : "No backup"}</Warning>
+      {reached && onAddBackup ? (
+        <TextButton onPress={() => onAddBackup(reached.selector)}>
+          Add a backup
+        </TextButton>
+      ) : null}
     </span>
   )
 }
 
-const COLUMNS: DataTableColumn<AutomaticFallback>[] = [
+const BASE_COLUMNS: DataTableColumn<AutomaticFallback>[] = [
   {
     id: "model",
     header: "Model",
@@ -151,6 +157,45 @@ const COLUMNS: DataTableColumn<AutomaticFallback>[] = [
 ]
 
 /**
+ * The columns, with Sent by after the model where key names are at hand, and
+ * an Add a backup on each row without one where a policy can be started.
+ */
+function columnsFor(
+  keyLabelOf: ((apiKeyId: string) => string) | undefined,
+  onAddBackup: ((selector: string) => void) | undefined,
+): DataTableColumn<AutomaticFallback>[] {
+  const columns = BASE_COLUMNS.map((column) =>
+    column.id === "order" && onAddBackup
+      ? {
+          ...column,
+          cell: (row: AutomaticFallback) => (
+            <OrderCell row={row} onAddBackup={onAddBackup} />
+          ),
+        }
+      : column,
+  )
+  if (!keyLabelOf) return columns
+  const [model, ...rest] = columns
+  return [
+    model,
+    {
+      id: "sentBy",
+      header: "Sent by",
+      cell: (row) => (
+        <SentByCell
+          sentBy={row.sent_by.map((key) => ({
+            apiKeyId: key.api_key_id,
+            requests: key.requests,
+          }))}
+          labelOf={keyLabelOf}
+        />
+      ),
+    },
+    ...rest,
+  ]
+}
+
+/**
  * The fallbacks a gateway gives with no policy: a model served on
  * several providers fails over between them when callers send its catalog ID.
  * A model on one provider is listed too, marked as having no backup.
@@ -158,10 +203,16 @@ const COLUMNS: DataTableColumn<AutomaticFallback>[] = [
 export function AutomaticFallbacks({
   fallbacks,
   toolsNote,
+  keyLabelOf,
+  onAddBackup,
   isLoading = false,
   error,
 }: {
   fallbacks: AutomaticFallback[]
+  /** Start a policy on a model with no backup; the link is left out without it. */
+  onAddBackup?: (selector: string) => void
+  /** A key's name, for the Sent by column; the column is left out without it. */
+  keyLabelOf?: (apiKeyId: string) => string
   /** How the tools caption under each provider is decided, in one sentence. */
   toolsNote?: string
   isLoading?: boolean
@@ -188,7 +239,7 @@ export function AutomaticFallbacks({
         <TableScrollFrame className="otari-fallbacks-table">
           <DataTable
             ariaLabel="Automatic fallback"
-            columns={COLUMNS}
+            columns={columnsFor(keyLabelOf, onAddBackup)}
             rows={fallbacks}
             getRowKey={(row) => row.id}
             isLoading={isLoading}

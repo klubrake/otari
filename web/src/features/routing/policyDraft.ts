@@ -15,6 +15,7 @@ import {
   findFallthroughIndex,
   findFallthroughTarget,
   findRouterBackend,
+  findUserRules,
   findWeights,
   KNN_BACKEND,
   MAX_CANDIDATES,
@@ -26,6 +27,13 @@ export type RouterBackend =
   | typeof KNN_BACKEND
   | typeof WEIGHTED_BACKEND
   | typeof PRIORITY_BACKEND
+
+/** Named members sent to another model, ahead of everything else. */
+export interface UserRule {
+  /** Attribution ids: a member's identity id, as their keys bill to. */
+  userIds: string[]
+  target: string
+}
 
 export interface TierDown {
   threshold: number
@@ -53,6 +61,7 @@ export interface PolicyDraft {
   /** Routed when it holds any model. */
   pool: PoolDraft
   backups: string[]
+  rules: UserRule[]
   tierDowns: TierDown[]
   guardrails: PolicyGuardrail[]
 }
@@ -144,6 +153,7 @@ export function draftFromSpec(spec: PolicySpec): PolicyDraft {
             safeIndex: findFallthroughIndex(spec),
           },
     backups: spec.on_failure ?? [],
+    rules: findUserRules(spec),
     tierDowns: findBudgetConditions(spec),
     guardrails: spec.guardrails ?? [],
   }
@@ -155,6 +165,7 @@ export function seedDraft(intent: Intent, target = ""): PolicyDraft {
     target,
     pool: emptyPool(),
     backups: [],
+    rules: [],
     tierDowns: [],
     guardrails: [],
   }
@@ -278,6 +289,9 @@ export function isDraftReady(draft: PolicyDraft): boolean {
       (tier) =>
         tier.target.trim() !== "" && tier.threshold > 0 && tier.threshold < 100,
     ) &&
+    draft.rules.every(
+      (rule) => rule.userIds.length > 0 && rule.target.trim() !== "",
+    ) &&
     draft.guardrails.every((guardrail) => guardrail.profile.trim() !== "") &&
     plannedModels(draft) <= MAX_CANDIDATES
   )
@@ -308,6 +322,68 @@ export function isFallbackReady(draft: PolicyDraft): boolean {
   )
 }
 
+/** A one-model policy's whole plan in the order it is tried: the main model, then each backup. */
+export function triedInOrder(draft: PolicyDraft): string[] {
+  return [draft.target, ...draft.backups]
+}
+
+/** The draft with a one-model plan replaced: the first entry becomes the main model. */
+export function withTriedInOrder(
+  draft: PolicyDraft,
+  models: string[],
+): PolicyDraft {
+  return { ...draft, target: models[0] ?? "", backups: models.slice(1) }
+}
+
+/**
+ * Why the draft cannot be saved, in words for the save bar, or "" when it can.
+ * The first problem only: the field it names carries its own message too.
+ */
+export function saveProblem(draft: PolicyDraft): string {
+  if (plannedModels(draft) > MAX_CANDIDATES)
+    return `A policy tries at most ${MAX_CANDIDATES} models, counting the backups.`
+  if (isRouted(draft)) {
+    const problems = poolProblems(draft.pool)
+    if (problems.isTooSmall) return "A pool needs at least two models."
+    if (problems.isMissingModel) return "Pick a model for every pool row."
+    if (problems.hasDuplicate) return "Name each pool model once."
+    if (problems.hasBadShare || problems.isSplitEmpty)
+      return "Give the split shares of zero or more, at least one above zero."
+  } else if (draft.target.trim() === "") return "Pick a main model."
+  if (draft.backups.some((entry) => entry.trim() === ""))
+    return "Pick a model for every backup, or remove the empty one."
+  const main = isRouted(draft) ? "" : draft.target
+  const pool = draft.pool.models.map((entry) => entry.trim())
+  if (
+    backupProblems(draft.backups, main).some((entry) => entry !== "") ||
+    draft.backups.some((entry) => pool.includes(entry.trim()))
+  )
+    return "A backup repeats a model the policy already tries."
+  if (
+    draft.rules.some(
+      (rule) => rule.userIds.length === 0 || rule.target.trim() === "",
+    )
+  )
+    return "Give every rule at least one member and a model."
+  if (
+    draft.tierDowns.some(
+      (tier) =>
+        tier.target.trim() === "" ||
+        tier.threshold <= 0 ||
+        tier.threshold >= 100,
+    )
+  )
+    return "Give every budget tier a model and a threshold between 0 and 100."
+  if (
+    new Set(draft.tierDowns.map((tier) => tier.threshold)).size !==
+    draft.tierDowns.length
+  )
+    return "Give each budget tier its own threshold."
+  if (draft.guardrails.some((guardrail) => guardrail.profile.trim() === ""))
+    return "Name a profile for every guardrail."
+  return ""
+}
+
 /**
  * The spec a draft saves as, in plan order: the tier-downs, then the router,
  * then the fallthrough, which the schema requires to be last.
@@ -317,10 +393,19 @@ export function buildSpec(draft: PolicyDraft): PolicySpec {
   const values = parseWeights(pool.weights)
   return {
     select: [
-      ...draft.tierDowns.map((tier) => ({
-        when: { budget_used_pct: { gte: tier.threshold } },
-        target: tier.target.trim(),
+      // Rules first: a named member gets their model whatever the budget says.
+      ...draft.rules.map((rule) => ({
+        when: { user_id: rule.userIds },
+        target: rule.target.trim(),
       })),
+      // Highest threshold first: the first matching entry wins, so a lower
+      // tier ahead of a higher one would leave the higher one unreachable.
+      ...[...draft.tierDowns]
+        .sort((a, b) => b.threshold - a.threshold)
+        .map((tier) => ({
+          when: { budget_used_pct: { gte: tier.threshold } },
+          target: tier.target.trim(),
+        })),
       // After the tier-downs: an explicit tier-down overrides the router.
       ...(isRouted(draft)
         ? [
