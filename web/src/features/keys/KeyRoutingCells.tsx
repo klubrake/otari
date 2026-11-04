@@ -1,12 +1,53 @@
 import { Link } from "@tanstack/react-router"
+import type { ReactNode } from "react"
 import { FiAlertTriangle } from "react-icons/fi"
 import type { KeyRouting, KeyRoutingModel } from "@/client"
-import { TEXT_LINK_CLASS, TextButton } from "@/design-system/actions/TextButton"
-import { Tooltip } from "@/design-system/overlays/Tooltip"
+import { TEXT_LINK_CLASS } from "@/design-system/actions/TextButton"
+import {
+  Tooltip,
+  type TooltipTriggerProps,
+} from "@/design-system/overlays/Tooltip"
 import type { KeyModelsSummary } from "./keyModels"
 
 function modelCount(count: number): string {
   return `${count} ${count === 1 ? "model" : "models"}`
+}
+
+/**
+ * A one-line link that ends in "…" when its column is too narrow, with the
+ * whole of it in the tooltip.
+ *
+ * The tooltip's function form, so the trigger is this button itself: the
+ * wrapper form is an `inline-flex` box as wide as its text, which nothing in a
+ * fixed-width column caps, so the text ran into the next lane and the button's
+ * own `truncate` never had an edge to end against. The trigger's class is
+ * dropped for the reason `RowAction` drops it.
+ */
+function TruncatingLink({
+  tooltip,
+  onPress,
+  className = "",
+  children,
+}: {
+  tooltip: ReactNode
+  onPress: () => void
+  className?: string
+  children: ReactNode
+}) {
+  return (
+    <Tooltip content={tooltip} delay={0}>
+      {({ className: _triggerClass, ...trigger }: TooltipTriggerProps = {}) => (
+        <button
+          {...trigger}
+          type="button"
+          onClick={onPress}
+          className={`block max-w-full truncate text-left text-sm ${TEXT_LINK_CLASS} ${className}`}
+        >
+          {children}
+        </button>
+      )}
+    </Tooltip>
+  )
 }
 
 /**
@@ -23,22 +64,17 @@ export function KeyModelsCell({
 }) {
   if (summary.kind !== "selected") {
     return (
-      <Tooltip
-        content={
+      <TruncatingLink
+        tooltip={
           summary.kind === "all"
             ? "Every model its owner may use"
             : "Every request on this key is refused"
         }
-        delay={0}
+        onPress={onOpen}
+        className={summary.kind === "none" ? "text-danger" : ""}
       >
-        <span
-          className={`text-sm ${summary.kind === "none" ? "text-danger" : ""}`}
-        >
-          <TextButton onPress={onOpen}>
-            {summary.kind === "all" ? "All allowed models" : "No models"}
-          </TextButton>
-        </span>
-      </Tooltip>
+        {summary.kind === "all" ? "All allowed models" : "No models"}
+      </TruncatingLink>
     )
   }
   const detail = summary.providers
@@ -50,20 +86,16 @@ export function KeyModelsCell({
     })
     .join(" · ")
   return (
-    <Tooltip content={detail} delay={0}>
-      <span className="flex min-w-0 flex-col">
-        <span className="truncate text-sm">
-          <TextButton onPress={onOpen}>
-            {summary.providers.join(", ")}
-          </TextButton>
+    <span className="flex min-w-0 flex-col">
+      <TruncatingLink tooltip={detail} onPress={onOpen}>
+        {summary.providers.join(", ")}
+      </TruncatingLink>
+      {summary.total === undefined ? null : (
+        <span className="text-caption text-subtle">
+          {modelCount(summary.total)}
         </span>
-        {summary.total === undefined ? null : (
-          <span className="text-caption text-subtle">
-            {modelCount(summary.total)}
-          </span>
-        )}
-      </span>
-    </Tooltip>
+      )}
+    </span>
   )
 }
 
@@ -129,7 +161,10 @@ export function KeyMostUsedCell({
   const others = routing.model_count - 1
   return (
     <span className="flex min-w-0 flex-col">
-      <span className="truncate text-mono-caption text-foreground">
+      <span
+        title={others > 0 ? `${top.name} and ${others} more` : top.name}
+        className="truncate text-mono-caption text-foreground"
+      >
         {top.name}
         {others > 0 ? <span className="text-subtle"> +{others}</span> : null}
       </span>
