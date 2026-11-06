@@ -1596,7 +1596,10 @@ export function KeysPage() {
         cell: (apiKey) => (
           <div className="flex min-w-0 flex-col gap-1">
             <div className="flex min-w-0 items-baseline gap-1.5">
-              <span className="truncate text-base text-foreground">
+              <span
+                title={apiKey.key_name ?? undefined}
+                className="truncate text-base text-foreground"
+              >
                 {apiKey.key_name ?? (
                   <span className="text-muted">(unnamed)</span>
                 )}
