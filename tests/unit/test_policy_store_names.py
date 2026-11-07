@@ -1,6 +1,5 @@
 """``policy_names_in``: the policy names a write in one workspace can collide with or chain through."""
 
-import time
 import uuid
 from collections.abc import Iterator
 
@@ -39,7 +38,6 @@ def _prime(workspace_id: uuid.UUID, names: list[str], per_user: dict[str, list[s
         policy_store._user_cache.setdefault(workspace_id, {}).setdefault(user_id, {}).update(
             dict.fromkeys(scoped, _SPEC)
         )
-    policy_store._cached_at = time.monotonic()
 
 
 def test_a_workspaces_names_are_its_own_and_its_users_plus_the_configured_ones() -> None:
