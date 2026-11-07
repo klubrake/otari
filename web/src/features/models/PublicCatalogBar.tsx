@@ -4,6 +4,7 @@ import { FaGithub } from "react-icons/fa"
 import { FiMenu } from "react-icons/fi"
 import { IconButton } from "@/design-system/actions/IconButton"
 import { Sheet } from "@/design-system/overlays/Sheet"
+import { ProductLockup } from "@/design-system/ProductMark"
 import {
   publicCatalogHref,
   siteHomeHref,
@@ -40,11 +41,7 @@ export function PublicCatalogBar({ onList }: { onList: boolean }) {
         aria-label="Otari home"
         className="inline-flex min-h-11 items-center"
       >
-        <img
-          src={`${import.meta.env.BASE_URL}favicon.svg`}
-          alt=""
-          className="h-6 w-[1.625rem]"
-        />
+        <ProductLockup className="h-9 w-auto text-accent" />
       </a>
       <nav aria-label="Site" className="flex items-center gap-1 md:gap-2">
         <a

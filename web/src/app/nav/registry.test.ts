@@ -87,7 +87,8 @@ describe("nav registry", () => {
       "Settings",
       "Accounts",
       "Hosted providers",
-      "Web search pricing",
+      "Subagent router",
+      "Web search",
       "Code execution pricing",
       "Health",
     ])
@@ -130,6 +131,7 @@ describe("nav registry", () => {
       "/settings",
       "/admin/accounts",
       "/admin/hosted-providers",
+      "/admin/recommender",
       "/admin/web-search",
       "/admin/code-execution",
       "/health-checks",
@@ -152,6 +154,7 @@ describe("nav registry", () => {
       "/settings",
       "/admin/accounts",
       "/admin/hosted-providers",
+      "/admin/recommender",
       "/admin/web-search",
       "/admin/code-execution",
       "/health-checks",
@@ -164,6 +167,7 @@ describe("nav registry", () => {
     expect(others).not.toContain("/settings")
     expect(others).not.toContain("/admin/accounts")
     expect(others).not.toContain("/admin/hosted-providers")
+    expect(others).not.toContain("/admin/recommender")
     expect(others).not.toContain("/admin/web-search")
     expect(others).not.toContain("/admin/code-execution")
     expect(others).not.toContain("/health-checks")
@@ -180,7 +184,8 @@ describe("nav registry", () => {
       ["/settings", "settings", "refused"],
       ["/admin/accounts", "admin", "unlisted"],
       ["/admin/hosted-providers", "hosted_providers", "unlisted"],
-      ["/admin/web-search", "pricing", "refused"],
+      ["/admin/recommender", "agent_recommenders", "unlisted"],
+      ["/admin/web-search", "tools", "refused"],
       ["/admin/code-execution", "pricing", "refused"],
       ["/health-checks", "health_checks", "refused"],
     ] as const) {
@@ -359,6 +364,7 @@ describe("nav registry", () => {
     )
     const standalone = [
       "admin",
+      "agent_recommenders",
       "budgets",
       // A core feature's surface, published while the feature is on.
       "health_checks",
@@ -382,6 +388,9 @@ describe("nav registry", () => {
       if (item.surface !== undefined) expect(standalone).toContain(item.surface)
     }
     expect(navItemForPath("/organization/provider-keys")?.surface).toBe(
+      "organization_providers",
+    )
+    expect(navItemForPath("/organization/web-search-keys")?.surface).toBe(
       "organization_providers",
     )
     expect(navItemForPath("/organization/guardrails")?.surface).toBe(
@@ -448,6 +457,13 @@ describe("nav registry", () => {
       "Providers",
       "Guardrails",
       "Org settings",
+    ])
+    // Providers groups the organization's two kinds of provider key.
+    expect(
+      general?.items[0]?.children?.map((child) => [child.label, child.to]),
+    ).toEqual([
+      ["Inference", "/organization/provider-keys"],
+      ["Web search", "/organization/web-search-keys"],
     ])
   })
 
@@ -755,6 +771,7 @@ describe("composeNavItems", () => {
 
 describe("pageLabelForPath", () => {
   it("names a rail page and a chrome page from one place", () => {
+    expect(pageLabelForPath("/keys")).toBe("API keys")
     expect(pageLabelForPath("/usage")).toBe("Usage")
     expect(pageLabelForPath("/invitations")).toBe("Invitations")
     expect(pageLabelForPath("/account")).toBe("Account")

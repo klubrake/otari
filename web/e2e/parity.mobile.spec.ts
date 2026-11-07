@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test"
 
-import { gotoRoute, login, pageHeading } from "./helpers"
+import { gotoRoute, login, pageHeading, table } from "./helpers"
 
 // The screenshot suite's phone (see web/playwright.config.ts), so a coarse
 // pointer sizes the controls up the way it does on a device: the pager's 44px
@@ -57,11 +57,17 @@ const PAGES = [
         page.getByRole("button", { name: /^Load \d+ more$/ }),
       ).toBeVisible(),
   },
+  {
+    route: "/admin/web-search",
+    heading: "Web search",
+    // Two tables of tools, each a card list at this width.
+    ready: (page: Page) => expect(table(page, "Search tools")).toBeVisible(),
+  },
 ] as const
 
 test.describe("a phone-width page does not pan sideways", () => {
   for (const { route, heading, ready } of PAGES) {
-    test(`${heading} at 390px`, async ({ page }) => {
+    test(`${heading} (${route}) at 390px`, async ({ page }) => {
       await login(page)
       await gotoRoute(page, route)
       await expect(pageHeading(page, heading)).toBeVisible()

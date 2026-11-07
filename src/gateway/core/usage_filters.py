@@ -35,6 +35,11 @@ def playground_traffic(endpoint: Any) -> ColumnElement[bool]:
     return cast("ColumnElement[bool]", endpoint == PLAYGROUND_USAGE_ENDPOINT)
 
 
+def key_rows(api_key_id: str, workspace_id: uuid.UUID) -> UsageCondition:
+    """The rows one API key wrote, in the workspace it bills to: the scope of a key's read of its own usage."""
+    return and_(UsageLog.workspace_id == workspace_id, UsageLog.api_key_id == api_key_id)
+
+
 def usage_channel(source: Any, endpoint: Any) -> ColumnElement[str]:
     """Which :data:`UsageChannel` a row came in by, the one rule the breakdown and the filter share."""
     imported: UsageChannel = "imported"
@@ -596,6 +601,6 @@ def spend_by_workspace(rows: Subquery) -> Subquery:
     )
 
 
-def requests_and_failures(rows: Subquery) -> Select[tuple[int, int]]:
+def requests_and_failures(rows: Subquery) -> Select[int, int]:
     """Requests and failures over a usage relation, counted as every usage read counts them."""
     return select(_requests(rows), _failures(rows))

@@ -166,7 +166,7 @@ export function ActivityPage() {
                 rates.cache_read_price_per_million ?? null,
               cache_write_price_per_million:
                 rates.cache_write_price_per_million ?? null,
-              unit: rates.unit ?? "tokens",
+              unit: rates.unit ?? "token",
             },
             { onSuccess: () => setDialog(undefined) },
           )

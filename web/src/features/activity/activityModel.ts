@@ -237,6 +237,15 @@ export function rowOutcome(entry: UsageEntry): RowOutcome {
         : "",
     }
   }
+  // A stream the client abandoned before the provider reported usage: billed on
+  // an estimate of its tokens, so it is neither a failure nor a full success.
+  if (entry.status === "incomplete") {
+    return {
+      kind: "recovered",
+      label: "Incomplete",
+      note: "client left; tokens estimated",
+    }
+  }
   // A skipped candidate was never called (a per-model rate limit had no room),
   // so it says why it was passed over rather than reading as a failure.
   if (isSkippedAttempt(entry)) {
@@ -262,6 +271,9 @@ export type RowCost =
   | { kind: "priced"; cost: number; isBilled: boolean }
 
 export function rowCost(entry: UsageEntry): RowCost {
+  if (entry.status === "incomplete" && entry.cost !== null) {
+    return { kind: "priced", cost: entry.cost, isBilled: true }
+  }
   if (entry.status !== "success") return { kind: "none" }
   if (entry.cost === null) return { kind: "unpriced" }
   return { kind: "priced", cost: entry.cost, isBilled: !isImported(entry) }

@@ -169,7 +169,6 @@ export function NewPolicyPage() {
 
       <PolicyEditor
         stored={stored}
-        workspaceId={writeWorkspaceId ?? undefined}
         isReadOnly={false}
         hasRules={manages && effective === "workspace"}
         ruleLabel={(id) => memberLabels.get(id) ?? id}

@@ -38,7 +38,7 @@ def workspace_label(workspace_id: Any) -> LabelJoin:
     return LabelJoin(entity=Workspace, on=col(Workspace.id) == workspace_id, label=col(Workspace.name))
 
 
-def ids_in_organization(organization_id: uuid.UUID) -> Select[tuple[uuid.UUID]]:
+def ids_in_organization(organization_id: uuid.UUID) -> Select[uuid.UUID]:
     """Select the ID of every workspace in an organization, for use as a subquery."""
     return select(col(Workspace.id)).where(col(Workspace.organization_id) == organization_id)
 
@@ -86,6 +86,19 @@ class WorkspaceRepository(BaseRepository[Workspace, WorkspaceCreate, WorkspaceUp
     async def update_visibility(self, workspace: Workspace, changes: dict[str, bool]) -> Workspace:
         """Stage a change to what the workspace shows members who do not manage it: only the columns named."""
         return await self.update(workspace, changes)
+
+    async def lock_in_organization(self, organization_id: uuid.UUID) -> list[uuid.UUID]:
+        """Take ``lock`` on every workspace in an organization, in id order, and return their ids.
+
+        In id order so two callers locking overlapping sets cannot deadlock.
+        """
+        result = await self.db.execute(
+            select(col(Workspace.id))
+            .where(col(Workspace.organization_id) == organization_id)
+            .order_by(col(Workspace.id))
+            .with_for_update()
+        )
+        return list(result.scalars().all())
 
     async def get_by_ids(self, workspace_ids: Collection[uuid.UUID]) -> Sequence[Workspace]:
         """Return the workspaces named by a batch of ids (order unspecified).
@@ -240,6 +253,21 @@ class WorkspaceMemberRepository:
             )
         )
         return result.scalars().first()
+
+    async def get_active_pairs(
+        self, workspace_ids: Collection[uuid.UUID], user_ids: Collection[uuid.UUID]
+    ) -> set[tuple[uuid.UUID, uuid.UUID]]:
+        """Return each (workspace, user) of these that an *active* membership joins, in one query."""
+        if not workspace_ids or not user_ids:
+            return set()
+        result = await self.db.execute(
+            select(col(WorkspaceMember.workspace_id), col(WorkspaceMember.user_id)).where(
+                col(WorkspaceMember.workspace_id).in_(list(workspace_ids)),
+                col(WorkspaceMember.user_id).in_(list(user_ids)),
+                col(WorkspaceMember.status) == "active",
+            )
+        )
+        return set(result.tuples().all())
 
     async def get_by_workspaces_and_user(
         self,

@@ -173,7 +173,7 @@ class UsageReadRepository(BaseRepository[UsageLog, Never, Never]):
                 select(UsageLog.request_group_id, func.count()).where(*conditions).group_by(UsageLog.request_group_id)
             )
         ).all()
-        return {group: count for group, count in rows}
+        return {group: count for group, count in rows if group is not None}
 
     async def p95_latency_ms(self, conditions: list[ColumnElement[bool]]) -> int | None:
         """Nearest-rank 95th-percentile latency over the requests in ``conditions``.

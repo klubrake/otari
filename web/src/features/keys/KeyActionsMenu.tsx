@@ -30,6 +30,8 @@ export function KeyActionsMenu({
   onDelete,
   onViewUsage,
   onWorkloadIdentity,
+  isReadOnly = false,
+  isEnableLocked = false,
 }: {
   apiKey: ApiKey
   triggerRef?: RefObject<HTMLButtonElement | null>
@@ -59,10 +61,14 @@ export function KeyActionsMenu({
   onViewUsage?: () => void
   /** Absent where the deployment lets no one manage this key's federation rules. */
   onWorkloadIdentity?: () => void
+  /** A viewer's popover: the key's details, and no actions but View usage, which writes nothing. */
+  isReadOnly?: boolean
+  /** Switched off by an operator, so its owner may not switch it back on. */
+  isEnableLocked?: boolean
 }) {
   const trigger = useRef<HTMLButtonElement>(null)
   const name = apiKey.key_name ?? "(unnamed)"
-  const actions = [
+  const allActions = [
     ...(onViewUsage
       ? [
           {
@@ -78,9 +84,13 @@ export function KeyActionsMenu({
     {
       id: "toggle",
       label: apiKey.is_active ? "Disable" : "Enable",
-      hint: apiKey.is_active ? "Callers get 401" : "Allow requests",
+      hint: apiKey.is_active
+        ? "Callers get 401"
+        : isEnableLocked
+          ? "Switched off by an operator"
+          : "Allow requests",
       icon: apiKey.is_active ? FiPause : FiPlay,
-      isDisabled: isPending,
+      isDisabled: isPending || (!apiKey.is_active && isEnableLocked),
       run: onToggle,
     },
     {
@@ -120,6 +130,10 @@ export function KeyActionsMenu({
       run: onDelete,
     },
   ]
+  const actions = isReadOnly
+    ? allActions.filter((action) => action.id === "usage")
+    : allActions
+  const triggerLabel = `${isReadOnly ? "Details" : "Actions"} for ${name}`
   return (
     <Dropdown>
       {/* HeroUI reads `--tooltip-delay` off the root, which this app never
@@ -131,12 +145,12 @@ export function KeyActionsMenu({
             trigger.current = element
             if (triggerRef) triggerRef.current = element
           }}
-          aria-label={`Actions for ${name}`}
+          aria-label={triggerLabel}
           className="otari-key-actions-trigger"
         >
           <FiMoreHorizontal aria-hidden className="size-4 shrink-0" />
         </Dropdown.Trigger>
-        <Tooltip.Content>Actions for {name}</Tooltip.Content>
+        <Tooltip.Content>{triggerLabel}</Tooltip.Content>
       </Tooltip.Root>
       <Dropdown.Popover
         placement="bottom end"
@@ -205,32 +219,34 @@ export function KeyActionsMenu({
             ) : null}
           </dl>
         </div>
-        <Dropdown.Menu
-          aria-label={`Actions for ${name}`}
-          items={actions}
-          onAction={(id) => {
-            // Dialogs restore focus to the persistent trigger, not the closing item.
-            trigger.current?.focus()
-            onAction()
-            actions.find((action) => action.id === id)?.run()
-          }}
-        >
-          {(action) => (
-            <Dropdown.Item
-              id={action.id}
-              textValue={action.label}
-              isDisabled={action.isDisabled}
-            >
-              <action.icon aria-hidden className="size-3.5 shrink-0" />
-              <Label className="text-body">{action.label}</Label>
-              {action.hint ? (
-                <Text slot="description" className="text-caption">
-                  {action.hint}
-                </Text>
-              ) : null}
-            </Dropdown.Item>
-          )}
-        </Dropdown.Menu>
+        {actions.length > 0 ? (
+          <Dropdown.Menu
+            aria-label={`Actions for ${name}`}
+            items={actions}
+            onAction={(id) => {
+              // Dialogs restore focus to the persistent trigger, not the closing item.
+              trigger.current?.focus()
+              onAction()
+              actions.find((action) => action.id === id)?.run()
+            }}
+          >
+            {(action) => (
+              <Dropdown.Item
+                id={action.id}
+                textValue={action.label}
+                isDisabled={action.isDisabled}
+              >
+                <action.icon aria-hidden className="size-3.5 shrink-0" />
+                <Label className="text-body">{action.label}</Label>
+                {action.hint ? (
+                  <Text slot="description" className="text-caption">
+                    {action.hint}
+                  </Text>
+                ) : null}
+              </Dropdown.Item>
+            )}
+          </Dropdown.Menu>
+        ) : null}
       </Dropdown.Popover>
     </Dropdown>
   )

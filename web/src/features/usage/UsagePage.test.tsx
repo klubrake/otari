@@ -658,7 +658,7 @@ describe("UsagePage", () => {
         model_key: "otari:web_search",
         input_price_per_million: 10_000,
         output_price_per_million: 0,
-        unit: "requests",
+        unit: "request",
       })
     })
 

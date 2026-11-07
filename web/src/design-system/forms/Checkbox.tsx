@@ -100,11 +100,17 @@ export function Checkbox({
   ariaLabel,
   description,
   hasTouchTarget = false,
+  isIndeterminate = false,
   className = "",
   children,
 }: {
   isSelected: boolean
   onChange: (isSelected: boolean) => void
+  /**
+   * Some of what the box stands for is selected, for a box over a group of
+   * others. Announced as mixed; a press selects the whole group.
+   */
+  isIndeterminate?: boolean
   isDisabled?: boolean
   /**
    * An accessible name that says more than the visible label does, for a group
@@ -137,19 +143,30 @@ export function Checkbox({
       aria-label={ariaLabel}
       aria-describedby={description ? descriptionId : undefined}
       isSelected={isSelected}
+      isIndeterminate={isIndeterminate}
       onChange={onChange}
       isDisabled={isDisabled}
-      className={`group flex w-fit items-center gap-2 text-body${
-        hasTouchTarget ? " min-h-11 min-w-11 justify-center" : ""
+      className={`group flex w-fit gap-2 text-body${
+        hasTouchTarget
+          ? " min-h-11 min-w-11 items-center justify-center"
+          : " items-start"
       }${className ? ` ${className}` : ""}`}
     >
-      {({ isSelected: selected, isDisabled: disabled }) => (
+      {({
+        isSelected: selected,
+        isIndeterminate: mixed,
+        isDisabled: disabled,
+      }) => (
         <>
-          <CheckboxVisual
-            isSelected={selected}
-            isIndeterminate={false}
-            isDisabled={disabled}
-          />
+          {/* A slot one body line tall, so a label that wraps keeps the box
+              beside its first line instead of between its lines. */}
+          <span className="flex h-5 shrink-0 items-center">
+            <CheckboxVisual
+              isSelected={selected}
+              isIndeterminate={mixed}
+              isDisabled={disabled}
+            />
+          </span>
           {children}
         </>
       )}

@@ -3,7 +3,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlmodel import col
@@ -11,11 +11,11 @@ from sqlmodel import col
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import BudgetReservation, BudgetResetLog
 from gateway.models.files import FileObject
-from gateway.models.inference import BatchRecord, IdempotencyRecord
+from gateway.models.inference import BatchRecord, IdempotencyRecord, VideoJobRecord
 from gateway.models.providers import ModelAlias, ProviderEndpoint
-from gateway.models.routing import RouterPreference, RoutingMemory, RoutingPolicy
+from gateway.models.routing import RoutingPolicy
 from gateway.models.tenancy import User as Identity
-from gateway.models.tools import SandboxContainer
+from gateway.models.tools import SandboxContainer, WorkspaceMcpServerGrant
 from gateway.models.traces import Trace
 from gateway.models.usage import AgentTelemetry, UsageLog
 from gateway.models.users import User
@@ -28,8 +28,6 @@ REFERENCING: tuple[Any, ...] = (
     AgentTelemetry,
     FileObject,
     BatchRecord,
-    RoutingMemory,
-    RouterPreference,
     BudgetResetLog,
     BudgetReservation,
     ModelAlias,
@@ -38,6 +36,8 @@ REFERENCING: tuple[Any, ...] = (
     SandboxContainer,
     IdempotencyRecord,
     Trace,
+    VideoJobRecord,
+    WorkspaceMcpServerGrant,
 )
 # Unique on (workspace_id, name, user_id), so a same-named row on both users
 # would collide once moved.
@@ -93,6 +93,14 @@ class UserMergeRepository:
     async def reassign(self, source_id: str, target_id: str) -> dict[str, int]:
         """Point every referencing row at ``target_id``; returns the rows moved per table."""
         moved: dict[str, int] = {}
+        # One grant per server and user: where both users hold one, the target's
+        # already grants the server, so the source's would only collide on the move.
+        held = select(WorkspaceMcpServerGrant.server_id).where(WorkspaceMcpServerGrant.user_id == target_id)
+        await self.db.execute(
+            delete(WorkspaceMcpServerGrant)
+            .where(WorkspaceMcpServerGrant.user_id == source_id, WorkspaceMcpServerGrant.server_id.in_(held))
+            .execution_options(synchronize_session=False)
+        )
         for model in REFERENCING:
             result = await self.db.execute(
                 update(model)

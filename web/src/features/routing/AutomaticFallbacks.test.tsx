@@ -16,11 +16,13 @@ const offering = (
   provider_type: selector.split(":")[0],
   own_tools: own,
   otari_tools: otari,
+  input_price: null,
 })
 
 const SONNET: AutomaticFallback = {
   id: "anthropic/claude-sonnet-5.5",
   sent_by: [],
+  pinned_keys: [],
   name: "Claude Sonnet 5.5",
   offerings: [
     offering("anthropic:claude-sonnet-5-5", ["web_search"]),
@@ -60,6 +62,7 @@ describe("AutomaticFallbacks", () => {
       ...SONNET,
       id: "openai/gpt-x",
       sent_by: [],
+      pinned_keys: [],
       name: "GPT X",
       offerings: [
         offering(
@@ -84,6 +87,7 @@ describe("AutomaticFallbacks", () => {
       ...SONNET,
       id: "moonshotai/kimi-k3",
       sent_by: [],
+      pinned_keys: [],
       name: "Kimi K3",
       offerings: [
         offering("bedrock:global.moonshotai.kimi-k3", [], ["web_search"]),
@@ -107,6 +111,7 @@ describe("AutomaticFallbacks", () => {
       ...SONNET,
       id: "google/gemini-x",
       sent_by: [],
+      pinned_keys: [],
       name: "Gemini X",
       offerings: [offering("gemini:models/gemini-x", ["web_search"])],
     }
@@ -121,6 +126,7 @@ describe("AutomaticFallbacks", () => {
       ...SONNET,
       id: "google/gemini-x",
       sent_by: [],
+      pinned_keys: [],
       name: "Gemini X",
       offerings: [offering("gemini:gemini-x")],
     }

@@ -35,13 +35,12 @@ class SearchToolCredential(Base):
 
     The database counterpart of a ``search_tools:`` or ``fetch_tools:`` entry in
     config.yml, as ``kind`` says: it is merged over the config-file entries of
-    its kind at runtime (see ``search_tool_store_service``), with the stored row
-    winning on a name collision, exactly as ``ProviderCredential`` does for
-    providers. ``kind`` is fixed when the row is created, and ``fetch_tool`` is a
-    search row's enrichment instance. The API key is held encrypted
-    (``secret_box``) and is optional, because a ``searxng`` backend is normally
-    keyless; ``last4`` is kept in clear only so the UI can show which key is set
-    without ever decrypting.
+    its kind at runtime (see ``services/tools/_search_tool_overlay``), with the
+    stored row winning on a name collision. ``kind`` is fixed when the row is
+    created, and ``fetch_tool`` is a search row's enrichment instance. The API
+    key is held encrypted (``secret_box``) and is optional, because a
+    ``searxng`` backend is normally keyless; ``last4`` is kept in clear only so
+    the UI can show which key is set without ever decrypting.
     """
 
     __tablename__ = "search_tool_credentials"
@@ -131,12 +130,54 @@ class WorkspaceMcpServer(Base):
     purpose_hint: Mapped[str | None] = mapped_column(Text, default=None)
     allowed_tools: Mapped[list[str] | None] = mapped_column(JSON, default=None)
     enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    # What every key of the workspace may call, as tool patterns ('*', a name,
+    # 'prefix*', or '@read' for read_tools); [] denies everyone. A grant for a
+    # key or its owner overrides it.
+    everyone_tools: Mapped[list[str]] = mapped_column(
+        JSON, default=lambda: ["*"], server_default='["*"]', nullable=False
+    )
+    # The tools a manager labeled read, which an access rule's '@read' stands for.
+    # Empty until labeled, so a tool nobody labeled is never read.
+    read_tools: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
     # The last connection check, in the shape ``WorkspaceMcpServerHealth``
     # publishes; null until one has run, and cleared when the URL, the token or
     # the allow-list changes, since it described the old ones.
     health: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     # ``UtcDateTime`` for the same reason ``WorkspaceBudgetDefault``'s are: these
     # go over the wire and a naive SQLite round-trip would drop the offset.
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class WorkspaceMcpServerGrant(Base):
+    """An exception to a stored MCP server's ``everyone_tools``, for one key or one user.
+
+    Exactly one of ``api_key_id`` and ``user_id`` is set. A key's own grant decides
+    over its owner's, and either decides over the server's ``everyone_tools``;
+    ``tools`` holds patterns in the same grammar, and ``[]`` denies. The server's
+    ``allowed_tools`` stays a ceiling over all of them.
+
+    CASCADE on all three: a grant means nothing without its server, its key or its user.
+    """
+
+    __tablename__ = "workspace_mcp_server_grants"
+    __table_args__ = (
+        CheckConstraint("(api_key_id IS NULL) <> (user_id IS NULL)", name="ck_workspace_mcp_server_grants_one_subject"),
+        UniqueConstraint("server_id", "api_key_id", name="uq_workspace_mcp_server_grants_server_key"),
+        UniqueConstraint("server_id", "user_id", name="uq_workspace_mcp_server_grants_server_user"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    server_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("workspace_mcp_servers.id", ondelete="CASCADE"), nullable=False
+    )
+    api_key_id: Mapped[str | None] = mapped_column(ForeignKey("api_keys.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"), index=True)
+    tools: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime(),
@@ -347,6 +388,11 @@ class WorkspaceWebSearchConfig(Base):
     # forwarded to the backend, which is what lets a new provider need no
     # migration; the adapter in front of it whitelists what it understands.
     provider_options: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # NULL means "no workspace pin": the deployment's ``web_search_intercept`` and the
+    # request's header decide who runs a provider-named search or fetch keyword, as
+    # ``WorkspaceCodeExecutionPolicy.executor`` does for code. One of ``CodeExecutor``'s values.
+    search_executor: Mapped[str | None] = mapped_column(String(16), default=None)
+    fetch_executor: Mapped[str | None] = mapped_column(String(16), default=None)
     # ``UtcDateTime`` for the same reason ``WorkspaceCodeExecutionPolicy`` uses
     # it: these are serialized with ``.isoformat()`` for the dashboard, and a
     # plain ``DateTime(timezone=True)`` round-trips naive on SQLite. The Python
@@ -550,6 +596,9 @@ class ResolvedWebSearchConfig:
     credential: WebSearchCredential | None = None
     # The workspace's own fetch key, which its fetches and the enrichment of its searches use.
     fetch_credential: WebFetchCredential | None = None
+    # Who runs a provider-named search or fetch keyword, where the workspace pinned it.
+    search_executor: CodeExecutor | None = None
+    fetch_executor: CodeExecutor | None = None
 
 
 class SandboxContainer(Base):

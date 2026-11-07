@@ -1,7 +1,20 @@
-import { useRouter } from "@tanstack/react-router"
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+  useRouter,
+} from "@tanstack/react-router"
 import { act, renderHook } from "@testing-library/react"
+import type { ReactNode } from "react"
 import { describe, expect, it } from "vitest"
 
+import {
+  parseSearch,
+  stringifySearch,
+  validateSearch,
+} from "@/shared/helpers/search"
 import { flushRouter, withRouter } from "@/tests/router"
 
 import { useUrlState } from "./urlState"
@@ -157,6 +170,43 @@ describe("useUrlState once its page is left", () => {
     })
 
     expect(router.state.location.href).toBe("/keys?tab=active")
+  })
+})
+
+describe("useUrlState on an index route", () => {
+  it("writes, though its match ends in a slash the location does not", async () => {
+    // A layout with an index page, as `/models` is: the page's match is
+    // `/models/` while the location the browser holds is `/models`.
+    const slot: { current: ReactNode } = { current: null }
+    const rootRoute = createRootRoute({ validateSearch })
+    const layout = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/models",
+    })
+    const index = createRoute({
+      getParentRoute: () => layout,
+      path: "/",
+      component: () => <>{slot.current}</>,
+    })
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([layout.addChildren([index])]),
+      history: createMemoryHistory({ initialEntries: ["/models"] }),
+      parseSearch,
+      stringifySearch,
+    })
+    const { result } = renderHook(() => useUrlState(PAGE_DEFAULTS), {
+      wrapper: ({ children }: { children: ReactNode }) => {
+        slot.current = children
+        return <RouterProvider router={router} />
+      },
+    })
+    await flushRouter()
+
+    await act(async () => {
+      result.current.patch({ model: "gpt-4o" })
+    })
+
+    expect(router.state.location.href).toBe("/models?model=gpt-4o")
   })
 })
 

@@ -2,7 +2,9 @@ import type { FormEvent, KeyboardEvent } from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import type { PlaygroundComparisonPreference, PlaygroundFile } from "@/client"
+import { canContributeToWorkspace } from "@/features/organization/roles"
 import { useCatalog } from "@/shared/api/models"
+import { useOrganizationContext } from "@/shared/api/organizations"
 import {
   fetchPlaygroundConversation,
   useDeletePlaygroundComparison,
@@ -84,6 +86,7 @@ export type PendingAttachment = {
 export function usePlayground() {
   const { selected, isLoading: isLoadingWorkspace } = useSelectedWorkspace()
   const workspaceId = selected?.workspace_id
+  const organizationContext = useOrganizationContext()
 
   // The grouped catalog, not the flat `/models` listing; playgroundModels.ts
   // says why.
@@ -101,6 +104,10 @@ export function usePlayground() {
   const uploadFile = useUploadPlaygroundFile(workspaceId)
   const deleteFile = useDeletePlaygroundFile(workspaceId)
   const [isFilesOpen, setIsFilesOpen] = useState(false)
+  // Never offered in this fork, which ships no traces page and records none by
+  // default: the Playground does not ask the gateway to keep a prompt.
+  const canCapturePrompts = false
+  const [capturePrompts, setCapturePrompts] = useState(false)
   // Read only while the dialog is open: nothing else on the page lists them.
   const files = usePlaygroundFiles(workspaceId, {
     enabled: isFilesOpen && canAttachFiles,
@@ -184,9 +191,10 @@ export function usePlayground() {
     string | undefined
   >(undefined)
 
-  const { streamReply, stop } = usePlaygroundStream({
+  const { streamReply, stop, stopPanel } = usePlaygroundStream({
     workspaceId: workspaceId ?? "",
     tools: toolSelection.selection,
+    capturePrompts: canCapturePrompts && capturePrompts,
   })
 
   /** Anything that makes the on-screen exchange different from the saved one. */
@@ -199,8 +207,8 @@ export function usePlayground() {
   /** Put both panels back to empty, keeping whichever models they hold. */
   const clearPanels = useCallback(() => {
     stop()
-    setPanelA((prev) => ({ ...prev, turns: [] }))
-    setPanelB((prev) => ({ ...prev, turns: [] }))
+    setPanelA((prev) => ({ ...prev, turns: [], sessionId: undefined }))
+    setPanelB((prev) => ({ ...prev, turns: [], sessionId: undefined }))
     invalidateSavedState()
   }, [stop, invalidateSavedState])
 
@@ -382,9 +390,21 @@ export function usePlayground() {
 
       // Both comparison panels receive the same question and stream independently.
       await Promise.all([
-        streamReply(setPanelA, panelA.model, [...panelA.turns, turn]),
+        streamReply(
+          setPanelA,
+          panelA.model,
+          [...panelA.turns, turn],
+          panelA.sessionId,
+        ),
         ...(isComparing && panelB.model
-          ? [streamReply(setPanelB, panelB.model, [...panelB.turns, turn])]
+          ? [
+              streamReply(
+                setPanelB,
+                panelB.model,
+                [...panelB.turns, turn],
+                panelB.sessionId,
+              ),
+            ]
           : []),
       ])
     },
@@ -408,7 +428,7 @@ export function usePlayground() {
       const base = turnsForRegenerate(panel.turns)
       if (base[base.length - 1]?.role !== "user") return
       invalidateSavedState()
-      void streamReply(setPanel, panel.model, base)
+      void streamReply(setPanel, panel.model, base, panel.sessionId)
     },
     [streamReply, invalidateSavedState],
   )
@@ -590,8 +610,13 @@ export function usePlayground() {
       // answers a different prompt from the one beside it, and the rating would
       // be a judgment over an unequal contest. A saved transcript is still in
       // the history.
-      setPanelA((prev) => ({ ...prev, turns: [] }))
-      setPanelB((prev) => ({ ...prev, model: "", turns: [] }))
+      setPanelA((prev) => ({ ...prev, turns: [], sessionId: undefined }))
+      setPanelB((prev) => ({
+        ...prev,
+        model: "",
+        turns: [],
+        sessionId: undefined,
+      }))
       invalidateSavedState()
     }
   }
@@ -618,7 +643,7 @@ export function usePlayground() {
     if (pendingModelChange === undefined) return
     stop()
     setPanelA({ ...EMPTY_PANEL, model: pendingModelChange })
-    setPanelB((prev) => ({ ...prev, turns: [] }))
+    setPanelB((prev) => ({ ...prev, turns: [], sessionId: undefined }))
     invalidateSavedState()
     setPendingModelChange(undefined)
   }
@@ -628,9 +653,13 @@ export function usePlayground() {
   }
 
   const gate = derivePlaygroundGate({
-    isLoading: isLoadingWorkspace || (catalog.isPending && !catalog.data),
+    isLoading:
+      isLoadingWorkspace ||
+      organizationContext.isPending ||
+      (catalog.isPending && !catalog.data),
     isCatalogError: catalog.isError,
     hasWorkspace: workspaceId !== undefined,
+    canRun: canContributeToWorkspace(organizationContext.data, selected?.role),
     modelCount: models.length,
   })
 
@@ -662,6 +691,9 @@ export function usePlayground() {
     uploadError,
 
     // Uploaded files
+    canCapturePrompts,
+    capturePrompts,
+    setCapturePrompts,
     isFilesOpen,
     setIsFilesOpen,
     files: files.data?.pages.flatMap((page) => page.data) ?? [],
@@ -674,6 +706,7 @@ export function usePlayground() {
     submit,
     handleComposerKeyDown,
     stop,
+    stopPanel,
 
     // Panels
     panelA,

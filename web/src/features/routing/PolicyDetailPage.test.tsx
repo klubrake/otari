@@ -10,12 +10,12 @@ import {
   ADMIN_WORKSPACE,
   adminContext,
   CHAIN,
-  LEARNED,
   mockApi,
   policy,
   policyWrites,
   renderInWorkspace,
   renderPage,
+  SPILL_OVER,
   WEIGHTED,
 } from "@/tests/routing"
 
@@ -208,7 +208,7 @@ describe("PolicyDetailPage", () => {
       policy("smart", {
         select: [
           {
-            router: "knn",
+            router: "priority",
             candidates: [
               "openai:gpt-5-nano",
               "openai:gpt-5",
@@ -235,7 +235,7 @@ describe("PolicyDetailPage", () => {
     expect(lastWrite(calls).spec).toEqual({
       select: [
         {
-          router: "knn",
+          router: "priority",
           candidates: [
             "openai:gpt-5",
             "anthropic:claude-sonnet-4-5",
@@ -389,7 +389,9 @@ describe("PolicyDetailPage", () => {
   })
 
   it("goes back to one model, the pool's default", async () => {
-    const { calls } = mockApi([policy("smart", LEARNED, { is_dynamic: true })])
+    const { calls } = mockApi([
+      policy("smart", SPILL_OVER, { is_dynamic: true }),
+    ])
     const user = userEvent.setup()
     renderPolicy("smart")
 
@@ -405,7 +407,7 @@ describe("PolicyDetailPage", () => {
     mockApi([
       policy("smart", {
         select: [
-          { router: "knn", candidates: ["openai:gpt-5-nano"] },
+          { router: "priority", candidates: ["openai:gpt-5-nano"] },
           { default: "openai:gpt-5" },
         ],
       }),
@@ -421,7 +423,9 @@ describe("PolicyDetailPage", () => {
   })
 
   it("making another model the default changes the saved default, not the pool", async () => {
-    const { calls } = mockApi([policy("smart", LEARNED, { is_dynamic: true })])
+    const { calls } = mockApi([
+      policy("smart", SPILL_OVER, { is_dynamic: true }),
+    ])
     const user = userEvent.setup()
     renderPolicy("smart")
 
@@ -431,13 +435,15 @@ describe("PolicyDetailPage", () => {
     await save(user)
 
     expect(lastWrite(calls).spec.select).toEqual([
-      { router: "knn", candidates: ["openai:gpt-5-nano", "openai:gpt-5"] },
+      { router: "priority", candidates: ["openai:gpt-5-nano", "openai:gpt-5"] },
       { default: "openai:gpt-5-nano" },
     ])
   })
 
   it("adds a backup to a learned policy and keeps its pool", async () => {
-    const { calls } = mockApi([policy("smart", LEARNED, { is_dynamic: true })])
+    const { calls } = mockApi([
+      policy("smart", SPILL_OVER, { is_dynamic: true }),
+    ])
     const user = userEvent.setup()
     renderPolicy("smart")
 
@@ -448,7 +454,7 @@ describe("PolicyDetailPage", () => {
     await save(user)
 
     expect(lastWrite(calls).spec).toEqual({
-      ...LEARNED,
+      ...SPILL_OVER,
       on_failure: ["anthropic:claude-haiku-4-5"],
     })
   })
@@ -556,42 +562,6 @@ describe("PolicyDetailPage", () => {
     expect(lastWrite(calls).spec.select[0]).toEqual(WEIGHTED.select[0])
   })
 
-  it("marks a Smart router pool model with no price, and holds the save", async () => {
-    const { calls } = mockApi([], null, [], {
-      context: adminContext(),
-      memberPolicies: [
-        policy("smart", LEARNED, {
-          workspace_id: ADMIN_WORKSPACE,
-          is_dynamic: true,
-        }),
-      ],
-      unpriced: ["openai:gpt-5-nano"],
-    })
-    const user = userEvent.setup()
-    renderInWorkspace(<PolicyDetailPage name="smart" />, "/routing/smart")
-
-    expect(await screen.findByText("No price set")).toBeInTheDocument()
-    expect(listed("Pool")[0]).toMatch(/gpt-5-nano.*No price set/)
-    expect(
-      screen.getByRole("link", { name: "Set a price in Pricing" }),
-    ).toHaveAttribute("href", "/organization/pricing")
-    const asked = calls.find((call) => call.url.includes("/unpriced"))
-    expect(asked?.url).toContain(`workspace_id=${ADMIN_WORKSPACE}`)
-
-    await user.click(screen.getByRole("button", { name: "Make default" }))
-    expect(
-      screen.getByText(
-        /Can't save: gpt-5-nano has no price, and Smart router needs one/,
-      ),
-    ).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
-
-    // A split weighs by share, not price, so nothing is asked or held.
-    await user.click(screen.getByRole("radio", { name: "Split traffic" }))
-    expect(screen.queryByText("No price set")).toBeNull()
-    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled()
-  })
-
   it("will not save a split where every share is zero, or one naming a model twice", async () => {
     const { calls } = mockApi([
       policy("balanced", WEIGHTED, { is_dynamic: true }),
@@ -634,7 +604,7 @@ describe("PolicyDetailPage", () => {
       policy("wide", {
         select: [
           {
-            router: "knn",
+            router: "priority",
             candidates: [
               "openai:gpt-5-nano",
               "openai:gpt-5-mini",
@@ -798,7 +768,7 @@ describe("PolicyDetailPage", () => {
   it("opens the user's own row when the address names one", async () => {
     mockApi([
       policy("cheap", CHAIN),
-      policy("cheap", LEARNED, { user_id: "u-bob" }),
+      policy("cheap", SPILL_OVER, { user_id: "u-bob" }),
     ])
     renderPolicy("cheap", "/routing/cheap?user=u-bob")
 

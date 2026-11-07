@@ -66,6 +66,23 @@ class OrganizationMemberRepository(
         )
         return result.scalars().first()
 
+    async def get_active_roles(
+        self, organization_ids: Collection[uuid.UUID], user_ids: Collection[uuid.UUID]
+    ) -> dict[tuple[uuid.UUID, uuid.UUID], str]:
+        """Return the role of each active membership joining one of these users to one of these organizations."""
+        if not organization_ids or not user_ids:
+            return {}
+        result = await self.db.execute(
+            select(
+                col(OrganizationMember.organization_id), col(OrganizationMember.user_id), col(OrganizationMember.role)
+            ).where(
+                col(OrganizationMember.organization_id).in_(list(organization_ids)),
+                col(OrganizationMember.user_id).in_(list(user_ids)),
+                col(OrganizationMember.status) == "active",
+            )
+        )
+        return {(organization_id, user_id): role for organization_id, user_id, role in result.tuples().all()}
+
     async def get_by_id_and_organization(
         self,
         organization_member_id: uuid.UUID,
@@ -143,6 +160,22 @@ class OrganizationMemberRepository(
         result = await self.db.execute(statement)
         return result.scalars().first()
 
+    async def active_with_roles(
+        self, organization_id: uuid.UUID, user_ids: Collection[uuid.UUID], roles: Collection[str]
+    ) -> set[uuid.UUID]:
+        """Which of ``user_ids`` hold an active membership of one of ``roles`` in the organization, in one query."""
+        if not user_ids or not roles:
+            return set()
+        result = await self.db.execute(
+            select(col(OrganizationMember.user_id)).where(
+                col(OrganizationMember.organization_id) == organization_id,
+                col(OrganizationMember.user_id).in_(list(user_ids)),
+                col(OrganizationMember.status) == "active",
+                col(OrganizationMember.role).in_(list(roles)),
+            )
+        )
+        return set(result.scalars().all())
+
     async def first_active_organization_ids(
         self,
         user_ids: Collection[uuid.UUID],
@@ -165,7 +198,7 @@ class OrganizationMemberRepository(
             .order_by(col(OrganizationMember.created_at), col(OrganizationMember.id))
         )
         first: dict[uuid.UUID, uuid.UUID] = {}
-        for user_id, organization_id in result.tuples():
+        for user_id, organization_id in result.all():
             first.setdefault(user_id, organization_id)
         return first
 
@@ -184,7 +217,7 @@ class OrganizationMemberRepository(
         return list(result.scalars().all())
 
     @staticmethod
-    def attribution_ids(organization_id: uuid.UUID) -> Select[tuple[str]]:
+    def attribution_ids(organization_id: uuid.UUID) -> Select[str]:
         """Everyone who has held a membership in the organization, whatever its status, as the attribution id.
 
         The identity's UUID as a string, which is what a key, a budget or a

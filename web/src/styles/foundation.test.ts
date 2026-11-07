@@ -723,6 +723,7 @@ it("has no comment opened inside another comment in the foundation", () => {
 describe("a table is a region, not a card", () => {
   const PLACES = [
     "otari-accounts-table",
+    "otari-blocked-emails-table",
     "otari-breakdown",
     "otari-budgets-table",
     "otari-domains-table",
@@ -731,7 +732,6 @@ describe("a table is a region, not a card", () => {
     "otari-members-table",
     "otari-models-table",
     "otari-offered-models-table",
-    "otari-overview-activity",
     "otari-provider-keys-table",
     "otari-providers-table",
     "otari-routing-table",

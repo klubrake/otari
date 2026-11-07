@@ -42,7 +42,7 @@ export function ToolPriceDialog({
             input_price_per_million: perCallToStored(perCall ?? 0),
             // A tool call is one unit; there is no output side of it to price.
             output_price_per_million: 0,
-            unit: "requests",
+            unit: "request",
           },
           { onSuccess: onClose },
         )

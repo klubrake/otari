@@ -103,8 +103,6 @@ export const Fallback: Story = {
 
 export const SplitTraffic: Story = { args: { startAt: "weighted" } }
 
-export const SmartRouter: Story = { args: { startAt: "knn" } }
-
 export const SpillOver: Story = { args: { startAt: "priority" } }
 
 export const TierDown: Story = { args: { startAt: "tierdown" } }

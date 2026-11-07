@@ -24,6 +24,9 @@
    that file's header before adding a rule to either side. */
 @import "../design-system/design-system.css";
 
+/* Test files quote class names in comments and fixtures; scanning them ships those as utilities. */
+@source not "../**/*.test.{ts,tsx}";
+
 /* Both spellings of the dark theme, so the `dark:` variant tracks the same
    selector the theme block below is keyed on. The element itself has to match
    as well as its descendants: `<html class="dark">` carries the tokens, and a
@@ -2383,8 +2386,7 @@ main {
  * in by adding its own hook to these selectors rather than by this reaching
  * pages whose design does not exist yet.
  * ============================================================= */
-.otari-breakdown .otari-table.table-root,
-.otari-overview-activity .otari-table.table-root {
+.otari-breakdown .otari-table.table-root {
   border-top: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
 }
@@ -2396,8 +2398,7 @@ main {
    lines below at equal specificity, where the later source position won and put
    the doubled border back. Keeping all three together is what stops the next
    edit from reintroducing it: there is one place to look. */
-.otari-breakdown .otari-table .table__header,
-.otari-overview-activity .otari-table .table__header {
+.otari-breakdown .otari-table .table__header {
   border-top: 0;
 }
 /* Only the breakdown tables freeze a lane, and the Overview preview is ruled
@@ -2519,6 +2520,12 @@ main {
   width: 8.5rem;
   min-width: 8.5rem;
 }
+/* A server's exceptions: two 24px actions keep a fixed lane while who and
+   what share the rest. */
+.otari-mcp-grants-table .table__column[data-key="actions"] {
+  width: 6rem;
+  min-width: 6rem;
+}
 .otari-budgets-table .table__row .table__cell {
   height: 3.625rem;
   padding-block: 0;
@@ -2611,6 +2618,22 @@ main {
 .otari-accounts-table[data-scrolled="true"]
   .table__cell[data-column="account"] {
   border-right: 1px solid var(--color-control-border);
+}
+/* The operator's email blocklist, under the accounts table and in its terms. */
+.otari-blocked-emails-table .table__row .table__cell {
+  height: 3.625rem;
+  padding-block: 0;
+}
+.otari-blocked-emails-table .table__column[data-key="added"] {
+  width: 8.75rem;
+  min-width: 8.75rem;
+}
+.otari-blocked-emails-table .table__column[data-key="actions"] {
+  width: 10rem;
+  min-width: 10rem;
+}
+.otari-blocked-emails-table .table__column[data-key="entry"] {
+  min-width: 18.75rem;
 }
 .otari-workspaces-table .table__row .table__cell {
   height: 3.625rem;

@@ -11,11 +11,9 @@ import type {
   AutomaticFallbacksResponse,
   CreateAliasRequest,
   OrganizationPolicyFields,
-  RouterStatus,
   RoutingPolicyResponse,
   RoutingTrafficResponse,
   SetRoutingPolicyRequest,
-  UnpricedSelectorsResponse,
 } from "@/client"
 import { apiFetch } from "@/shared/api/client"
 import { useDeploymentOperator } from "@/shared/api/organizations"
@@ -24,10 +22,8 @@ import {
   AUTOMATIC_FALLBACKS,
   CATALOG,
   MODELS,
-  ROUTER_STATUS,
   ROUTING_POLICIES,
   ROUTING_TRAFFIC,
-  ROUTING_UNPRICED,
   workspaceMeta,
 } from "@/shared/api/queryKeys"
 
@@ -153,34 +149,6 @@ export function useRoutingTraffic(
     staleTime: 60_000,
     enabled,
     // Kept while the key filter changes, so the list does not empty out.
-    placeholderData: keepPreviousData,
-  })
-}
-
-/**
- * Which of a Smart router pool's models have no pricing in the workspace, the
- * check a save would fail on, asked while the pool is edited. Empty selectors
- * are left out; nothing is asked for an empty pool.
- */
-export function useUnpricedSelectors(
-  workspaceId: string | undefined,
-  selectors: readonly string[],
-  enabled = true,
-) {
-  const named = [...new Set(selectors.filter((selector) => selector !== ""))]
-  return useQuery({
-    queryKey: [ROUTING_UNPRICED, workspaceId ?? null, named],
-    meta: workspaceMeta(workspaceId),
-    queryFn: () => {
-      const params = new URLSearchParams({ workspace_id: workspaceId ?? "" })
-      for (const selector of named) params.append("selector", selector)
-      return apiFetch<UnpricedSelectorsResponse>(
-        `/organizations/me/routing-policies/unpriced?${params}`,
-      )
-    },
-    enabled: enabled && workspaceId !== undefined && named.length > 0,
-    staleTime: 60_000,
-    // Kept while the pool changes, so a mark does not blink out per keystroke.
     placeholderData: keepPreviousData,
   })
 }
@@ -350,27 +318,6 @@ export function useDeleteOrganizationAlias() {
         { method: "DELETE" },
       ),
     onSuccess: () => invalidateRoutingLists(queryClient),
-  })
-}
-
-// --- Learned routing ------------------------------------------------------
-
-/** How warm a user's routing memory is.
- *
- *  Keyed by user because warmth is per user: the records hold that user's
- *  prompts, so a global learned policy warms once per caller. Disabled until a
- *  user is chosen rather than defaulting to one, because "whose memory" has no
- *  sensible default.
- */
-export function useRouterStatus(userId: string | null) {
-  return useQuery({
-    queryKey: [ROUTER_STATUS, userId],
-    queryFn: () =>
-      apiFetch<RouterStatus>(
-        `/routing/status?user_id=${encodeURIComponent(userId ?? "")}`,
-      ),
-    enabled: userId !== null && userId !== "",
-    staleTime: 30_000,
   })
 }
 

@@ -24,6 +24,7 @@ import {
   ProviderCredentialFields,
   parseClientArgs,
 } from "@/features/providers/providerFields"
+import { ZeroDataRetentionField } from "@/features/providers/ZeroDataRetentionField"
 import {
   useCreateHostedProvider,
   useTestHostedProvider,
@@ -35,6 +36,8 @@ import {
   SessionAffinityField,
   supportsSessionAffinity,
 } from "./SessionAffinityField"
+import { SupportedCountriesField } from "./SupportedCountriesField"
+import { parseCountries } from "./supportedCountries"
 
 // The form that configures a new hosted provider, in the shape of the
 // organization Providers page's key form: the provider picked from the catalog,
@@ -58,6 +61,8 @@ interface ProviderDraft {
   clientArgs: string
   servesUnlistedModels: boolean
   sessionAffinity: boolean
+  supportedCountries: string
+  zeroDataRetention: boolean
 }
 
 const EMPTY_DRAFT: ProviderDraft = {
@@ -69,6 +74,8 @@ const EMPTY_DRAFT: ProviderDraft = {
   clientArgs: "",
   servesUnlistedModels: false,
   sessionAffinity: false,
+  supportedCountries: "",
+  zeroDataRetention: false,
 }
 
 export function AddHostedProviderForm({
@@ -97,6 +104,7 @@ export function AddHostedProviderForm({
 
   const spec = credentialSpecFor(draft.provider)
   const parsedClientArgs = parseClientArgs(draft.clientArgs)
+  const countries = parseCountries(draft.supportedCountries)
   const credentialErrors = validateCredentialFields(
     credentialFieldsFor(draft.provider),
     draft.credentials,
@@ -107,6 +115,7 @@ export function AddHostedProviderForm({
     !nameHasDelimiter &&
     (!needsKey || draft.apiKey !== "") &&
     parsedClientArgs.ok &&
+    countries.ok &&
     Object.keys(credentialErrors).length === 0
 
   // One body for the save and the test, so the test tries what would be saved.
@@ -134,11 +143,15 @@ export function AddHostedProviderForm({
 
   const submit = () => {
     const payload = buildPayload()
-    if (!canSubmit || payload === null) return
+    if (!canSubmit || payload === null || !countries.ok) return
     create.mutate(
       {
         ...payload,
         serves_unlisted_models: draft.servesUnlistedModels,
+        zero_data_retention: draft.zeroDataRetention,
+        ...(countries.value === null
+          ? {}
+          : { supported_countries: countries.value }),
         ...(offersAffinity && draft.sessionAffinity
           ? { session_affinity: true }
           : {}),
@@ -235,6 +248,19 @@ export function AddHostedProviderForm({
           }
         />
       ) : null}
+      <ZeroDataRetentionField
+        isSelected={draft.zeroDataRetention}
+        onChange={(zeroDataRetention) =>
+          setDraft({ ...draft, zeroDataRetention })
+        }
+      />
+      <SupportedCountriesField
+        value={draft.supportedCountries}
+        parsed={countries}
+        onChange={(supportedCountries) =>
+          setDraft({ ...draft, supportedCountries })
+        }
+      />
       <ProviderCredentialFields
         provider={draft.provider}
         values={draft.credentials}

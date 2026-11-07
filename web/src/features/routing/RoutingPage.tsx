@@ -1,14 +1,7 @@
 import { Button } from "@heroui/react"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import {
-  FiCopy,
-  FiEdit2,
-  FiEye,
-  FiList,
-  FiLock,
-  FiTrash2,
-} from "react-icons/fi"
+import { FiCopy, FiEdit2, FiEye, FiLock, FiTrash2 } from "react-icons/fi"
 
 import type { ApiKey, NameTraffic } from "@/client"
 
@@ -23,7 +16,6 @@ import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import { DocsLink } from "@/design-system/navigation/DocsLink"
 import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
-import { RouterReadiness } from "@/features/routing/RouterReadiness"
 import { useKeys } from "@/shared/api/apiKeys"
 import {
   useAutomaticFallbacks,
@@ -38,15 +30,7 @@ import { AutomaticFallbacks } from "./AutomaticFallbacks"
 import { CreatePolicyDialog } from "./CreatePolicyDialog"
 import { SentByCell, TriedInOrderCell } from "./PolicyCells"
 import type { Intent } from "./policyDraft"
-import {
-  findCandidates,
-  findFallthroughTarget,
-  findRouterBackend,
-  isEditableInForm,
-  KNN_BACKEND,
-  type RoutingRow,
-  rowKeyOf,
-} from "./policyModel"
+import { isEditableInForm, type RoutingRow, rowKeyOf } from "./policyModel"
 import { namesSent, trafficForRow } from "./routingTraffic"
 import { usePolicyDelete } from "./usePolicyDelete"
 import { useRoutingRows } from "./useRoutingRows"
@@ -128,8 +112,6 @@ export function RoutingPage() {
   }
   const closeCreate = () => setAdding(false)
   const [pendingDelete, setPendingDelete] = useState<RoutingRow>()
-  // Readiness opens inline under its own row, next to the control that opened it.
-  const [expanded, setExpanded] = useState<string>()
   const canCreate = canEdit || canCreateOwn
   // `adding` is seeded from ?target= before the membership context settles, so
   // the role is applied here: a caller who may not create gets the read-only page.
@@ -154,21 +136,6 @@ export function RoutingPage() {
         search: row.user_id ? { user: row.user_id } : {},
       }),
     [navigate],
-  )
-
-  // Stable so DataTable's row cache holds; see its docstring.
-  const renderDetail = useCallback(
-    (row: RoutingRow) => (
-      <RouterReadiness
-        policyName={row.name}
-        candidates={findCandidates(row.spec)}
-        defaultTarget={findFallthroughTarget(row.spec)}
-        backend={findRouterBackend(row.spec) ?? KNN_BACKEND}
-        scopedUserId={row.user_id ?? null}
-        onClose={() => setExpanded(undefined)}
-      />
-    ),
-    [],
   )
 
   const names = traffic.data?.names ?? NO_TRAFFIC
@@ -265,26 +232,6 @@ export function RoutingPage() {
       id: "actions",
       header: "",
       cell: (policy) => {
-        // Teaching is data, not configuration, so it is offered even for a policy
-        // defined in config.yml: an operator can score examples for a policy they
-        // cannot edit here, and without this that policy could never route.
-        // Operator-only, because the panel reads the deployment-wide
-        // `/routing/status`; an em dash where a policy has nothing to learn.
-        const readiness = !isOperator ? null : findRouterBackend(
-            policy.spec,
-          ) !== KNN_BACKEND ? (
-          <span className="text-muted">—</span>
-        ) : (
-          <RowAction
-            icon={FiList}
-            label={expanded === rowKeyOf(policy) ? "Hide examples" : "Examples"}
-            onPress={() =>
-              setExpanded((current) =>
-                current === rowKeyOf(policy) ? undefined : rowKeyOf(policy),
-              )
-            }
-          />
-        )
         const isEditable = canEditRow(policy)
         // A policy this dashboard cannot edit without loss opens read-only.
         const canOpenToEdit = isEditable && isEditableInForm(policy.spec)
@@ -296,7 +243,6 @@ export function RoutingPage() {
           !hasOwnVersion(policy)
         return (
           <RowActionRow>
-            {readiness}
             {canCopy ? (
               <RowAction
                 icon={FiCopy}
@@ -335,8 +281,6 @@ export function RoutingPage() {
     canCreateOwn,
     canEditRow,
     copyPolicy,
-    expanded,
-    isOperator,
     isOwn,
     keyLabelOf,
     manages,
@@ -369,8 +313,6 @@ export function RoutingPage() {
         columns={columns}
         rows={tableRows}
         getRowKey={rowKeyOf}
-        detailKey={expanded}
-        renderDetail={renderDetail}
         isLoading={isListLoading}
         emptyContent={
           keyFilter

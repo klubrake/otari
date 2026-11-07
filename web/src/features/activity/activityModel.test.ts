@@ -430,6 +430,16 @@ describe("rowOutcome", () => {
     ).toEqual({ kind: "success", label: "OK", note: "2 recovered" })
   })
 
+  it("reads an abandoned stream's estimated row as incomplete, not failed", () => {
+    expect(
+      rowOutcome(entry({ status: "incomplete", status_code: null })),
+    ).toEqual({
+      kind: "recovered",
+      label: "Incomplete",
+      note: "client left; tokens estimated",
+    })
+  })
+
   it("reads an absorbed attempt as recovered, not failed", () => {
     expect(rowOutcome(entry({ status: "absorbed", status_code: 529 }))).toEqual(
       { kind: "recovered", label: "529", note: "Overloaded" },
@@ -476,6 +486,14 @@ describe("rowCost", () => {
     })
     expect(rowCost(entry({ status: "absorbed", cost: 0.02 }))).toEqual({
       kind: "none",
+    })
+  })
+
+  it("charges an abandoned stream its estimated cost", () => {
+    expect(rowCost(entry({ status: "incomplete", cost: 0.004 }))).toEqual({
+      kind: "priced",
+      cost: 0.004,
+      isBilled: true,
     })
   })
 

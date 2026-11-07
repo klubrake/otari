@@ -21,6 +21,7 @@ import {
   ORGANIZATION_PRICING,
   ORGANIZATION_PROVIDER_MODELS,
   PRICING,
+  SEARCH_TOOLS,
 } from "@/shared/api/queryKeys"
 
 const fetchAllPricing = () => fetchAllRows<PricingResponse>("/pricing")
@@ -76,6 +77,35 @@ export function useSetPricing() {
       void queryClient.invalidateQueries({ queryKey: [PRICING] })
       void queryClient.invalidateQueries({ queryKey: [MODELS] })
       void queryClient.invalidateQueries({ queryKey: [CATALOG] })
+      // The search and fetch tool listing carries each tool's price.
+      void queryClient.invalidateQueries({ queryKey: [SEARCH_TOOLS] })
+    },
+  })
+}
+
+/**
+ * Deletes every version of one key's deployment price, of one kind.
+ *
+ * A 404 means nothing priced the key, which is what the caller asked for, so
+ * it resolves rather than fails.
+ */
+export function useDeletePricing() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ kind, modelKey }: PricedKey) =>
+      apiFetch<void>(
+        `/pricing/${encodeURIComponent(modelKey)}?kind=${encodeURIComponent(kind)}`,
+        { method: "DELETE" },
+      ).catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 404) return
+        throw error
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: [PRICING] })
+      void queryClient.invalidateQueries({ queryKey: [MODELS] })
+      void queryClient.invalidateQueries({ queryKey: [CATALOG] })
+      // The search and fetch tool listing carries each tool's price.
+      void queryClient.invalidateQueries({ queryKey: [SEARCH_TOOLS] })
     },
   })
 }

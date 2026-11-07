@@ -12,6 +12,7 @@ service is in `services/providers/` for that reason among others.
 """
 
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
+from gateway.services.tenancy.membership_listener import MembershipListener, MembershipListeners
 from gateway.services.tenancy.org_provider_key_service import OrgProviderKeyService
 from gateway.services.tenancy.organization_domain_service import DomainAutoJoinListener, OrganizationDomainService
 from gateway.services.tenancy.organization_service import InvitationClaimSettings, OrganizationService
@@ -22,6 +23,7 @@ from gateway.services.tenancy.user_service import (
     describe_caller,
     forget_unproven_access,
     report_new_account,
+    report_sign_in,
     unverified_identity_is_claimable,
     update_full_name,
 )
@@ -31,6 +33,8 @@ __all__ = [
     "DeploymentUserService",
     "DomainAutoJoinListener",
     "InvitationClaimSettings",
+    "MembershipListener",
+    "MembershipListeners",
     "OrgProviderKeyService",
     "OrganizationDomainService",
     "OrganizationService",
@@ -43,6 +47,7 @@ __all__ = [
     "hash_token",
     "render_password_reset_email",
     "report_new_account",
+    "report_sign_in",
     "unverified_identity_is_claimable",
     "update_full_name",
 ]

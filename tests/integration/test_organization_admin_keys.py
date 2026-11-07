@@ -299,8 +299,11 @@ def test_nobody_on_this_surface_can_exempt_a_key_from_budget(admin_client: TestC
     code, body = _call(
         admin_client, world, "admin", "PATCH", f"{_KEYS}/{world.keys['member']}", json={"exclude_from_budget": True}
     )
-    assert code == status.HTTP_200_OK, body
-    assert body["exclude_from_budget"] is False
+    # Refused rather than dropped, so the caller learns it did not apply.
+    assert code == status.HTTP_422_UNPROCESSABLE_CONTENT, body
+    code, listed = _call(admin_client, world, "admin", "GET", _KEYS)
+    assert code == status.HTTP_200_OK, listed
+    assert all(key["exclude_from_budget"] is False for key in listed)
 
 
 @pytest.mark.parametrize(
@@ -435,7 +438,6 @@ def test_an_owner_or_admin_creates_a_key_for_a_member(admin_client: TestClient, 
             "key_name": "for-member",
             "user_id": str(world.users["member"]),
             "workspace_id": str(world.workspaces["alpha_one"]),
-            "exclude_from_budget": True,
         },
     )
     assert code == status.HTTP_200_OK, body

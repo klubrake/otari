@@ -14,14 +14,18 @@ The matcher (:func:`is_model_allowed`) is the one place membership is decided; b
 the inference gates and the catalog filter feed it the *same* canonical
 ``instance:model`` key so visibility and execution can never disagree.
 
-A search tool has a list of its own, ``allowed_tools``, of tool names
+A search or fetch tool has a list of its own, ``allowed_tools``, of tool names
 (:func:`effective_tool_allowlist`), so no model wildcard can grant one.
+
+A workspace's stored MCP servers carry access rules of their own (:class:`McpAccess`):
+what everyone may call, and grants for single keys and users.
 """
 
 import uuid
-from collections.abc import Container, Sequence
-from dataclasses import dataclass
+from collections.abc import Container, Mapping, Sequence
+from dataclasses import dataclass, field
 from http import HTTPStatus
+from typing import Literal
 
 from any_llm import LLMProvider
 from sqlalchemy import select
@@ -29,13 +33,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.error_codes import INVALID_MODEL, MODEL_NOT_ALLOWED, MODEL_NOT_FOUND, MODEL_NOT_SERVING
-from gateway.core.settings.tools import ALL_SEARCH_TOOLS
+from gateway.core.settings.tools import ALL_SEARCH_TOOLS, ToolKind, effective_fetch_instances
 from gateway.models.api_keys import APIKey
 from gateway.models.users import User
+from gateway.repositories.tenancy import WorkspaceRepository
+from gateway.repositories.tools import WorkspaceMcpServerGrantRepository, WorkspaceMcpServerRepository
 from gateway.services.alias_service import all_alias_names
 from gateway.services.catalog import dated_builds
 from gateway.services.provider_kwargs import reaches_organization_key, split_selector
-from gateway.services.tenancy.org_provider_key_service import cached_org_key_offer, cached_org_model_restriction
+from gateway.services.tenancy.org_provider_key_service import (
+    cached_org_key_offer,
+    cached_org_key_zero_data_retention,
+    cached_org_model_restriction,
+    cached_org_provider_kwargs,
+    cached_org_slug_provider,
+)
 
 
 def effective_allowlist(api_key: APIKey | None, user: User | None = None) -> list[str] | None:
@@ -105,7 +117,7 @@ KEY_MODELS_EXCEED_USER_DETAIL = (
     "the user's model access, not broaden it."
 )
 KEY_TOOLS_EXCEED_USER_DETAIL = (
-    "This key's allowed_tools exceeds its user's; a key can only narrow the user's search tool access, not broaden it."
+    "This key's allowed_tools exceeds its user's; a key can only narrow the user's tool access, not broaden it."
 )
 
 
@@ -171,13 +183,14 @@ def effective_tool_allowlist(
     user_tools: list[str] | None,
     user_models: list[str] | None,
 ) -> list[str] | None:
-    """The search tools a key may use, by name. ``None`` = every one.
+    """The search and fetch tools a key may use, by name. ``None`` = every one.
 
     The key's own ``allowed_tools`` wins, then its user's. With neither set, the
-    tools its model list grants the deprecated way, so a key restricted to models
-    stays refused every tool until one is granted, and never one its user's model
-    list does not grant too: a user's wildcard can admit a key's exact entry at
-    write time, and the wildcard grants no tool.
+    search tools its model list grants the deprecated way, which grants no fetch
+    tool, so a key restricted to models stays refused every tool until one is
+    granted, and never one its user's model list does not grant too: a user's
+    wildcard can admit a key's exact entry at write time, and the wildcard
+    grants no tool.
     """
     if key_tools is not None:
         return key_tools
@@ -201,7 +214,7 @@ def tools_within_user(
 
 
 def is_tool_allowed(allowlist: list[str] | None, tool: str) -> bool:
-    """Whether a search tool, by name, is permitted. ``None`` = every tool, ``[]`` = none."""
+    """Whether a search or fetch tool, by name, is permitted. ``None`` = every tool, ``[]`` = none."""
     if allowlist is None:
         return True
     return ALL_SEARCH_TOOLS in allowlist or tool in allowlist
@@ -217,32 +230,186 @@ def is_tool_allowlist_subset(child: list[str] | None, parent: list[str] | None) 
 def validate_allowed_tools(config: GatewayConfig, entries: list[str] | None) -> list[str] | None:
     """Validate a write of ``allowed_tools``. ``None`` and ``[]`` pass through as-is.
 
-    An entry is a search tool's name, configured or stored, or ``*``. Raises
-    ``ValueError`` (a 400 at the caller) on any other; duplicates are collapsed.
+    An entry is a search or fetch tool's name, configured or stored,
+    ``builtin_fetch`` included, or ``*``. Raises ``ValueError`` (a 400 at the
+    caller) on any other; duplicates are collapsed.
     """
     if entries is None:
         return None
     if not isinstance(entries, list):
         raise ValueError("allowed_tools must be a list of strings, [] to deny all, or null to inherit")
     names: list[str] = []
+    fetch_tools = effective_fetch_instances(config)
     for entry in entries:
         if not isinstance(entry, str):
             raise ValueError("allowed_tools entries must be strings")
         name = entry.strip()
-        if name != ALL_SEARCH_TOOLS and name not in config.search_tools:
-            raise ValueError(f"'{name}' is not a search tool; name a configured one, or '*' for every search tool")
+        if name != ALL_SEARCH_TOOLS and name not in config.search_tools and name not in fetch_tools:
+            raise ValueError(
+                f"'{name}' is not a search or fetch tool; name a configured one, builtin_fetch, or '*' for every tool"
+            )
         if name not in names:
             names.append(name)
     return names
 
 
-def tool_not_allowed_detail(tool: str, legacy_key: str, legacy_models: Sequence[list[str]] = ()) -> str:
-    """Human-readable 403 detail for a search tool a key may not use.
+MAX_MCP_TOOL_PATTERNS = 256
+"""Most tool patterns one access rule (a server's ``everyone_tools`` or one grant) may hold."""
+MAX_MCP_TOOL_PATTERN_LENGTH = 256
+"""Longest one tool pattern may be: the longest tool name execution accepts."""
+
+McpAccessSource = Literal["key", "user", "everyone"]
+
+MCP_READ_PRESET = "@read"
+"""The tool pattern naming a server's read tools: the ones its managers labeled read, never the server's own hints."""
+
+
+def is_mcp_tool_allowed(patterns: Sequence[str], tool: str) -> bool:
+    """Whether a tool name matches one of a rule's tool patterns: ``*``, ``prefix*`` or an exact name.
+
+    ``@read`` matches nothing here; :func:`expand_mcp_tool_patterns` swaps it for the server's read tools first.
+    """
+    return any(
+        pattern != MCP_READ_PRESET and (pattern == tool or (pattern.endswith("*") and tool.startswith(pattern[:-1])))
+        for pattern in patterns
+    )
+
+
+def expand_mcp_tool_patterns(patterns: Sequence[str], read_tools: Sequence[str]) -> list[str]:
+    """A rule's tool patterns on one server, with ``@read`` replaced by that server's read tools."""
+    if MCP_READ_PRESET not in patterns:
+        return list(patterns)
+    expanded = [pattern for pattern in patterns if pattern != MCP_READ_PRESET]
+    return expanded + [name for name in read_tools if name not in expanded]
+
+
+def validate_mcp_tool_patterns(patterns: object) -> list[str]:
+    """Validate an MCP access rule's tool patterns; ``[]`` denies. Raises ``ValueError`` (a 400 or 422 at the caller).
+
+    A pattern is a tool name, ``*`` for every tool, a name prefix ending in ``*``, or ``@read`` for the
+    server's read tools. Duplicates collapse.
+    """
+    if not isinstance(patterns, list):
+        raise ValueError("tools must be a list of tool names or patterns, [] to deny")
+    if len(patterns) > MAX_MCP_TOOL_PATTERNS:
+        raise ValueError(f"tools holds at most {MAX_MCP_TOOL_PATTERNS} entries")
+    checked: list[str] = []
+    for pattern in patterns:
+        if not isinstance(pattern, str) or not pattern.strip():
+            raise ValueError("tools entries must be non-empty strings")
+        name = pattern.strip()
+        if len(name) > MAX_MCP_TOOL_PATTERN_LENGTH:
+            raise ValueError(f"tools entries are at most {MAX_MCP_TOOL_PATTERN_LENGTH} characters")
+        if "*" in name[:-1]:
+            raise ValueError(f"'{name}' is not a tool pattern; '*' may only end one, as in 'get_*'")
+        if name.startswith("@") and name != MCP_READ_PRESET:
+            raise ValueError(f"'{name}' is not a tool pattern; the only preset is '{MCP_READ_PRESET}'")
+        if name not in checked:
+            checked.append(name)
+    return ["*"] if "*" in checked else checked
+
+
+def validate_mcp_read_tools(names: object) -> list[str]:
+    """Validate a server's read tools: exact tool names, since ``@read`` must not widen past what was labeled.
+
+    Raises ``ValueError`` (a 422 at the caller). Duplicates collapse.
+    """
+    if not isinstance(names, list):
+        raise ValueError("read_tools must be a list of tool names")
+    if len(names) > MAX_MCP_TOOL_PATTERNS:
+        raise ValueError(f"read_tools holds at most {MAX_MCP_TOOL_PATTERNS} entries")
+    checked: list[str] = []
+    for name in names:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("read_tools entries must be non-empty strings")
+        if len(name.strip()) > MAX_MCP_TOOL_PATTERN_LENGTH:
+            raise ValueError(f"read_tools entries are at most {MAX_MCP_TOOL_PATTERN_LENGTH} characters")
+        if "*" in name or name.strip().startswith("@"):
+            raise ValueError(f"'{name}' is not a tool name; read_tools names tools exactly")
+        if name.strip() not in checked:
+            checked.append(name.strip())
+    return checked
+
+
+@dataclass(frozen=True, slots=True)
+class McpAccess:
+    """What one caller may reach among its workspace's stored MCP servers.
+
+    ``key_grants`` and ``user_grants`` are the tool patterns the caller's key and its owner hold on
+    each server, by server id. A key's grant decides over its owner's, and either over the server's
+    ``everyone_tools``. ``unrestricted`` is the master key, which no rule binds.
+    """
+
+    unrestricted: bool = False
+    key_grants: Mapping[uuid.UUID, tuple[str, ...]] = field(default_factory=dict)
+    user_grants: Mapping[uuid.UUID, tuple[str, ...]] = field(default_factory=dict)
+    request_servers_allowed: bool = True
+
+    def decide(self, server_id: uuid.UUID, everyone_tools: Sequence[str]) -> tuple[McpAccessSource, list[str]]:
+        """Which rule decides this caller's access to a stored server, and the tool patterns it grants, unexpanded."""
+        if self.unrestricted:
+            return "everyone", ["*"]
+        if server_id in self.key_grants:
+            return "key", list(self.key_grants[server_id])
+        if server_id in self.user_grants:
+            return "user", list(self.user_grants[server_id])
+        return "everyone", list(everyone_tools)
+
+    def patterns_for(self, server_id: uuid.UUID, everyone_tools: Sequence[str], read_tools: Sequence[str]) -> list[str]:
+        """The tool patterns this caller holds on a server, ``@read`` expanded; empty means it cannot reach it."""
+        return expand_mcp_tool_patterns(self.decide(server_id, everyone_tools)[1], read_tools)
+
+    @property
+    def may_declare_servers(self) -> bool:
+        """Whether the caller may name MCP servers by URL in the request itself."""
+        return self.unrestricted or self.request_servers_allowed
+
+
+async def resolve_request_mcp_access(
+    db: AsyncSession,
+    api_key: APIKey | None,
+    workspace_id: uuid.UUID | None,
+    *,
+    session_user_id: str | None = None,
+) -> McpAccess:
+    """The MCP access of a request's caller, and its workspace's request-server switch.
+
+    A key holds its own grants and its owner's. A dashboard session (the Playground) has no key, so it holds its
+    user's grants, as one of their keys with no rule of its own would. Only the master key, which has neither, is
+    unrestricted.
+    """
+    if api_key is None and session_user_id is None:
+        return McpAccess(unrestricted=True)
+    key_id, user_id = (api_key.id, api_key.user_id) if api_key is not None else (None, session_user_id)
+    key_grants: dict[uuid.UUID, tuple[str, ...]] = {}
+    user_grants: dict[uuid.UUID, tuple[str, ...]] = {}
+    server_ids = await WorkspaceMcpServerRepository(db).ids_in_workspace(workspace_id) if workspace_id else None
+    for grant in await WorkspaceMcpServerGrantRepository(db).for_caller(key_id, user_id, server_ids):
+        (key_grants if grant.api_key_id is not None else user_grants)[grant.server_id] = tuple(grant.tools)
+    workspace = await WorkspaceRepository(db).get(workspace_id) if workspace_id is not None else None
+    return McpAccess(
+        key_grants=key_grants,
+        user_grants=user_grants,
+        request_servers_allowed=workspace is None or workspace.request_mcp_servers_allowed,
+    )
+
+
+async def revoke_user_mcp_grants(db: AsyncSession, user_id: str) -> None:
+    """Stage the removal of a deleted user's MCP grants, which a soft delete leaves behind otherwise."""
+    await WorkspaceMcpServerGrantRepository(db).remove_for_user(user_id)
+
+
+def tool_not_allowed_detail(
+    tool: str, legacy_key: str, legacy_models: Sequence[list[str]] = (), *, kind: ToolKind = "search"
+) -> str:
+    """Human-readable 403 detail for a search or fetch tool a key may not use.
 
     ``legacy_models`` are the model lists the refusal was read off the deprecated
     way, if it was; a wildcard there that matches ``legacy_key`` is named.
     """
-    detail = f"Search tool '{tool}' is not permitted for this API key. Name it in allowed_tools to allow it."
+    detail = (
+        f"{kind.capitalize()} tool '{tool}' is not permitted for this API key. Name it in allowed_tools to allow it."
+    )
     if any(legacy_key not in models and is_model_allowed(models, legacy_key) for models in legacy_models):
         detail += f" A wildcard in allowed_models allows models only, not '{legacy_key}'."
     return detail
@@ -414,10 +581,86 @@ def organization_key_refusal(
     hosted provider reaches an organization key (``reaches_organization_key``),
     so only it is subject to that key's allow-list; a request with no
     workspace has no organization key to ask about.
+
+    A workspace requiring zero data retention also refuses a configured
+    instance, which cannot be declared, and a key that is not declared. A
+    hosted provider is held to it where its credential is resolved.
     """
-    if workspace_id is None or not reaches_organization_key(config, instance):
+    if workspace_id is None:
+        return None
+    # Imported here: the providers package imports this module through model discovery.
+    from gateway.services.providers import workspace_requires_zero_data_retention
+
+    # A slug names its key's own cache entries, and dispatch serves it on that
+    # key even where a hosted provider shares the name; any other instance reads
+    # its provider's.
+    named_by_slug = cached_org_slug_provider(workspace_id, instance) is not None
+    if named_by_slug:
+        provider = instance
+    on_organization_key = named_by_slug or reaches_organization_key(config, instance)
+    if workspace_requires_zero_data_retention(workspace_id) and (
+        instance in config.providers
+        or (
+            on_organization_key
+            and cached_org_provider_kwargs(workspace_id, provider) is not None
+            and not cached_org_key_zero_data_retention(workspace_id, provider)
+        )
+    ):
+        return ModelRefusal(
+            code=MODEL_NOT_ALLOWED,
+            status_code=HTTPStatus.FORBIDDEN,
+            detail=f"Model '{selector}' is not served with zero data retention, which this workspace requires.",
+        )
+    if not on_organization_key:
         return None
     return org_model_refusal(workspace_id, provider, model, selector=selector, through_alias=through_alias)
+
+
+def owned_endpoint_refusal(workspace_id: uuid.UUID | None, *, selector: str) -> ModelRefusal | None:
+    """Why an endpoint the workspace or its user owns is refused, or ``None`` when it is not.
+
+    Its owner, not the organization or the deployment, holds the account it
+    reaches, so nothing can declare it zero data retention, and a workspace
+    requiring it is refused it as it is refused a configured instance.
+    """
+    if workspace_id is None:
+        return None
+    # Imported here: the providers package imports this module through model discovery.
+    from gateway.services.providers import workspace_requires_zero_data_retention
+
+    if not workspace_requires_zero_data_retention(workspace_id):
+        return None
+    return ModelRefusal(
+        code=MODEL_NOT_ALLOWED,
+        status_code=HTTPStatus.FORBIDDEN,
+        detail=f"Model '{selector}' is not served with zero data retention, which this workspace requires.",
+    )
+
+
+def workspace_serves_target(config: GatewayConfig, workspace_id: uuid.UUID, target: str) -> bool:
+    """Whether the workspace's own narrowing lets a request billed to it reach ``target`` (``instance:model``).
+
+    The gates dispatch applies, in its order: the organization key's, which
+    also holds a configured instance to the workspace's zero data retention
+    requirement, then the hosted provider's where no key of the organization's
+    serves the workspace. A target that names nothing passes, since what it
+    resolves to is not this check's to decide.
+    """
+    split = split_selector(target)
+    if split is None:
+        return True
+    instance, model = split
+    if (
+        organization_key_refusal(config, workspace_id, instance, instance, model, selector=target, through_alias=True)
+        is not None
+    ):
+        return False
+    if instance in config.providers or cached_org_provider_kwargs(workspace_id, instance) is not None:
+        return True
+    # Imported here: the providers package imports this module through model discovery.
+    from gateway.services.providers import workspace_may_use_hosted
+
+    return workspace_may_use_hosted(workspace_id, instance, model)
 
 
 def org_model_refusal(

@@ -942,12 +942,46 @@ class WorkspaceCreate(WorkspaceBase):
 class WorkspaceUpdate(SQLModel):
     name: str | None = Field(default=None, max_length=255)
     description: str | None = Field(default=None, max_length=1024)
+    trace_content_enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Keep what this workspace's agent sessions were about: the prompts, commands and file paths its agents "
+            "report. Only where the deployment keeps content at all."
+        ),
+    )
+    trace_content_tool_output: bool | None = Field(
+        default=None,
+        description=(
+            "Also keep what each tool returned, where this workspace keeps content and the deployment keeps tool "
+            "output. Turning it off keeps none from the next request on, whatever the deployment allows."
+        ),
+    )
+    request_mcp_servers_allowed: bool | None = Field(
+        default=None,
+        description=(
+            "Let this workspace's keys name MCP servers by URL in a request (mcp_servers), beside the stored servers "
+            "whose access lists the workspace controls."
+        ),
+    )
 
 
 class WorkspacePublic(WorkspaceBase):
     id: uuid.UUID
     organization_id: uuid.UUID
     created_by_user_id: uuid.UUID | None = None
+    trace_content_enabled: bool = Field(
+        default=False, description="Whether this workspace keeps what its agent sessions were about."
+    )
+    trace_content_tool_output: bool = Field(
+        default=True,
+        description=(
+            "Whether this workspace also keeps what each tool returned, where it keeps content and the deployment "
+            "keeps tool output."
+        ),
+    )
+    request_mcp_servers_allowed: bool = Field(
+        default=False, description="Whether this workspace's keys may name MCP servers by URL in a request."
+    )
     created_at: datetime
     updated_at: datetime | None = None
 
@@ -989,6 +1023,15 @@ class Workspace(WorkspaceBase, PrimaryKeyMixin, CreatedAtMixin, UpdatedAtMixin, 
     # policies that apply only to their own requests, including their own version
     # of a shared one. Ones they already have stay theirs to edit and delete.
     members_create_policies: bool = Field(default=True, sa_column_kwargs={"server_default": true()})
+    # Off until a workspace's managers turn it on. Read by the OTLP receiver,
+    # under the deployment's own ``trace_content_enabled``.
+    trace_content_enabled: bool = Field(default=False, sa_column_kwargs={"server_default": false()})
+    # A workspace may narrow the deployment's ``trace_content_tool_output``, never widen it, so on by default.
+    trace_content_tool_output: bool = Field(default=True, sa_column_kwargs={"server_default": true()})
+    # Off for a new workspace, so its stored servers' access lists cannot be stepped
+    # around by naming a server by URL. The migration that added it kept existing
+    # workspaces on, as they were before the access lists.
+    request_mcp_servers_allowed: bool = Field(default=False, sa_column_kwargs={"server_default": false()})
 
 
 class WorkspaceMemberBase(SQLModel):
@@ -1453,7 +1496,7 @@ class WebAuthnCredential(WebAuthnCredentialBase, PrimaryKeyMixin, CreatedAtMixin
     import therefore holds exactly while the hosted origin stays ``otari.ai``:
     moving it re-scopes every passkey and no amount of data migration recovers
     them, because the key material never left the authenticator. See
-    `docs/access-control.md`.
+    `docs/sign-in.md`.
 
     ``credential_id`` and ``public_key`` are base64url text rather than
     ``LargeBinary``. Both cross the wire in that encoding in every WebAuthn

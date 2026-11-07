@@ -27,6 +27,9 @@ otari-smoke.db
 # SQLite WAL sidecars, which sit next to any of the *.db files above.
 *.db-shm
 *.db-wal
+# The local files backend's default directory (files_local_dir), written by a
+# gateway or a test run from the repository root.
+/otari-files/
 
 .DS_Store
 
