@@ -111,6 +111,10 @@ export function readUrlState<K extends string>(
   }
 }
 
+function withoutTrailingSlash(path: string): string {
+  return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path
+}
+
 export function useUrlState<K extends string>(
   defaults: Record<K, string>,
 ): UrlState<K> {
@@ -166,8 +170,12 @@ export function useUrlState<K extends string>(
     [defaults],
   )
 
+  // An index route's match ends in a slash the location need not carry
+  // (`/models/` against `/models`), so the two are compared without it.
   const isOnPage = useCallback(
-    () => router.latestLocation.pathname === pagePath,
+    () =>
+      withoutTrailingSlash(router.latestLocation.pathname) ===
+      withoutTrailingSlash(pagePath),
     [router, pagePath],
   )
 
