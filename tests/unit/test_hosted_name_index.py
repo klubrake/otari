@@ -14,6 +14,7 @@ class _Row:
         self.name = name
         self.provider = provider
         self.session_affinity = session_affinity
+        self.zero_data_retention = False
 
 
 class _Uow:

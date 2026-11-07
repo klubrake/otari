@@ -10,13 +10,13 @@ import { SettingsGroup } from "@/design-system/layout/SettingsGroup"
 import { DisclosureRow } from "@/design-system/navigation/DisclosureRow"
 import { Segmented } from "@/design-system/navigation/Segmented"
 import { describeOffering } from "@/features/models/offerings"
-import { useRoutingSyncing, useUnpricedSelectors } from "@/shared/api/routing"
+import { useRoutingSyncing } from "@/shared/api/routing"
 import { formatNumber } from "@/shared/helpers/format"
 
 import { BACKUP_HELP } from "./BackupList"
 import { GuardrailsSection } from "./GuardrailsSection"
 import { ModelOrderList } from "./ModelOrderList"
-import { selectorText, Warning } from "./PolicyCells"
+import { selectorText } from "./PolicyCells"
 import {
   buildSpec,
   isAtModelCap,
@@ -34,7 +34,6 @@ import {
   withTriedInOrder,
 } from "./policyDraft"
 import {
-  KNN_BACKEND,
   MAX_CANDIDATES,
   PRIORITY_BACKEND,
   WEIGHTED_BACKEND,
@@ -48,8 +47,6 @@ const SELECTION_HELP: Record<Selection, string> = {
   single:
     "Every request goes to one model. Backups are tried in order if it fails.",
   [WEIGHTED_BACKEND]: "Requests are shared across the pool by weight.",
-  [KNN_BACKEND]:
-    "Picks a model from the pool per request, from scored examples. Uses the default until it has enough.",
   [PRIORITY_BACKEND]:
     "Each request goes to the first model with room; the next takes over when one hits its rate limit.",
 }
@@ -69,14 +66,6 @@ const POOL_NOTE: Record<Exclude<Selection, "single">, ReactNode> = {
         Settings, Rate limit rules
       </Link>
       . The default serves a caller who sends <code>Otari-Router: off</code>.
-    </>
-  ),
-  [KNN_BACKEND]: (
-    <>
-      The default serves whenever the router does not choose: too few scored
-      examples, a weakly supported pick, a request carrying tools, or a caller
-      sending <code>Otari-Router: off</code>. Open <b>Examples</b> on the
-      policy's row in the list to watch it warm up.
     </>
   ),
 }
@@ -131,7 +120,6 @@ function stepStat(
  */
 export function PolicyEditor({
   stored,
-  workspaceId,
   isReadOnly,
   hasRules = false,
   ruleLabel = (id) => id,
@@ -149,8 +137,6 @@ export function PolicyEditor({
 }: {
   /** The policy as saved. Remount the editor (by key) to re-seed it. */
   stored: PolicyDraft
-  /** Where the policy is stored, for the pricing check a Smart router needs. */
-  workspaceId?: string
   isReadOnly: boolean
   /** Whether to show the rules, which send named members elsewhere. */
   hasRules?: boolean
@@ -182,28 +168,7 @@ export function PolicyEditor({
     nameIsDirty ||
     JSON.stringify(spec) !== JSON.stringify(buildSpec(stored))
   const selection = selectionOf(draft)
-  // A Smart router scores by cost, so the server refuses a pool model with no
-  // price. Asked as the pool changes, so the row says so before Save does.
-  const needsPrices = selection === KNN_BACKEND && !isReadOnly
-  const pricing = useUnpricedSelectors(
-    workspaceId,
-    draft.pool.models,
-    needsPrices,
-  )
-  const unpriced = needsPrices
-    ? (pricing.data?.unpriced ?? []).filter((selector) =>
-        draft.pool.models.includes(selector),
-      )
-    : []
-  const unpricedNames = unpriced
-    .map((selector) => describeOffering(selector).model)
-    .join(", ")
-  const problem =
-    nameProblem ||
-    saveProblem(draft) ||
-    (unpriced.length > 0
-      ? `${unpricedNames} ${unpriced.length === 1 ? "has" : "have"} no price, and Smart router needs one for every pool model.`
-      : "")
+  const problem = nameProblem || saveProblem(draft)
   const routed = isRouted(draft)
   const atCap = isAtModelCap(draft)
   const toggle = (section: string) =>
@@ -315,13 +280,7 @@ export function PolicyEditor({
                 index === pool.safeIndex ? "DEFAULT" : "MODEL"
               }
               itemName={(index) => `pool model ${index + 1}`}
-              statOf={(selector) =>
-                unpriced.includes(selector) ? (
-                  <Warning>No price set</Warning>
-                ) : (
-                  statOf(selector)
-                )
-              }
+              statOf={statOf}
               extraOf={(index) =>
                 pool.backend === WEIGHTED_BACKEND ? (
                   <div className="w-24">
@@ -389,18 +348,6 @@ export function PolicyEditor({
               addNote={AT_CAP}
             />
             {isReadOnly ? null : <PoolProblems pool={pool} />}
-            {unpriced.length > 0 ? (
-              <p className="text-caption text-warning">
-                Smart router compares prices, so every pool model needs one.{" "}
-                {unpricedNames} {unpriced.length === 1 ? "has" : "have"} none.{" "}
-                <Link
-                  to="/organization/pricing"
-                  className="text-link hover:underline"
-                >
-                  Set a price in Pricing
-                </Link>
-              </p>
-            ) : null}
             {selection !== "single" ? (
               <p className="text-caption">{POOL_NOTE[selection]}</p>
             ) : null}

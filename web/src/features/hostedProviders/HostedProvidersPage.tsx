@@ -45,6 +45,7 @@ import {
 import { useOrganizationContext } from "@/shared/api/organizations"
 import { useProviderHealth, useProviders } from "@/shared/api/providers"
 import { useSettings, useUpdateSettings } from "@/shared/api/settings"
+import { useHeldDialogTarget } from "@/shared/hooks/useHeldDialogTarget"
 
 import { AddHostedProviderForm } from "./AddHostedProviderForm"
 import { DeploymentProviderMigration } from "./DeploymentProviderMigration"
@@ -57,6 +58,7 @@ import {
   modelsPreviewOutcome,
   pricePreviewOutcome,
 } from "./refreshOutcome"
+import { formatCountries } from "./supportedCountries"
 
 // The providers this deployment serves inference on with its own keys, for a
 // request that brings no credential of its own. Deployment-scoped, which is
@@ -339,6 +341,11 @@ export function HostedProvidersPage() {
   // A name rather than a row: the update report's own remove offer can name a
   // provider this page has not loaded.
   const [pendingDelete, setPendingDelete] = useState("")
+  // Above the access gates below: a hook cannot follow an early return.
+  const editingTarget = useHeldDialogTarget(
+    providers.data?.data.find((row) => row.name === editingProvider),
+  )
+  const editing = editingTarget.held
 
   const openAdd = () => {
     setEditingProvider("")
@@ -378,7 +385,6 @@ export function HostedProvidersPage() {
 
   const rows = providers.data?.data ?? []
   const deleting = rows.find((row) => row.name === pendingDelete)
-  const editing = rows.find((row) => row.name === editingProvider)
   const expanded = rows.find((row) => row.name === modelsFor)
   // Health is keyed by name, and a configured instance of the same name is the
   // one dialed under it, so its status would read as this row's. Such a row,
@@ -433,6 +439,9 @@ export function HostedProvidersPage() {
           {row.shadows_config ? (
             <Badge tone="muted">Overrides config.yml</Badge>
           ) : null}
+          {row.zero_data_retention ? (
+            <Badge tone="muted">Zero data retention</Badge>
+          ) : null}
         </span>
       ),
     },
@@ -483,6 +492,20 @@ export function HostedProvidersPage() {
           </span>
         ) : (
           <span className="text-muted">Every organization</span>
+        ),
+    },
+    {
+      id: "countries",
+      header: "Countries",
+      cell: (row) =>
+        row.supported_countries == null ? (
+          <span className="text-muted">Every country</span>
+        ) : row.supported_countries.length === 0 ? (
+          <span className="text-body">None</span>
+        ) : (
+          <span className="text-body">
+            {formatCountries(row.supported_countries)}
+          </span>
         ),
     },
     {
@@ -550,6 +573,7 @@ export function HostedProvidersPage() {
     health: (row) => <HealthPill health={healthByName.get(row.instance)} />,
     api_base: () => <span className="text-muted">Set in config.yml</span>,
     scope: () => <span className="text-muted">Every organization</span>,
+    countries: () => <span className="text-muted">Set in config.yml</span>,
     enabled: () => <span className="text-caption">Always</span>,
     actions: () => <span className="text-caption">Edit in config.yml</span>,
   }
@@ -682,9 +706,9 @@ export function HostedProvidersPage() {
       />
       {editing ? (
         <EditHostedProviderForm
-          key={editing.name}
+          key={`${editing.name}:${editingTarget.generation}`}
           provider={editing}
-          isOpen
+          isOpen={editingTarget.isOpen}
           onClose={() => setEditingProvider("")}
         />
       ) : null}

@@ -114,14 +114,14 @@ def test_an_offering_the_organization_key_refuses_is_no_backup(
     )
 
 
-def test_with_no_plan_the_read_judges_the_offering_the_plain_path_serves(
+def test_an_offering_with_no_stored_credential_stays_in_the_plan_the_read_judges(
     undeclared_client: TestClient, world: dict[str, Any]
 ) -> None:
-    """No key holds a Bedrock credential, so no failover plan compiles and a request takes the plain path.
+    """No key holds a Bedrock credential, yet the plan keeps the Bedrock offering this key may reach.
 
-    That path serves the catalog ID's first offering, Anthropic, which this key's
-    `bedrock:*` list refuses: the request is refused, so the read must not offer
-    Bedrock as the model that serves.
+    A catalog plan keeps an offering with no stored credential and asks the
+    hosted-credential port for it during the walk, so a request on this key's
+    `bedrock:*` list tries Bedrock alone, which is what the read reports.
     """
     claude = _claude(undeclared_client, world, "bedrock_only")
-    assert (claude["backup"], claude["reason"], claude["provider"]) == ("no_backup", "no_allowed_offering", None)
+    assert (claude["backup"], claude["reason"], claude["provider"]) == ("no_backup", "single_offering", "bedrock")

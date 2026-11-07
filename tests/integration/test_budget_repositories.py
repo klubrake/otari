@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import get_api_key_service
+from gateway.api.deps import get_api_key_service, get_user_access
 from gateway.core.unit_of_work import OutsideUnitOfWorkError, UnitOfWork
 from gateway.exceptions.budget_exceptions import (
     BudgetStillReferencedError,
@@ -333,6 +333,7 @@ async def test_list_in_scopes_matches_what_the_organization_surface_lists(async_
             OrganizationService(async_db, membership_listener=None),
         ),
         visibility_service(async_db, uow),
+        users=get_user_access(uow),
     )
     surface = await service.list_organization_ceilings(user=acme_owner)
 

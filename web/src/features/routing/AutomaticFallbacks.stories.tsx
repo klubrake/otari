@@ -26,6 +26,7 @@ const offering = (
     provider_type: provider,
     own_tools: tools === "own" ? OWN : [],
     otari_tools: tools === "otari" ? OWN : [],
+    input_price: null,
   }
 }
 
@@ -37,6 +38,7 @@ const fallback = (
   fell_back: 0,
   pinned: 0,
   pinned_provider: null,
+  pinned_keys: [],
   sent_by: [],
   ...overrides,
 })

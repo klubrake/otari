@@ -30,10 +30,16 @@ from gateway.models.money import as_float
 from gateway.models.usage import UsageLog
 from gateway.models.users import User
 from gateway.repositories.tenancy import UserMergeRepository
-from gateway.repositories.users_repository import UserFilter, count_users, in_organization, page_users
+from gateway.repositories.users_repository import (
+    UserFilter,
+    count_users,
+    in_organization,
+    lock_live_users,
+    page_users,
+)
 from gateway.services.alias_service import refresh_alias_cache
 from gateway.services.budgets import budget_window
-from gateway.services.model_access import validate_allowed_models, validate_allowed_tools
+from gateway.services.model_access import revoke_user_mcp_grants, validate_allowed_models, validate_allowed_tools
 from gateway.services.organizations import AccessLists
 from gateway.services.policy_store import refresh_policy_cache
 from gateway.services.providers import refresh_provider_endpoint_cache
@@ -61,8 +67,9 @@ class CreateUserRequest(BaseModel):
     )
     allowed_tools: list[str] | None = Field(
         default=None,
-        description="Default search tool access-list this user's keys inherit: null = the tools allowed_models "
-        "grants, [] = no tool, or search tool names ('*' for every search tool).",
+        description="Default tool access-list this user's keys inherit, for POST /api/v1/search and /api/v1/fetch: "
+        "null = the search tools allowed_models grants, [] = no tool, "
+        "or search and fetch tool names ('*' for every tool).",
     )
     metadata: dict[str, Any] = Field(default_factory=dict, description="Optional metadata")
 
@@ -460,12 +467,16 @@ async def delete_user(
     # and the telemetry FK's SET NULL never fires here regardless of its setting.
     await erase_user_records(request, storage, traces, user_id)
 
+    # After the erasure, which commits, so the lock is held by the transaction that removes the user's grants and
+    # marks them deleted: a grant to this user committing meanwhile waits for it and is then refused.
+    await lock_live_users(db, [user_id])
     await db.execute(
         update(APIKey)
         .where(APIKey.user_id == user_id)
         .values(is_active=False)
         .execution_options(synchronize_session=False)
     )
+    await revoke_user_mcp_grants(db, user_id)
     user.deleted_at = datetime.now(UTC)
 
     try:

@@ -100,6 +100,7 @@ from gateway.services.providers._hosted_credentials import (
 from gateway.services.providers._hosted_name_index import (
     forget_hosted_name,
     remember_hosted_name,
+    remember_hosted_zero_data_retention,
     remember_session_affinity,
 )
 from gateway.services.providers._hosted_offers import HostedOffers
@@ -252,6 +253,8 @@ class HostedProviderService:
                     restricted_to_organization_id=request.restricted_to_organization_id,
                     serves_unlisted_models=request.serves_unlisted_models,
                     session_affinity=request.session_affinity,
+                    supported_countries=request.supported_countries,
+                    zero_data_retention=request.zero_data_retention,
                 )
             except HostedProviderConflict as conflict:
                 # The pre-check races the insert; the unique constraint decides.
@@ -268,6 +271,7 @@ class HostedProviderService:
             )
         remember_hosted_name(name, implementation)
         remember_session_affinity(name, request.session_affinity)
+        remember_hosted_zero_data_retention(name, row.zero_data_retention)
         return public
 
     async def update_provider(self, provider: str, request: HostedProviderUpdateRequest) -> HostedProviderPublic:
@@ -278,7 +282,7 @@ class HostedProviderService:
         key, where the provider can be served without one. ``client_args``
         omitted is left alone, null clears, and an entry echoed back as the
         mask keeps the stored value. The restriction reads the same way:
-        omitted keeps it, null lifts it.
+        omitted keeps it, null lifts it, and so do the supported countries.
 
         Raises:
             HostedProviderNotFoundError: no such provider.
@@ -331,11 +335,16 @@ class HostedProviderService:
                 if request.session_affinity and not session_affinity_supported(row.name, row.provider):
                     raise HostedProviderSessionAffinityUnsupportedError
                 row.session_affinity = request.session_affinity
+            if request.zero_data_retention is not None:
+                row.zero_data_retention = request.zero_data_retention
             if "restricted_to_organization_id" in request.model_fields_set:
                 await self._require_organization(request.restricted_to_organization_id)
                 row.restricted_to_organization_id = request.restricted_to_organization_id
+            if "supported_countries" in request.model_fields_set:
+                row.supported_countries = request.supported_countries
             await self.providers.save(row)
             public = self._public(source)
+        remember_hosted_zero_data_retention(row.name, row.zero_data_retention)
         # The cached listing was made on what this request may just have changed.
         get_model_cache().clear(row.name)
         remember_session_affinity(row.name, row.session_affinity)
@@ -358,10 +367,12 @@ class HostedProviderService:
                 await self.models.delete_for_provider(name)
             await self.providers.delete_row(row)
         forget_hosted_name(name)
+        remember_hosted_zero_data_retention(name, False)
         if source.shadows_config:
             # The configuration entry of the same name serves again, as its own implementation.
             entry = self.sources.entries()[name]
             remember_hosted_name(name, entry.provider)
+            remember_hosted_zero_data_retention(name, entry.zero_data_retention)
         get_model_cache().clear(name)
 
     async def list_models(self, provider: str, *, skip: int = 0, limit: int = 500) -> HostedModelsPublic:
@@ -454,6 +465,15 @@ class HostedProviderService:
             return sum(
                 [await self.offers.switch_off_by_operator(provider, names) for provider, names in models.items()]
             )
+
+    async def switch_off_unavailable(self, provider: str, model: str) -> bool:
+        """Stop serving ``model`` under ``provider``, which the provider refused to serve on the deployment's key.
+
+        Returns whether this call switched it off, so the operators are told once
+        however many requests met the refusal. An operator switches it back on.
+        """
+        async with self.uow:
+            return await self.offers.switch_off_unavailable(provider, model)
 
     async def remove_model(self, provider: str, model_id: uuid.UUID) -> None:
         """Stop offering a model. Its pricing history stays.
@@ -744,6 +764,14 @@ class HostedProviderService:
         """
         return await self.runtime.serveable_models(organization_id=organization_id)
 
+    async def zero_data_retention_names(self, *, organization_id: uuid.UUID | None) -> frozenset[str]:
+        """The enabled providers serveable to ``organization_id`` that declare zero data retention.
+
+        ``None`` is the deployment's own view, which sees every provider.
+        """
+        async with self.uow:
+            return await self.sources.zero_data_retention_names(organization_id)
+
     async def resolve(
         self, name: str, model: str | None = None, *, organization_id: uuid.UUID | None
     ) -> ResolvedHostedProvider | None:
@@ -773,6 +801,11 @@ class HostedProviderService:
                 else functools.partial(self._dial, name, implementation, credential, declared)
             )
         return dials
+
+    async def names_limited_to_countries(self) -> list[str]:
+        """The enabled hosted providers that serve only some countries, by name."""
+        async with self.uow:
+            return await self.sources.names_limited_to_countries()
 
     async def audit_config(self) -> HostedConfigAudit:
         """What boot reports about the ``hosted_providers:`` block: shadowed entries and unknown restrictions."""
@@ -844,6 +877,8 @@ class HostedProviderService:
             client_args=entry.client_args,
             enabled=entry.enabled,
             restricted_to_organization_id=entry.restricted_to_organization_id,
+            supported_countries=list(entry.supported_countries) if entry.supported_countries is not None else None,
+            zero_data_retention=entry.zero_data_retention,
         )
 
     async def _require_organization(self, organization_id: uuid.UUID | None) -> None:

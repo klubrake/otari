@@ -20,17 +20,32 @@ export function DisclosureRow({
   trailing,
   isOpen,
   onToggle,
+  chevronPlacement = "end",
   children,
 }: {
   label: ReactNode
   help?: ReactNode
-  /** A count or a status, to the left of the chevron. */
+  /** A count or a status, at the row's end. */
   trailing?: ReactNode
   isOpen: boolean
   onToggle: () => void
+  /**
+   * `start` puts the chevron before the label, as a tree does, for a row whose
+   * panel holds rows like the ones around it: the open state then reads where
+   * the eye starts the row rather than at its far end.
+   */
+  chevronPlacement?: "start" | "end"
   children: ReactNode
 }) {
   const panelId = useId()
+  const chevron = (
+    <FiChevronRight
+      aria-hidden="true"
+      className={`h-4 w-4 shrink-0 text-subtle transition-transform duration-150 ease-out motion-reduce:transition-none ${
+        isOpen ? "rotate-90" : ""
+      }`}
+    />
+  )
   return (
     <>
       <button
@@ -38,34 +53,50 @@ export function DisclosureRow({
         aria-expanded={isOpen}
         aria-controls={panelId}
         onClick={onToggle}
-        // A grid so the status can drop under the label on a phone. Beside
-        // the label it took the width first and left the help a one-word
-        // column; from `md` it sits on the label's line, as before.
-        className={`grid min-h-11 w-full items-center gap-x-3 gap-y-1.5 px-4 py-3 text-left transition-colors duration-150 ease-out hover:bg-surface-subtle focus-visible:otari-focus-ring motion-reduce:transition-none ${
-          trailing
-            ? "grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,1fr)_auto_auto]"
-            : "grid-cols-[minmax(0,1fr)_auto]"
+        // With the chevron at the end, a grid so the status can drop under the
+        // label on a phone. Beside the label it took the width first and left
+        // the help a one-word column; from `md` it sits on the label's line.
+        className={`min-h-11 w-full items-center px-4 py-3 text-left transition-colors duration-150 ease-out hover:bg-surface-subtle focus-visible:otari-focus-ring motion-reduce:transition-none ${
+          chevronPlacement === "start"
+            ? "flex gap-2"
+            : `grid gap-x-3 gap-y-1.5 ${
+                trailing
+                  ? "grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,1fr)_auto_auto]"
+                  : "grid-cols-[minmax(0,1fr)_auto]"
+              }`
         }`}
       >
-        <span className="flex min-w-0 flex-col gap-0.5 md:pr-3">
+        {chevronPlacement === "start" ? chevron : null}
+        <span
+          className={`flex min-w-0 flex-col gap-0.5 ${chevronPlacement === "start" ? "flex-1" : "md:pr-3"}`}
+        >
           <span className="text-emphasis">{label}</span>
           {help ? (
             <span className="text-caption text-subtle">{help}</span>
           ) : null}
         </span>
-        {trailing ? (
-          <span className="col-start-1 row-start-2 flex items-center md:col-start-2 md:row-start-1">
-            {trailing}
-          </span>
-        ) : null}
-        <FiChevronRight
-          aria-hidden="true"
-          className={`h-4 w-4 text-subtle transition-transform duration-150 ease-out motion-reduce:transition-none ${
-            trailing
-              ? "col-start-2 row-span-2 row-start-1 md:col-start-3 md:row-span-1"
-              : ""
-          } ${isOpen ? "rotate-90" : ""}`}
-        />
+        {chevronPlacement === "start" ? (
+          trailing ? (
+            <span className="flex shrink-0 items-center gap-3">{trailing}</span>
+          ) : null
+        ) : (
+          <>
+            {trailing ? (
+              <span className="col-start-1 row-start-2 flex items-center md:col-start-2 md:row-start-1">
+                {trailing}
+              </span>
+            ) : null}
+            <span
+              className={
+                trailing
+                  ? "col-start-2 row-span-2 row-start-1 flex md:col-start-3 md:row-span-1"
+                  : "flex"
+              }
+            >
+              {chevron}
+            </span>
+          </>
+        )}
       </button>
       {/* Rendered whether or not it is open, so `aria-controls` above always
           names an element that exists. `hidden` rather than unmounting: an

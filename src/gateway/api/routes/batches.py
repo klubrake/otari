@@ -10,7 +10,7 @@ from typing import Annotated, Any
 
 from any_llm import AnyLLM, LLMProvider
 from any_llm.api import acancel_batch, acreate_batch, alist_batches, aretrieve_batch, aretrieve_batch_results
-from any_llm.exceptions import AnyLLMError, BatchNotCompleteError, MissingApiKeyError, UnsupportedProviderError
+from any_llm.exceptions import AnyLLMError, BatchNotCompleteError, MissingApiKeyError
 from any_llm.types.batch import Batch
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
@@ -24,27 +24,32 @@ from gateway.api.deps import (
     model_provider_port_on,
     verify_api_key_or_master_key,
 )
-from gateway.api.routes._helpers import resolve_user_id
+from gateway.api.routes._helpers import (
+    country_gate_for,
+    country_not_supported,
+    missing_credential_error,
+)
+from gateway.api.routes._passthrough import (
+    hosted_credential_unusable,
+    provider_call_failure,
+    resolve_provider_by_name,
+)
 from gateway.api.routes._pipeline import (
-    FUNDS_CHECK_UNAVAILABLE_DETAIL,
-    HOSTED_CREDENTIAL_UNUSABLE_DETAIL,
-    PROVIDER_CREDENTIALS_DETAIL,
     _raise_for_unresolvable_model,
-    classify_provider_error,
     failure_status_code,
 )
-from gateway.api.routes.chat import rate_limit_headers
 from gateway.core.config import GatewayConfig
-from gateway.core.error_codes import INSUFFICIENT_FUNDS, MODEL_NOT_ALLOWED, PROVIDER_CREDENTIAL_REJECTED, error_headers
+from gateway.core.error_codes import INSUFFICIENT_FUNDS, MODEL_NOT_ALLOWED, error_headers
 from gateway.core.metered_pricing import calculate_token_cost, quantize_cost
 from gateway.core.usage import cache_read_tokens_of
 from gateway.log_config import logger
 from gateway.models.api_keys import APIKey
 from gateway.models.inference import BatchRecord
 from gateway.models.usage import UsageLog
-from gateway.ports.billing_port import InsufficientFundsError
-from gateway.ports.model_provider_port import HostedAccessDeniedError, ModelProviderPort
-from gateway.rate_limit import check_rate_limit
+from gateway.ports.billing_port import FUNDS_CHECK_UNAVAILABLE_DETAIL, InsufficientFundsError
+from gateway.ports.model_provider_port import HostedAccessDeniedError
+from gateway.rate_limit import check_rate_limit, rate_limit_headers
+from gateway.services.api_keys import resolve_user_id
 from gateway.services.batch_service import (
     claim_batch_accounting,
     get_batch_record,
@@ -62,8 +67,6 @@ from gateway.services.inference import (
     DeploymentCharge,
     admit_deployment_paid,
     describe_port_error,
-    is_provider_credential_rejection,
-    is_upstream_request_fault,
 )
 from gateway.services.log_writer import LogWriter
 from gateway.services.model_access import (
@@ -75,12 +78,14 @@ from gateway.services.model_access import (
 from gateway.services.pricing_service import find_model_pricing
 from gateway.services.provider_kwargs import (
     MissingCredential,
-    ResolvedProvider,
-    get_provider_kwargs,
     require_declared_credential,
     resolve_provider_selector,
 )
-from gateway.services.providers import hosted_implementation, serve_on_hosted_provider
+from gateway.services.providers import (
+    CountryNotServedError,
+    ensure_provider_country,
+    serve_on_hosted_provider,
+)
 from gateway.services.workspace_scope import (
     organization_for_workspace_id,
     resolve_workspace_id,
@@ -186,94 +191,6 @@ async def log_batch_usage(
 # ---------------------------------------------------------------------------
 
 
-def _parse_provider(provider: str) -> LLMProvider:
-    """Parse a provider string into an LLMProvider enum, raising 400 on invalid values."""
-    try:
-        return LLMProvider.from_string(provider)
-    except UnsupportedProviderError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        ) from e
-
-
-async def _resolve_batch_provider(
-    config: GatewayConfig,
-    provider: str,
-    *,
-    port: ModelProviderPort,
-    organization_id: uuid.UUID | None,
-    workspace_id: uuid.UUID | None = None,
-) -> tuple[LLMProvider, dict[str, Any], bool]:
-    """Resolve a batch ``provider`` query param into (implementation, kwargs, deployment-paid).
-
-    The value is either a configured instance name (resolved to its
-    ``provider_type`` with the instance's credentials), a hosted provider's
-    name, or a real any-llm provider, mirroring what ``create_batch`` echoes
-    back as the batch's ``provider`` field. ``workspace_id`` reaches
-    ``get_provider_kwargs`` unchanged: consulted only when ``provider`` names
-    no configured instance, the same organization-scoped fallback
-    ``create_batch`` uses, so a batch created against an organization key
-    stays reachable by every later lifecycle call (retrieve, cancel, list,
-    results) rather than only at creation. For retrieve/cancel/results the
-    caller passes the batch's own stored ``workspace_id`` (see
-    ``_lifecycle_workspace_id``), not necessarily its own current one, so
-    credentials resolve from the organization that created the batch even for
-    a master-key or cross-workspace call; ``list_batches`` has no batch id to
-    key off of and keeps using the caller's own workspace. A provider nothing
-    declared is served on the deployment's own credential where one serves it,
-    as ``create_batch`` served it.
-    """
-    if provider in config.providers:
-        impl = LLMProvider(config.provider_instance_type(provider))
-        return impl, get_provider_kwargs(config, impl, instance=provider), False
-    implementation = hosted_implementation(provider)
-    if implementation is not None and implementation != provider:
-        # A hosted provider's own name, which an organization key for its
-        # implementation would send to another endpoint.
-        impl = LLMProvider(implementation)
-        kwargs = get_provider_kwargs(config, impl, instance=provider)
-    else:
-        impl = _parse_provider(provider)
-        kwargs = get_provider_kwargs(config, impl, workspace_id=workspace_id)
-    try:
-        served = await serve_on_hosted_provider(
-            config,
-            port,
-            ResolvedProvider(instance=provider, provider=impl, model="", kwargs=kwargs),
-            organization_id=organization_id,
-            workspace_id=workspace_id,
-            any_model=True,
-        )
-    except HostedAccessDeniedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=model_not_allowed_detail(provider),
-            headers=error_headers(MODEL_NOT_ALLOWED),
-        ) from exc
-    except Exception as exc:
-        raise _hosted_credential_unusable(provider, exc) from exc
-    if served is not None:
-        return served.provider, served.kwargs, True
-    try:
-        require_declared_credential(config, provider, impl, kwargs)
-    except MissingApiKeyError as exc:
-        raise _not_configured(exc) from exc
-    return impl, kwargs, False
-
-
-def _hosted_credential_unusable(provider: str, exc: Exception) -> HTTPException:
-    """The 502 for a port that failed to resolve a credential, logged by class: its message may carry a row."""
-    logger.error("ModelProviderPort failed to resolve a credential for %s: %s", provider, describe_port_error(exc))
-    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=HOSTED_CREDENTIAL_UNUSABLE_DETAIL)
-
-
-def _not_configured(exc: MissingApiKeyError) -> HTTPException:
-    """The 424 a ``MissingApiKeyError`` maps to."""
-    missing = MissingCredential.from_error(exc)
-    return HTTPException(status_code=missing.status_code, detail=missing.detail, headers=error_headers(missing.code))
-
-
 async def _lifecycle_workspace_id(db: AsyncSession, record: BatchRecord | None, api_key: APIKey | None) -> uuid.UUID:
     """Which workspace's organization-scoped credentials a lifecycle call should use.
 
@@ -370,31 +287,13 @@ def _authorize_legacy_batch(
         )
 
 
-def _provider_failure(exc: Exception) -> HTTPException:
-    """The answer to a failed provider call.
-
-    A rejected credential is a 424, and a 403 that rejects the request itself the
-    caller's 400 with the provider's sentence, as on the completion routes.
-    Anything else is a 502.
-    """
-    if is_upstream_request_fault(exc) and (mapping := classify_provider_error(exc)) is not None:
-        return HTTPException(status_code=mapping.status_code, detail=mapping.detail)
-    if is_provider_credential_rejection(exc):
-        return HTTPException(
-            status_code=status.HTTP_424_FAILED_DEPENDENCY,
-            detail=PROVIDER_CREDENTIALS_DETAIL,
-            headers=error_headers(PROVIDER_CREDENTIAL_REJECTED),
-        )
-    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="LLM provider error")
-
-
 async def _retrieve_batch_or_502(
     provider_enum: LLMProvider,
     batch_id: str,
     provider: str,
     provider_kwargs: dict[str, Any],
 ) -> Batch:
-    """Retrieve a batch from the provider, mapping failures as ``_provider_failure`` does."""
+    """Retrieve a batch from the provider, mapping failures as ``provider_call_failure`` does."""
     try:
         batch: Batch = await aretrieve_batch(
             provider=provider_enum,
@@ -405,7 +304,7 @@ async def _retrieve_batch_or_502(
         raise
     except Exception as e:
         logger.error("Batch retrieve failed for %s: %s", provider, e)
-        raise _provider_failure(e) from e
+        raise provider_call_failure(e) from e
     return batch
 
 
@@ -497,6 +396,11 @@ async def create_batch(
             detail=refusal.detail,
             headers=error_headers(refusal.code),
         )
+    country_gate = country_gate_for(config, raw_request)
+    try:
+        ensure_provider_country(config, country_gate, resolved.instance)
+    except CountryNotServedError as exc:
+        raise country_not_supported(exc.gate, request.model) from exc
 
     # Validate provider supports batch operations
     provider_class = AnyLLM.get_provider_class(provider)
@@ -515,6 +419,7 @@ async def create_batch(
             resolved,
             organization_id=organization_id,
             workspace_id=workspace_id,
+            country_gate=country_gate,
         )
     except HostedAccessDeniedError as exc:
         raise HTTPException(
@@ -522,8 +427,10 @@ async def create_batch(
             detail=model_not_allowed_detail(request.model),
             headers=error_headers(MODEL_NOT_ALLOWED),
         ) from exc
+    except CountryNotServedError as exc:
+        raise country_not_supported(exc.gate, request.model) from exc
     except Exception as exc:
-        raise _hosted_credential_unusable(resolved.instance, exc) from exc
+        raise hosted_credential_unusable(resolved.instance, exc) from exc
     if served is not None:
         resolved, provider = served, served.provider
         try:
@@ -557,7 +464,7 @@ async def create_batch(
     try:
         require_declared_credential(config, resolved.instance, provider, provider_kwargs)
     except MissingApiKeyError as exc:
-        raise _not_configured(exc) from exc
+        raise missing_credential_error(MissingCredential.from_error(exc)) from exc
 
     # A key flagged exclude_from_budget logs cost but is never reserved or folded
     # into users.spend, at create time and again when results are accounted.
@@ -626,7 +533,7 @@ async def create_batch(
         )
         await refund_reservation(db, reservation)
         logger.error("Batch create failed for %s: %s", provider, e)
-        raise _provider_failure(e) from e
+        raise provider_call_failure(e) from e
     finally:
         try:
             os.unlink(tmp_path)
@@ -687,10 +594,11 @@ async def retrieve_batch(
     if record is not None:
         _authorize_record(record, batch_id, api_key, is_master_key)
     workspace_id = await _lifecycle_workspace_id(db, record, api_key)
-    provider_enum, provider_kwargs, _ = await _resolve_batch_provider(
+    provider_enum, provider_kwargs, _ = await resolve_provider_by_name(
         config,
         provider,
         port=model_provider_port_on(raw_request, db),
+        country_gate=country_gate_for(config, raw_request),
         organization_id=await organization_for_workspace_id(db, workspace_id),
         workspace_id=workspace_id,
     )
@@ -719,10 +627,11 @@ async def cancel_batch(
     if record is not None:
         _authorize_record(record, batch_id, api_key, is_master_key)
     workspace_id = await _lifecycle_workspace_id(db, record, api_key)
-    provider_enum, provider_kwargs, _ = await _resolve_batch_provider(
+    provider_enum, provider_kwargs, _ = await resolve_provider_by_name(
         config,
         provider,
         port=model_provider_port_on(raw_request, db),
+        country_gate=country_gate_for(config, raw_request),
         organization_id=await organization_for_workspace_id(db, workspace_id),
         workspace_id=workspace_id,
     )
@@ -741,7 +650,7 @@ async def cancel_batch(
         raise
     except Exception as e:
         logger.error("Batch cancel failed for %s: %s", provider, e)
-        raise _provider_failure(e) from e
+        raise provider_call_failure(e) from e
 
     response_data = batch.model_dump()
     response_data["provider"] = provider
@@ -767,10 +676,11 @@ async def list_batches(
     """
     api_key, is_master_key = auth_result
     workspace_id = await resolve_workspace_id(db, api_key)
-    provider_enum, provider_kwargs, _ = await _resolve_batch_provider(
+    provider_enum, provider_kwargs, _ = await resolve_provider_by_name(
         config,
         provider,
         port=model_provider_port_on(raw_request, db),
+        country_gate=country_gate_for(config, raw_request),
         organization_id=await organization_for_workspace_id(db, workspace_id),
         workspace_id=workspace_id,
     )
@@ -790,7 +700,7 @@ async def list_batches(
         raise
     except Exception as e:
         logger.error("Batch list failed for %s: %s", provider, e)
-        raise _provider_failure(e) from e
+        raise provider_call_failure(e) from e
 
     # Prefer the local records (strict) and fall back to the metadata marker for
     # legacy batches. One bulk lookup avoids a per-batch query.
@@ -842,10 +752,11 @@ async def retrieve_batch_results(
     # re-deriving its own notion of "whose batch is this" from `api_key_id`.
     origin_workspace_id = await _lifecycle_workspace_id(db, record, api_key)
     origin_organization_id = await organization_for_workspace_id(db, origin_workspace_id)
-    provider_enum, provider_kwargs, deployment_paid = await _resolve_batch_provider(
+    provider_enum, provider_kwargs, deployment_paid = await resolve_provider_by_name(
         config,
         provider,
         port=model_provider_port_on(raw_request, db),
+        country_gate=country_gate_for(config, raw_request),
         organization_id=origin_organization_id,
         workspace_id=origin_workspace_id,
     )
@@ -886,7 +797,7 @@ async def retrieve_batch_results(
         ) from e
     except Exception as e:
         logger.error("Batch results retrieve failed for %s: %s", provider, e)
-        raise _provider_failure(e) from e
+        raise provider_call_failure(e) from e
 
     # Extract model from the first successful result if available
     batch_model = "batch"

@@ -25,7 +25,11 @@ import type { SetupSnippetId } from "@/features/onboarding/setupSnippets"
  * against is already on screen.
  */
 export type SetupHint =
-  | { label: string; to: "/models" | "/budgets" | "/activity"; tab?: never }
+  | {
+      label: string
+      to: "/models" | "/budgets" | "/activity"
+      tab?: never
+    }
   | { label: string; tab: SetupSnippetId; to?: never }
 
 export interface SetupFailure {

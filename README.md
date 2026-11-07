@@ -4,7 +4,7 @@
 
 <div align="center">
 
-**An OpenAI-compatible LLM gateway you own and run.**
+**An AI gateway you own and run.**
 
 Route one endpoint to 40+ providers, issue virtual keys, enforce budgets, and
 track usage.
@@ -20,6 +20,12 @@ track usage.
 [Discord](https://discord.gg/ZfZPfTdtSe)
 
 </div>
+
+> [!NOTE]
+> **Developers Wilding, our AI hackathon at MozFest, runs until November 11.**
+> Build something with Otari and open-weight models for a chance at the $1,000
+> prize (plus runner-up prizes) and dedicated time with our AI engineers.
+> [Details and submissions](https://otari.ai/devs-wilding).
 
 <p align="center">
   <img src="assets/otari-demo.gif" width="720" alt="Otari dashboard tour: spend overview, usage by model, a request rescued by a routing fallback, two models compared in the Playground, the model catalog, routing policies, API keys, members, budgets, and providers"/>
@@ -161,7 +167,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## Documentation
 
-- [Quickstart](docs/quickstart.md)
+- [Quickstart](docs/self-hosted-quickstart.md)
 - [Deployment](docs/deployment.md)
 - [Configuration](docs/configuration.md)
 - [Models](docs/models.md)
@@ -169,7 +175,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 - [Access control](docs/access-control.md)
 - [Built-in tools](docs/tools.md)
 - [Agent Guardrails](docs/agent-guardrails.md)
-- [SDK and agent integrations](docs/index.md#for-integrators)
+- [SDK and agent integrations](docs/index.md#integrations)
 - [Architecture](ARCHITECTURE.md)
 
 ## License

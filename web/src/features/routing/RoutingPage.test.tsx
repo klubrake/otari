@@ -14,12 +14,12 @@ import {
   ADMIN_WORKSPACE,
   adminContext,
   CHAIN,
-  LEARNED,
   MEMBERS,
   mockApi,
   policy,
   renderInWorkspace,
   renderPage,
+  SPILL_OVER,
   WEIGHTED,
 } from "@/tests/routing"
 
@@ -310,9 +310,14 @@ describe("RoutingPage", () => {
     // The mutation holds its error until the next call, and the dialog reads it,
     // so without clearing it on close the second row opens already reporting a
     // failure that was about the first.
-    mockApi([policy("fast", CHAIN), policy("smart", LEARNED)], undefined, [], {
-      deleteBody: { status: 409, detail: "fast is referenced by an alias" },
-    })
+    mockApi(
+      [policy("fast", CHAIN), policy("smart", SPILL_OVER)],
+      undefined,
+      [],
+      {
+        deleteBody: { status: 409, detail: "fast is referenced by an alias" },
+      },
+    )
     const user = userEvent.setup()
     renderPage(<RoutingPage />)
 
@@ -360,21 +365,6 @@ describe("RoutingPage", () => {
     expect(deletes[0].url).toContain(`${API_ROOT}/aliases/legacy`)
   })
 
-  it("summarises a learned policy by its pool rather than as an opaque dynamic row", async () => {
-    // "Chosen per request" is true of a tier-down too. What an operator needs to
-    // see here is that a router picks between named models, and which one serves
-    // when it declines.
-    mockApi([policy("smart", LEARNED, { is_dynamic: true })])
-    renderPage(<RoutingPage />)
-
-    const row = (await screen.findByText("smart")).closest("tr")!
-    expect(
-      within(row).getByText(
-        /Learned . 2 candidates, gpt-5 · OpenAI by default/,
-      ),
-    ).toBeInTheDocument()
-  })
-
   it("summarises a weighted policy by its split, not by its pool size", async () => {
     // Two provider:model strings do not fit the cell, and the shares are what tells
     // one weighted policy from another at a glance.
@@ -407,19 +397,6 @@ describe("RoutingPage", () => {
     const row = (await screen.findByText("future")).closest("tr")!
     expect(within(row).getByText("ROUTED")).toBeInTheDocument()
     expect(within(row).queryByText("Learned")).not.toBeInTheDocument()
-  })
-
-  it("does not offer the examples panel for a weighted policy, which learns nothing", async () => {
-    mockApi([policy("balanced", WEIGHTED, { is_dynamic: true })])
-    renderPage(<RoutingPage />)
-
-    const row = (await screen.findByText("balanced")).closest("tr")!
-    expect(
-      within(row).queryByRole("button", { name: "Examples" }),
-    ).not.toBeInTheDocument()
-    expect(
-      within(row).getByRole("button", { name: "Edit" }),
-    ).toBeInTheDocument()
   })
 
   it("does not offer Edit for a weighted policy with no split to show", async () => {
@@ -464,128 +441,16 @@ describe("RoutingPage", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("offers the examples panel only on a policy that actually uses a router", async () => {
-    // Readiness is a per-policy question, so it belongs on the row like Edit does
-    // rather than in a panel that is always on the page.
-    mockApi([
-      policy("smart", LEARNED, { is_dynamic: true }),
-      policy("fast", CHAIN),
-    ])
-    renderPage(<RoutingPage />)
-
-    const learnedRow = (await screen.findByText("smart")).closest("tr")!
-    const plainRow = (await screen.findByText("fast")).closest("tr")!
-    expect(
-      within(learnedRow).getByRole("button", { name: "Examples" }),
-    ).toBeInTheDocument()
-    expect(
-      within(plainRow).queryByRole("button", { name: "Examples" }),
-    ).not.toBeInTheDocument()
-    // Nothing about learned routing is on the page until asked for.
-    expect(screen.queryByText(/Whose memory/)).not.toBeInTheDocument()
-  })
-
-  it("offers the examples panel for a config.yml policy, which cannot be edited", async () => {
-    // Reading readiness is safe for a policy this page cannot change, and without it
-    // a config-defined learned policy would be entirely opaque here.
-    mockApi([policy("smart", LEARNED, { is_dynamic: true, source: "config" })])
-    renderPage(<RoutingPage />)
-
-    const row = (await screen.findByText("smart")).closest("tr")!
-    expect(
-      within(row).getByRole("button", { name: "Examples" }),
-    ).toBeInTheDocument()
-    expect(
-      within(row).queryByRole("button", { name: "Edit" }),
-    ).not.toBeInTheDocument()
-    expect(
-      within(row).getByText("Set in deployment config"),
-    ).toBeInTheDocument()
-  })
-
-  it("names the pool and what serves when the router declines", async () => {
-    mockApi([policy("smart", LEARNED, { is_dynamic: true })])
-    const user = userEvent.setup()
-    renderPage(<RoutingPage />)
-
-    const row = (await screen.findByText("smart")).closest("tr")!
-    await user.click(within(row).getByRole("button", { name: "Examples" }))
-
-    expect(
-      await screen.findByText(/ranks openai:gpt-5-nano, openai:gpt-5/),
-    ).toBeInTheDocument()
-    expect(screen.getByText(/serves whenever it declines/)).toBeInTheDocument()
-    // The honest empty state: no user picked yet, so no warmth claim.
-    expect(screen.getByText(/Pick a user to see how warm/)).toBeInTheDocument()
-  })
-
-  it("reports each pool's warmth for the chosen user, since memory is per user", async () => {
-    mockApi([policy("smart", LEARNED, { is_dynamic: true })])
-    const user = userEvent.setup()
-    renderPage(<RoutingPage />)
-
-    const row = (await screen.findByText("smart")).closest("tr")!
-    await user.click(within(row).getByRole("button", { name: "Examples" }))
-    await user.type(
-      screen.getByRole("combobox", { name: /whose memory/i }),
-      "alice",
-    )
-    await user.keyboard("{Escape}")
-
-    expect(await screen.findByText("6 / 20 examples")).toBeInTheDocument()
-    expect(screen.getByText("WARMING UP")).toBeInTheDocument()
-    // A task partition warms on its own, so it gets its own line.
-    expect(screen.getByText("summaries")).toBeInTheDocument()
-    expect(screen.getByText("21 / 20 examples")).toBeInTheDocument()
-    expect(screen.getByText("ROUTING")).toBeInTheDocument()
-  })
-
-  it("says where examples come from instead of offering to collect them", async () => {
-    // Recording examples is an API job in this release. The panel has to say so, or
-    // an operator reads "0 examples" as a bug with no next step.
-    mockApi([policy("smart", LEARNED, { is_dynamic: true })])
-    const user = userEvent.setup()
-    renderPage(<RoutingPage />)
-
-    const row = (await screen.findByText("smart")).closest("tr")!
-    await user.click(within(row).getByRole("button", { name: "Examples" }))
-
-    expect(
-      await screen.findByText(/POST \/api\/v1\/routing\/preferences\/rank/),
-    ).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: /teach it/i })).toBeInTheDocument()
-    // No write affordance anywhere in it.
-    expect(
-      screen.queryByRole("button", { name: /ask all/i }),
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: /record these scores/i }),
-    ).not.toBeInTheDocument()
-  })
-
-  it("does not ask whose memory for a user-scoped policy", async () => {
-    // A policy scoped to one user can only use that user's memory, so asking would
-    // be a question with one answer, and a wrong answer would be accepted.
-    mockApi([policy("smart", LEARNED, { is_dynamic: true, user_id: "alice" })])
-    const user = userEvent.setup()
-    renderPage(<RoutingPage />)
-
-    const row = (await screen.findByText("smart")).closest("tr")!
-    await user.click(within(row).getByRole("button", { name: "Examples" }))
-
-    expect(
-      screen.queryByRole("combobox", { name: /whose memory/i }),
-    ).not.toBeInTheDocument()
-    expect(await screen.findByText("6 / 20 examples")).toBeInTheDocument()
-  })
-
   it("refuses to edit a policy whose router sits before its conditions", async () => {
     // Selection is order-sensitive server-side and the form always re-emits
     // conditions first, so editing this spec would silently change what it does.
     mockApi([
       policy("api-authored", {
         select: [
-          { router: "knn", candidates: ["openai:gpt-5-nano", "openai:gpt-5"] },
+          {
+            router: "priority",
+            candidates: ["openai:gpt-5-nano", "openai:gpt-5"],
+          },
           {
             when: { budget_used_pct: { gte: 80 } },
             target: "openai:gpt-5-nano",
@@ -602,10 +467,6 @@ describe("RoutingPage", () => {
     ).not.toBeInTheDocument()
     expect(
       within(row).getByRole("button", { name: "View" }),
-    ).toBeInTheDocument()
-    // Reading its readiness is still fine.
-    expect(
-      within(row).getByRole("button", { name: "Examples" }),
     ).toBeInTheDocument()
   })
 
@@ -1250,6 +1111,7 @@ describe("RoutingPage for an organization admin", () => {
         {
           id: "anthropic/claude-sonnet-5.5",
           sent_by: [],
+          pinned_keys: [],
           name: "Claude Sonnet 5.5",
           offerings: [
             {
@@ -1258,6 +1120,7 @@ describe("RoutingPage for an organization admin", () => {
               provider_type: "bedrock",
               own_tools: [],
               otari_tools: ["web_search"],
+              input_price: null,
             },
             {
               selector: "anthropic:claude-sonnet-5-5",
@@ -1265,6 +1128,7 @@ describe("RoutingPage for an organization admin", () => {
               provider_type: "anthropic",
               own_tools: ["web_search"],
               otari_tools: [],
+              input_price: null,
             },
           ],
           requests: 12,

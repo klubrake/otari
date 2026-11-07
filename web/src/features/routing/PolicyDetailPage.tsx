@@ -376,7 +376,6 @@ function PolicyView({
       ) : isTurning ? (
         <PolicyEditor
           stored={stored}
-          workspaceId={row.workspace_id ?? writeWorkspaceId ?? undefined}
           isReadOnly={false}
           hasRules={manages}
           ruleLabel={(id) => memberLabels.get(id) ?? id}
@@ -405,7 +404,6 @@ function PolicyView({
           // Re-seeded when the stored policy changes, as after a save.
           key={JSON.stringify(row.spec)}
           stored={stored}
-          workspaceId={row.workspace_id ?? writeWorkspaceId ?? undefined}
           isReadOnly={!isEditable}
           // Managers only, since a rule names colleagues; and never on a
           // member's own policy, which applies to them alone.
