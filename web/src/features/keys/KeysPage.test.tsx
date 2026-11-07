@@ -931,13 +931,15 @@ describe("KeysPage", () => {
     ).not.toBeInTheDocument()
     expect(within(row).queryByRole("checkbox")).not.toBeInTheDocument()
 
-    // The trigger still opens the key's details, with no menu under them.
+    // The trigger still opens the key's details, and the one action under them
+    // writes nothing: reading the key's usage.
     await user.click(
       within(row).getByRole("button", { name: "Details for issued" }),
     )
     expect(await screen.findByText("Created:")).toBeInTheDocument()
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument()
-    expect(screen.queryAllByRole("menuitem")).toEqual([])
+    expect(
+      screen.queryAllByRole("menuitem").map((item) => item.dataset.key),
+    ).toEqual(["usage"])
   })
 
   it("regenerates a secret after an explicit confirm", async () => {

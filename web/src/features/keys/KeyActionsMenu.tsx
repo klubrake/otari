@@ -61,7 +61,7 @@ export function KeyActionsMenu({
   onViewUsage?: () => void
   /** Absent where the deployment lets no one manage this key's federation rules. */
   onWorkloadIdentity?: () => void
-  /** A viewer's popover: the key's details, and no actions. */
+  /** A viewer's popover: the key's details, and no actions but View usage, which writes nothing. */
   isReadOnly?: boolean
   /** Switched off by an operator, so its owner may not switch it back on. */
   isEnableLocked?: boolean
@@ -130,7 +130,9 @@ export function KeyActionsMenu({
       run: onDelete,
     },
   ]
-  const actions = isReadOnly ? [] : allActions
+  const actions = isReadOnly
+    ? allActions.filter((action) => action.id === "usage")
+    : allActions
   const triggerLabel = `${isReadOnly ? "Details" : "Actions"} for ${name}`
   return (
     <Dropdown>
