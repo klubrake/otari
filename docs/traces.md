@@ -294,15 +294,14 @@ moving a tool's work, or a subagent, to a smaller model.
 
 A trace keeps no prompt, command or file path unless its workspace keeps them,
 and a workspace can only where the deployment allows it. Content is stored
-encrypted. Where the deployment does not allow it, the workspace's setting says
-so and cannot be turned on; on a deployment you run,
+encrypted. Where the deployment does not allow it, the workspace's setting
+cannot be turned on; on a deployment you run,
 [Store agent traces](trace-storage.md) says how to allow it.
 
 Each workspace chooses for itself. Content is off in every workspace until
 one of its managers (a workspace owner or admin, or an organization owner or
-admin) turns on **Keep what agent sessions were about** under **Workspaces**,
-**Edit** on the workspace, or sends `PATCH /api/v1/workspaces/{id}` with
-`{"trace_content_enabled": true}`. Turning it off keeps nothing new from the
+admin) sends `PATCH /api/v1/workspaces/{id}` with
+`{"trace_content_enabled": true}`; this fork's dashboard has no control for it. Turning it off keeps nothing new from the
 next export on; `DELETE /api/v1/workspaces/{id}/trace-content` also deletes what
 is already stored, and the sessions stay. Either one also covers content the
 gateway accepted before and had not stored yet, on every replica: it is never
@@ -341,13 +340,12 @@ Content is kept only when the client sends it too:
   detail, with `OTARI_HOOK_REPORT_CONTENT=1`.
 
 What a tool returned is kept only where the deployment also keeps tool output
-(the workspace's settings then show **Keep what tools returned**), and only
+(`tool_output` on `GET /api/v1/trace-content/policy`), and only
 from a routed request: the
 results the client hands back, and the output of a tool Otari ran itself (web
 search, web fetch, code execution, an MCP tool), whose arguments a routed
 request keeps either way. A workspace that keeps content can still stop keeping
-tool output, with **Keep what tools returned** in its settings or
-`{"trace_content_tool_output": false}` on the same `PATCH`. It is on by default,
+tool output, with `{"trace_content_tool_output": false}` on the same `PATCH`. It is on by default,
 so it narrows what the deployment keeps and never widens it. Turning it off
 covers tool output accepted and not yet stored, as turning content off does. Otari never keeps tool output an agent exports over
 OTLP (Claude Code's `OTEL_LOG_TOOL_CONTENT=1`), nor a model's own output.
